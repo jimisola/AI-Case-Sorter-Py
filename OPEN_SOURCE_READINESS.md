@@ -92,10 +92,7 @@ This repository is the **full-parity application** (local training, inference,
 and sorting all work standalone), but the community half talks to the hosted
 `reloadingrecipes.com` service, which is not in this repo and (presumably) not
 open. Set this expectation up front so contributors aren't surprised that
-end-to-end community workflows can't be developed/tested without access. Note
-that `pyproject.toml` still calls the package an "Open Source client for the Case
-Sorter Server API" — update that description (and see C5/C8) so it reflects the
-full app rather than the early client-only framing.
+end-to-end community workflows can't be developed/tested without access.
 
 ### B3. **Medium — External hardware & firmware not in repo**
 Full use requires the physical sorter, a camera, and a serial-connected
@@ -137,11 +134,10 @@ contributions stay consistent; wire it into CI (C3).
 
 ### C5. **Medium — `pyproject.toml` metadata gaps**
 Missing `license`, `authors`, `readme`, `urls` (Homepage/Repository/Issues), and
-trove `classifiers`. The package name `sjseth-casesorter-ossclient` and the
-description ("...Open Source client for the Case Sorter Server API") still carry
-the early **client-only** framing — rename/reword them to describe the full-parity
-app (see C8). `version = 0.1.0` implies possible PyPI intent — decide whether
-you're publishing. If so, also reconcile **C6**.
+trove `classifiers`. (The distribution `name`/`description` have been updated to
+`ai-case-sorter-py` and a full-app description — the early "OSS client" framing is
+no longer in `pyproject.toml`.) `version = 0.1.0` implies possible PyPI intent —
+decide whether you're publishing. If so, also reconcile **C6**.
 
 ### C6. **Low — Runtime writes next to the source tree**
 `paths.app_data_dir()` defaults to `<repo>/data/`. That works when launched from a

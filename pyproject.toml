@@ -1,7 +1,7 @@
 [project]
-name = "sjseth-casesorter-ossclient"
+name = "ai-case-sorter-py"
 version = "0.1.0"
-description = "Cross-platform Open Source client for the Case Sorter Server API."
+description = "Cross-platform desktop app that sorts spent brass cartridge casings by headstamp using a camera, an image classifier, and a serial-connected sorting machine."
 requires-python = ">=3.10"
 dependencies = [
     "pyserial>=3.5",
