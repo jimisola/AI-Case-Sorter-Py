@@ -10,28 +10,29 @@ the relevant section here in the same change.**
 
 ## 1. What this project is
 
-The **AI Case Sorter (OSS client)** is a cross-platform (Windows + Linux/Ubuntu)
-desktop application that drives a physical machine which sorts spent brass
-cartridge casings by **headstamp** (the stamp on the base of the case). A camera
+The **AI Case Sorter** is a cross-platform (Windows + Linux/Ubuntu) desktop
+application that drives a physical machine which sorts spent brass cartridge
+casings by **headstamp** (the stamp on the base of the case). A camera
 photographs each case, an image classifier predicts the headstamp, and a
 serial-connected sorting machine drops the case into the correct bin.
 
-It is the **Python/Tkinter rewrite of an existing WinForms application** and is
-intended to eventually replace it. Much of the code deliberately mirrors the
-WinForms behavior (file formats, serial protocol, manifest shapes, naming
-conventions) so the two can interoperate — comments throughout reference the
-original C# sources (e.g. `SJS_OpenAI.cs`, `SJS_ReloadingRecipesAPI`).
+It is the **full-parity Python/Tkinter version of the existing Windows-only
+WinForms application** and is intended to eventually replace it. Much of the
+code deliberately mirrors the WinForms behavior.
 
-This repo is the **client only**. The "community" features (model sharing,
-downloads, feedback loop) talk to a **closed-source backend** hosted at
-`reloadingrecipes.com` with Azure AD B2C authentication. The app runs fully
-without ever signing in — community features are the only auth-gated surface.
+The "community" features (model sharing, downloads, feedback loop) authenticate
+against a hosted backend at `reloadingrecipes.com` via Azure AD B2C. The app
+runs fully without ever signing in — community features are the only auth-gated
+surface.
 
 Two ways to classify:
 - **AI Config mode** (no local model active): send the cropped image to an
   OpenAI-compatible HTTP server (`/v1/chat/completions`).
-- **Local model mode**: run a locally-trained PyTorch **ConvNeXt** model.
-  PyTorch is an **optional** dependency (`pip install .[ml]`) installed on demand.
+- **Local model mode**: run a PyTorch **ConvNeXt** model locally. The model can
+  be one the user trained in the Train tab, a pretrained model downloaded from
+  the community, or one imported from a ZIP — running locally does **not** require
+  the user to have trained it. PyTorch is an **optional** dependency
+  (`pip install .[ml]`) installed on demand.
 
 ---
 
@@ -317,8 +318,8 @@ where `ticks` is the .NET `DateTime.Ticks` value.
   delivers handlers on the main thread.
 - **WinForms interop is intentional.** Many odd choices (PascalCase manifest
   keys, .NET ticks filenames, ConvNeXt-mode integer mapping, the exact serial
-  command strings, the verbatim HTML report) exist so this client round-trips
-  with the legacy app. Comments cite the C# source — preserve compatibility when
+  command strings, the verbatim HTML report) exist so this app round-trips
+  with the legacy WinForms app. Comments cite the C# source — preserve compatibility when
   editing these.
 - **PyTorch is optional and lazily imported.** Guard any torch use; surface a
   friendly "install PyTorch" path rather than letting an `ImportError` escape.
@@ -327,9 +328,10 @@ where `ticks` is the .NET `DateTime.Ticks` value.
   multi-statement work in `db.transaction()` (reentrant via SAVEPOINT).
 - **Headstamps are read fresh, not cached** — don't reintroduce a cached
   snapshot (it previously caused silent data loss).
-- **Cloud features depend on the closed `reloadingrecipes.com` backend** and a
-  specific Azure B2C tenant, both hardcoded. A fork cannot run community features
-  against its own infra without editing `auth.py` / `community_api.py`.
+- **Cloud features depend on the hosted `reloadingrecipes.com` backend** and a
+  specific Azure B2C tenant, both hardcoded. The backend is a separate service
+  (not in this repo); a fork cannot run community features against its own infra
+  without editing `auth.py` / `community_api.py`.
 - **No CI yet.** Run `pytest` before pushing; UI is not covered by tests.
 - See **`Security.md`** for the security review and **`OPEN_SOURCE_READINESS.md`**
   for the open-source readiness assessment.

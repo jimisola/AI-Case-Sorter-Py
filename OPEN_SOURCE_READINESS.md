@@ -1,6 +1,6 @@
 # Open-Source Readiness Review
 
-**Project:** AI Case Sorter (OSS client)
+**Project:** AI Case Sorter
 **Review date:** 2026-06-27
 **Goal:** Identify everything that would make this repository problematic,
 surprising, or legally risky to open-source — and what to add before flipping it
@@ -74,9 +74,9 @@ naming lineage, the author's name/email, and the "Case Sorter" product name.
 `sorter/auth.py` hardcodes a specific **Azure AD B2C** tenant, client ID,
 authority, and redirect; `sorter/community_api.py` hardcodes
 `https://www.reloadingrecipes.com/api`. These tie sign-in, model download/search,
-sharing, and the feedback loop to **closed infrastructure a fork cannot
-reproduce**.
-- This is not a secret leak (a public client ID is meant to ship in the client),
+sharing, and the feedback loop to **a single hosted backend a fork cannot
+reproduce** (the backend service is not part of this repository).
+- This is not a secret leak (a public client ID is meant to ship in the app),
   but it is a **forkability and expectation problem**: a community contributor
   cannot stand up their own server, and the "community" half of the app is
   unusable against anything but the author's service.
@@ -87,11 +87,15 @@ reproduce**.
   a fork *could* point at its own deployment. (3) State plainly that the server is
   not part of this open-source release.
 
-### B2. **Medium — "OSS client" for a non-OSS server**
-`pyproject.toml` describes this as a "client for the Case Sorter Server API," but
-that server is not in this repo and (presumably) not open. Set this expectation
-up front so contributors aren't surprised that end-to-end community workflows
-can't be developed/tested without access.
+### B2. **Medium — Community workflows depend on an external server**
+This repository is the **full-parity application** (local training, inference,
+and sorting all work standalone), but the community half talks to the hosted
+`reloadingrecipes.com` service, which is not in this repo and (presumably) not
+open. Set this expectation up front so contributors aren't surprised that
+end-to-end community workflows can't be developed/tested without access. Note
+that `pyproject.toml` still calls the package an "Open Source client for the Case
+Sorter Server API" — update that description (and see C5/C8) so it reflects the
+full app rather than the early client-only framing.
 
 ### B3. **Medium — External hardware & firmware not in repo**
 Full use requires the physical sorter, a camera, and a serial-connected
@@ -133,9 +137,11 @@ contributions stay consistent; wire it into CI (C3).
 
 ### C5. **Medium — `pyproject.toml` metadata gaps**
 Missing `license`, `authors`, `readme`, `urls` (Homepage/Repository/Issues), and
-trove `classifiers`. The package name `sjseth-casesorter-ossclient` and
-`version = 0.1.0` imply possible PyPI intent — decide whether you're publishing.
-If so, also reconcile **C6**.
+trove `classifiers`. The package name `sjseth-casesorter-ossclient` and the
+description ("...Open Source client for the Case Sorter Server API") still carry
+the early **client-only** framing — rename/reword them to describe the full-parity
+app (see C8). `version = 0.1.0` implies possible PyPI intent — decide whether
+you're publishing. If so, also reconcile **C6**.
 
 ### C6. **Low — Runtime writes next to the source tree**
 `paths.app_data_dir()` defaults to `<repo>/data/`. That works when launched from a
@@ -147,6 +153,23 @@ Not a blocker for the run-from-clone model.
 
 ### C7. **Low — No CHANGELOG / release process**
 No `CHANGELOG.md`, no tags/releases. Add lightweight release notes once public.
+
+### C8. **Medium — Stale "OSS client" and WinForms-source comments in the code**
+The codebase carries leftover docstrings and inline comments from the early
+**client-only ("OSS client")** development phase, plus many comments that cite the
+original WinForms C# sources by filename (e.g. `SJS_OpenAI.cs`,
+`SJS_ReloadingRecipesAPI`, `AIConfig.cs:196`, line-number references into the C#
+app). To an outside contributor — or an LLM coding agent — these are misdirecting:
+they imply a "client only" scope that is no longer true and reference files that
+do not exist in this repository.
+- **Action:** Sweep the tree and remove/rewrite (a) every "OSS client" / "client
+  only" reference, and (b) every comment that points at the WinForms `.cs` sources
+  or their line numbers. Keep the *intent* where a comment explains a deliberate
+  compatibility choice (e.g. ".NET ticks filenames for interop"), but drop the
+  specific C# file/line citations. Also update the `pyproject.toml` name/description
+  (C5) and any module docstrings that open with "Mirrors `SJS_*.cs`...".
+- Suggested starting grep: `OSS`, `client only`, `\.cs`, `SJS_`, `WinForms` —
+  across `sorter/` and `main.py`.
 
 ---
 
@@ -194,12 +217,13 @@ These aren't defects, but they will generate issues if undocumented:
 5. Add `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, and a disclosure-policy
    `SECURITY.md`; rename the existing review file to avoid confusion (C2).
 6. Add **CI** running pytest + lint (C3).
+7. Sweep the code for stale "OSS client" and WinForms `.cs` comments (C8).
 
 **Polish (Medium/Low):**
-7. Linter/formatter/type-check config + pre-commit (C4).
-8. Fill in `pyproject.toml` metadata; decide on PyPI (C5/C6).
-9. CHANGELOG + release process (C7).
-10. Document the UX surprises (Section D) and the privacy note (E1).
+8. Linter/formatter/type-check config + pre-commit (C4).
+9. Fill in `pyproject.toml` metadata; decide on PyPI (C5/C6).
+10. CHANGELOG + release process (C7).
+11. Document the UX surprises (Section D) and the privacy note (E1).
 
 ## Positive observations
 - `data/` (DB, token cache, config, models) is **gitignored**; the git history
