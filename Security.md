@@ -33,7 +33,7 @@ the device firmware are out of scope.
 
 ---
 
-## 1. Critical — Arbitrary code execution via untrusted model deserialization
+## 1. Critical — Arbitrary code execution via untrusted model deserialization [PARTIAL]
 
 **Location:** `sorter/local_inference.py:329`
 ```python
@@ -69,12 +69,12 @@ the project is open source and models circulate freely.
    `classes`, `base` checks) and reject anything unexpected.
 3. Consider migrating the on-disk format to **safetensors** for weights + a
    sidecar JSON for metadata, eliminating pickle entirely.
-4. Until fixed, surface a clear warning in the import/download UI that models run
+4. [FIX] Until fixed, surface a clear warning in the import/download UI that models run 
    code, and prefer models from known authors.
 
 ---
 
-## 2. Medium — Path traversal / arbitrary file write from classification labels
+## 2. Medium — Path traversal / arbitrary file write from classification labels [FIX]
 
 **Locations:**
 - `sorter/training/dataset.py:40` `training_filename` → `f"{label}__{...}{ext}"`
@@ -110,7 +110,7 @@ nested directories or fail writes.
 
 ---
 
-## 3. Medium — Stored XSS in generated HTML evaluation report
+## 3. Medium — Stored XSS in generated HTML evaluation report [IGNORE]
 
 **Location:** `sorter/eval_report.py:827-829`
 ```python
@@ -144,7 +144,7 @@ designed to be passed around, the blast radius extends beyond the operator.
 
 ---
 
-## 4. Medium — Unbounded ZIP extraction (decompression bomb)
+## 4. Medium — Unbounded ZIP extraction (decompression bomb) [FIX]
 
 **Location:** `sorter/model_io.py:351-453` (`import_model` / `_extract_to`)
 
@@ -162,13 +162,13 @@ model archive.
 - Enforce ceilings before/while extracting: max total uncompressed bytes, max per
   entry, max entry count. `ZipInfo.file_size` gives the declared uncompressed
   size; also bound the bytes actually copied (don't trust the header) and abort if
-  exceeded.
-- Reject archives whose compression ratio is implausibly high.
-- Validate that model/image entries have expected extensions before writing.
+  exceeded. [IGNORE]
+- Reject archives whose compression ratio is implausibly high. [FIX]
+- Validate that model/image entries have expected extensions before writing. [FIX]
 
 ---
 
-## 5. Medium — Secrets stored at rest in plaintext
+## 5. Medium — Secrets stored at rest in plaintext [IGNORE]
 
 **Locations:**
 - `sorter/config.py:44-52` (`api_key` default), persisted via
@@ -195,7 +195,7 @@ community account.
 
 ---
 
-## 6. Low — API key sent over cleartext HTTP
+## 6. Low — API key sent over cleartext HTTP [IGNORE]
 
 **Location:** `sorter/api_client.py:71-103`
 
@@ -207,7 +207,7 @@ host, the key and image traverse the network in cleartext.
 **Recommendation.** Warn (or require confirmation) when `endpoint_url` is non-local
 and not `https://`. Localhost http is fine.
 
-## 7. Low — SQL identifier injection in `dump_table`
+## 7. Low — SQL identifier injection in `dump_table` [IGNORE]
 
 **Location:** `sorter/db.py:295-297`
 ```python
@@ -220,7 +220,7 @@ currently exploitable — but it's a latent identifier-injection footgun in a
 (The f-strings in `db.transaction` SAVEPOINT/PRAGMA statements use
 internally-generated values and are safe.)
 
-## 8. Low — Verbose debug logging on by default
+## 8. Low — Verbose debug logging on by default [FIX]
 
 **Locations:** `sorter/feedback.py` (`debug_log`, gated by
 `CASESORTER_FEEDBACK_DEBUG`, **default on**) and its callers in
@@ -231,7 +231,7 @@ These are not secrets (SAS *tokens* are not logged), but the default-on verbosit
 leaks operational detail and clutters output. Recommend defaulting the flag
 **off** and ensuring no token/credential ever reaches a log line.
 
-## 9. Low — Unattended `sudo` in the bootstrap launcher
+## 9. Low — Unattended `sudo` in the bootstrap launcher [FIX] [Add Warnings]
 
 **Location:** `start.sh:74-107`
 
@@ -242,7 +242,7 @@ warning in docs and an explicit "this will install system packages" notice.
 (Positive: without `--auto` and without a TTY, the script declines to run `sudo`
 silently — good default.)
 
-## 10. Info — JWT signature not verified (by design)
+## 10. Info — JWT signature not verified (by design) [IGNORE]
 
 **Location:** `sorter/auth.py:242-260` (`_decode_jwt_claims`)
 
@@ -252,7 +252,7 @@ already validated, never for authorization. This is acceptable. Flagged so a
 future change does not accidentally promote these claims to a trust/authz
 decision.
 
-## 11. Info — Subprocess usage reviewed and safe
+## 11. Info — Subprocess usage reviewed and safe [IGNORE]
 
 `training/manager.py` (`build_command` + `Popen`), `ui/dialog_install_torch.py`
 (pip install of pinned torch/torchvision), `gpu_detect.py` (`nvidia-smi`), and
