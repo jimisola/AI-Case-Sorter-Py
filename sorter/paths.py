@@ -1,6 +1,6 @@
 """File-system locations.
 
-The OSSClient is intentionally portable: everything it writes lives inside
+The app is intentionally portable: everything it writes lives inside
 ``<app folder>/data/``, next to ``main.py``. Delete the folder, delete the
 state. Layout:
 
@@ -29,7 +29,7 @@ APP_NAME = "CaseSorter"
 
 
 def _app_root() -> Path:
-    """OSSClient folder (one level above ``sorter/``)."""
+    """App folder (one level above ``sorter/``)."""
     return Path(__file__).resolve().parent.parent
 
 
@@ -61,10 +61,9 @@ def models_dir() -> Path:
 def export_temp_dir() -> Path:
     """App-local scratch folder for model export/share ZIPs.
 
-    Mirrors the WinForms ``temp\\`` folder: kept inside the app's own data
-    directory rather than the OS temp dir, which on Windows can be locked,
-    cleaned mid-write, or otherwise unavailable (the source of a WinError 267
-    on share). Created on demand by callers.
+    Kept inside the app's own data directory rather than the OS temp dir,
+    which on Windows can be locked, cleaned mid-write, or otherwise
+    unavailable. Created on demand by callers.
     """
     return app_data_dir() / "tmp"
 

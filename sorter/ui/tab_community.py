@@ -1,6 +1,6 @@
 """Community tab — browse and download published models.
 
-Mirrors the WinForms Community Models layout (see the design screenshot):
+Community Models layout:
   Toolbar:   [Share a Model]              Community Info: <username link>
   Filters:   [Cartridge ▾] [Type ▾] [search...] [Search]
   List:      <vertically stacked CommunityModelCard>s in a plain frame
@@ -43,7 +43,7 @@ def _format_size(n: int) -> str:
 
 
 def _format_date(iso: str) -> str:
-    """ISO-ish → 'M/D/YYYY' to match the WinForms look. Falls back to raw."""
+    """ISO-ish → 'M/D/YYYY' to match the legacy look. Falls back to raw."""
     from datetime import datetime
     if not iso:
         return ""
@@ -174,8 +174,8 @@ class CommunityTab(ttk.Frame):
         bar = ttk.Frame(self)
         bar.pack(fill=tk.X, padx=8, pady=(8, 0))
         # Share is gated on the user having the Contribute role on the
-        # community server — same trim WinForms does via RSRoles. Start
-        # hidden; `_load_community_info` re-shows it after the role check
+        # community server. Start hidden; `_load_community_info` re-shows it
+        # after the role check
         # comes back so non-contributors never see the button at all.
         self.share_button = ttk.Button(
             bar, text="Share a Model",
@@ -358,6 +358,17 @@ class CommunityTab(ttk.Frame):
 
     def _download(self, info: ModelInfo) -> None:
         name = info.model_name or info.model_uid or "model"
+        if not messagebox.askyesno(
+            "Download model — security notice",
+            f"\"{name}\" is a community-published model. Models are loaded with "
+            "PyTorch and can execute code embedded in the file, so only download "
+            "models from authors you trust.\n\n"
+            "Download and import this model?",
+            icon="warning",
+            default="no",
+            parent=self,
+        ):
+            return
         self._post_progress(f"Downloading {name}…")
 
         def _work():
@@ -435,7 +446,7 @@ class CommunityTab(ttk.Frame):
     def _notify_import(self, model_id: int) -> None:
         """Post-import dialog. Community models with the feedback loop enabled
         get the parity notice (threshold + how to opt out); others get the
-        plain confirmation. Mirrors the WinForms ImportModel feedback panel."""
+        plain confirmation."""
         model = ModelRepo(self.db).get(model_id)
         if model is not None and model.feedback_loop_enabled and model.community_model_uid:
             messagebox.showinfo(

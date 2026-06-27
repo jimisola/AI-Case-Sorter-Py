@@ -1,4 +1,4 @@
-"""ConvNeXt training subsystem for the OSSClient.
+"""ConvNeXt training subsystem.
 
 `manager.py` spawns `train_convnext.py` as a subprocess and parses its
 JSON-line progress markers. Training is intentionally out-of-process so a

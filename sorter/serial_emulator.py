@@ -1,7 +1,7 @@
 """In-process fake broker so the rest of the stack runs without hardware.
 
-Mirrors the public surface of SerialBroker and the behavior of
-SJS_SerialEmulator.cs:18-80 — every command logs and fires on_done after ~100ms.
+Mirrors the public surface of SerialBroker — every command logs and fires
+on_done after ~100ms.
 """
 from __future__ import annotations
 

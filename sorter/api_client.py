@@ -1,7 +1,4 @@
-"""HTTP client for the OpenAI-compatible Case Sorter server.
-
-Mirrors SJS_OpenAI.cs:54-181 and AIConfig.cs:189-196, 424-435.
-"""
+"""HTTP client for the OpenAI-compatible Case Sorter server."""
 from __future__ import annotations
 
 import base64
@@ -23,7 +20,7 @@ class ApiError(Exception):
 
 
 def _encode_jpeg(image_bgr: np.ndarray, scale_pct: int, quality: int) -> bytes:
-    """JPEG-encode a BGR frame. Mirrors SJS_ImageProcessing.ResizeImage."""
+    """JPEG-encode a BGR frame."""
     if scale_pct != 100:
         scale = max(1, scale_pct) / 100.0
         w = max(1, int(image_bgr.shape[1] * scale))
@@ -44,8 +41,7 @@ def _build_url(endpoint: str) -> str:
 def _render_prompt(prompt: str, headstamps: list[str]) -> str:
     """Replace the {{headstamps}} placeholder with a newline-joined list.
 
-    Mirrors AIConfig.cs:196 — if the placeholder is absent, the prompt is sent
-    unchanged.
+    If the placeholder is absent, the prompt is sent unchanged.
     """
     if not prompt:
         prompt = "Classify this image. Respond with only the label."
@@ -64,7 +60,7 @@ def classify(
     """POST image to the classification endpoint. Returns (label, confidence%).
 
     Confidence is taken from a top-level ``confidence`` field in the server
-    response when present (the SJS server returns a float 0-1, e.g.
+    response when present (the server returns a float 0-1, e.g.
     ``0.999429832``). We convert that to a 0-100 percentage. If the field
     is absent or unparseable, confidence is -1 to signal 'unknown'.
     """
@@ -127,7 +123,7 @@ def classify(
 
 
 def get_headstamps(endpoint: str, model: str, *, timeout: float = 15.0) -> list[str]:
-    """GET /getheadstamps?model={model}. Mirrors AIConfig.cs:424."""
+    """GET /getheadstamps?model={model}."""
     if not endpoint or not model:
         raise ApiError("Endpoint and model are required.")
     url = endpoint.rstrip("/") + "/getheadstamps"

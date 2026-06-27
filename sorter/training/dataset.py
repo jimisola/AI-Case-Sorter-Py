@@ -1,7 +1,7 @@
 """Training-image dataset helpers.
 
-The OSSClient uses the same filename convention as the WinForms app so
-community model exports interchange cleanly:
+Uses the same filename convention as the legacy app so community model
+exports interchange cleanly:
 
     {classification}__{ticks}.jpg
 
@@ -12,6 +12,7 @@ depend on this exact format.
 from __future__ import annotations
 
 import os
+import re
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,9 +22,49 @@ import cv2
 import numpy as np
 
 
+# Classification labels can come from an untrusted source — in AI Config mode
+# the label is whatever free text the HTTP classification server returns — yet
+# they are used verbatim as filename components for run/feedback/training image
+# storage. Sanitize before a label ever touches the filesystem so it cannot
+# traverse directories, name a Windows device, or contain illegal characters.
+_UNSAFE_LABEL_CHARS = re.compile(r'[\x00-\x1f\x7f/\\:*?"<>|]')
+_RESERVED_WIN_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+_MAX_LABEL_LEN = 100
+
+
+def safe_label(label: str) -> str:
+    """Sanitize a classification label for safe use as a path component.
+
+    Replaces path separators, control characters, and filesystem-illegal
+    characters with ``_``; collapses ``..`` so it cannot traverse; trims
+    leading/trailing dots and whitespace; prefixes reserved Windows device
+    names; and caps the length. Normal headstamps (letters, digits, spaces,
+    ``+ - .``) pass through essentially unchanged. Returns ``"unknown"`` when
+    nothing usable remains.
+    """
+    cleaned = _UNSAFE_LABEL_CHARS.sub("_", str(label))
+    cleaned = cleaned.replace("..", "_")
+    cleaned = cleaned.strip().strip(". ")
+    if cleaned.upper() in _RESERVED_WIN_NAMES:
+        cleaned = f"_{cleaned}"
+    cleaned = cleaned[:_MAX_LABEL_LEN].strip()
+    return cleaned or "unknown"
+
+
+def _assert_within(out_dir: Path, dest: Path) -> None:
+    """Defense-in-depth: refuse to write `dest` outside `out_dir`."""
+    base = out_dir.resolve()
+    if not dest.resolve().is_relative_to(base):
+        raise ValueError(f"refusing to write outside {base}: {dest}")
+
+
 # Difference between Unix epoch (1970-01-01) and .NET reference (0001-01-01)
-# expressed in 100-ns ticks. Lifted straight from the WinForms convention so
-# Ticks generated here are byte-for-byte compatible with DateTime.Now.Ticks.
+# expressed in 100-ns ticks. Uses the .NET DateTime.Ticks convention so the
+# ticks generated here interchange byte-for-byte with the legacy app's.
 _DOTNET_EPOCH_OFFSET_TICKS = 621_355_968_000_000_000
 
 
@@ -38,10 +79,14 @@ def dotnet_ticks(when: datetime | None = None) -> int:
 
 
 def training_filename(label: str, *, ext: str = ".jpg", when: datetime | None = None) -> str:
-    """Build a {label}__{ticks}{ext} filename. `label` may contain spaces."""
-    if not label:
+    """Build a {label}__{ticks}{ext} filename. `label` may contain spaces.
+
+    The label is sanitized (see :func:`safe_label`) before use so an untrusted
+    classification string cannot escape the target directory.
+    """
+    if not label or not str(label).strip():
         raise ValueError("label cannot be empty")
-    return f"{label}__{dotnet_ticks(when)}{ext}"
+    return f"{safe_label(label)}__{dotnet_ticks(when)}{ext}"
 
 
 def save_training_image(
@@ -57,6 +102,7 @@ def save_training_image(
     out_dir.mkdir(parents=True, exist_ok=True)
     fname = training_filename(label, ext=".jpg", when=when)
     dest = out_dir / fname
+    _assert_within(out_dir, dest)
     ok, buf = cv2.imencode(".jpg", image_bgr, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
     if not ok:
         raise RuntimeError("Failed to JPEG-encode training image")
@@ -71,11 +117,11 @@ def feedback_filename(
 ) -> str:
     """Build a ``{label}__{confidence}__{ticks}{ext}`` feedback-image filename.
 
-    Confidence is a rounded integer percent. Mirrors the WinForms feedback-loop
+    Confidence is a rounded integer percent. Uses the legacy feedback-loop
     naming so the label + confidence can be recovered from the filename at
     upload time — the folder is the queue, so no database row is needed.
     """
-    safe = label or "unknown"
+    safe = safe_label(label)
     return f"{safe}__{int(round(float(confidence)))}__{dotnet_ticks(when)}{ext}"
 
 
@@ -92,6 +138,7 @@ def save_feedback_image(
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     dest = out_dir / feedback_filename(label, confidence, ext=".jpg", when=when)
+    _assert_within(out_dir, dest)
     ok, buf = cv2.imencode(".jpg", image_bgr, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
     if not ok:
         raise RuntimeError("Failed to JPEG-encode feedback image")

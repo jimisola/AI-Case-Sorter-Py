@@ -1,4 +1,4 @@
-"""Make `sorter` importable when running pytest from inside OSSClient/."""
+"""Make `sorter` importable when running pytest from the repo root."""
 from __future__ import annotations
 
 import sys

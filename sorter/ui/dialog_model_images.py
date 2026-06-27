@@ -1,4 +1,4 @@
-"""Model image manager — a port of the WinForms ImagesForm.
+"""Model image manager.
 
 A paged, filterable thumbnail browser for a model's training images with
 per-image preview, bulk reclassify/delete, and a right-click context menu.

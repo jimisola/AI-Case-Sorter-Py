@@ -314,7 +314,7 @@ class TrainTab(ttk.Frame):
         model_path = active.model_path if (active and active.model_path) else None
         # Trained image size is captured in the model's training_config —
         # imported community models keep the resolution they were trained
-        # at, which is often 480 for the WinForms-default ConvNeXts.
+        # at, which is often 480 for the legacy-app-default ConvNeXts.
         # Feeding the model the wrong resolution silently degrades
         # predictions, so pass the trained size through to local_inference.
         train_image_size = (

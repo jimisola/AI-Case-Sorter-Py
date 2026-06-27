@@ -50,7 +50,7 @@ def test_ensure_model_subtree(monkeypatch, tmp_path: Path) -> None:
 
 def test_export_temp_dir_is_app_local(monkeypatch, tmp_path: Path) -> None:
     # The share/export scratch folder must live under the app's own data dir,
-    # never the OS temp dir (which triggered a WinError 267 on Windows).
+    # never the OS temp dir (which on Windows can be locked or cleaned mid-write).
     monkeypatch.setenv("CASESORTER_DATA_DIR", str(tmp_path))
     assert paths.export_temp_dir() == tmp_path / "tmp"
     assert paths.export_temp_dir().parent == paths.app_data_dir()

@@ -1,4 +1,4 @@
-"""Reusable Tk widgets for the OSSClient."""
+"""Reusable Tk widgets for the app."""
 from __future__ import annotations
 
 import tkinter as tk

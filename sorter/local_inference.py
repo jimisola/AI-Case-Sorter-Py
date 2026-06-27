@@ -16,9 +16,8 @@ Checkpoint format expected (produced by the in-tree training script):
       "val_loss": float | None    # optional
     }
 
-DESIGN: This mirrors the standalone CaseSorter AI server
-(reference: model_manager.py + server.py). The server processes the
-same ConvNeXt-Tiny checkpoints at single-digit ms; aligning this path
+DESIGN: This mirrors the standalone CaseSorter AI server, which processes
+the same ConvNeXt-Tiny checkpoints at single-digit ms; aligning this path
 with it gives us the same steady-state performance.
 
 Key invariants borrowed from the server:
@@ -100,12 +99,12 @@ def _torch():
         _models_mod = models
         _F_mod = F
         # All cuDNN/perf flags intentionally left at defaults — the
-        # reference AI server (model_manager.py) runs at single-digit ms
+        # reference AI server runs at single-digit ms
         # without any flag tweaks, so cuDNN's default heuristic is fine
         # for ConvNeXt on sm_120 when the rest of the pipeline matches
         # the server.
     if _device_cache is None:
-        # Pick device exactly once, mirroring server's `DEVICE = _select_device()`.
+        # Pick device exactly once, mirroring the reference AI server.
         _pick_device(_torch_mod)
     if not _env_dumped:
         _env_dumped = True
@@ -114,7 +113,7 @@ def _torch():
 
 
 def _pick_device(torch_mod: Any) -> Any:
-    """One-shot device selection. Mirrors model_manager._select_device.
+    """One-shot device selection, mirroring the reference AI server.
 
     Stores the chosen torch.device in module-level `_device_cache` so
     classify() never has to re-probe.
@@ -259,10 +258,10 @@ def _replace_classifier(
 ) -> Any:
     """Swap the ConvNeXt classifier head to match the trained checkpoint.
 
-    `layout` mirrors inference_worker.py's detection logic:
-      * "seq_at_2"    — Sequential(Dropout, Linear) at classifier[2]   (OSSClient train)
-      * "linear_at_2" — bare Linear at classifier[2]                   (legacy WinForms)
-      * "seq_at_3"    — Sequential(LayerNorm, Flatten, Dropout, Linear) (new WinForms)
+    `layout` selects which classifier head shape to build:
+      * "seq_at_2"    — Sequential(Dropout, Linear) at classifier[2]   (this app's trainer)
+      * "linear_at_2" — bare Linear at classifier[2]                   (older checkpoints)
+      * "seq_at_3"    — Sequential(LayerNorm, Flatten, Dropout, Linear) (newer checkpoints)
     """
     torch, _, _ = _torch()
     nn = torch.nn
@@ -291,8 +290,8 @@ def _replace_classifier(
 
 def _detect_classifier_layout(state_dict: dict[str, Any]) -> str:
     """Inspect the checkpoint's state_dict keys to decide which head shape
-    to build. Mirrors inference_worker.py:182-210 so models trained by
-    any vintage of the WinForms app or our own trainer load correctly.
+    to build, so models trained by any vintage of the legacy app or our own
+    trainer load correctly.
     """
     if "classifier.3.weight" in state_dict:
         return "seq_at_3"
@@ -309,10 +308,9 @@ def _load(model_path: str) -> _LoadedModel:
     """Load a checkpoint, move the model onto the cached device, cache it.
 
     Detects the classifier-head layout from the state_dict keys so
-    checkpoints trained by either the WinForms client (legacy Linear at
-    classifier[2], or Sequential at classifier[3]) or our own trainer
-    (Sequential at classifier[2]) all load with the right head — mirrors
-    inference_worker.py's auto-detection.
+    checkpoints trained by either the legacy app (Linear at classifier[2],
+    or Sequential at classifier[3]) or our own trainer (Sequential at
+    classifier[2]) all load with the right head.
     """
     torch, _, _ = _torch()
     device = _device_cache
@@ -326,7 +324,15 @@ def _load(model_path: str) -> _LoadedModel:
         if cached is not None:
             return cached
 
-        ckpt = torch.load(str(path), map_location="cpu", weights_only=False)
+        # weights_only=True restricts unpickling to tensors + plain Python
+        # containers/primitives, so a malicious .pth (community download or
+        # imported ZIP) cannot execute code on load. Our checkpoints only carry
+        # model_state_dict / classes / base / image_size, all of which load
+        # under this mode. A checkpoint that carries a non-allowlisted type
+        # fails closed (refuses to load) rather than running code; allowlist the
+        # specific safe type with torch.serialization.add_safe_globals(...) only
+        # if a real file needs it.
+        ckpt = torch.load(str(path), map_location="cpu", weights_only=True)
         classes = list(ckpt.get("classes") or [])
         base = ckpt.get("base") or "convnext_tiny"
         if not classes:
@@ -352,7 +358,7 @@ def _load(model_path: str) -> _LoadedModel:
         net.load_state_dict(cleaned, strict=True)
         net.to(device).eval()
 
-        # The trainer (both ours and WinForms') writes the image size it
+        # The trainer (both ours and the legacy app's) writes the image size it
         # trained at into the checkpoint when it can. Fall back to a
         # ConvNeXt-sensible default (224) only when nothing else is known —
         # the caller (classify()) gets to override this from the model's
@@ -401,9 +407,9 @@ def classify(
     `confidence_pct` is 0..100; -1 if the model produced no usable output.
 
     `image_size` lets the caller override the resize target — used to feed
-    the model the resolution it was trained at (e.g. WinForms-trained
-    ConvNeXts default to 480, our trainer defaults to 232). When None we
-    fall back to whatever `_load()` picked from the checkpoint.
+    the model the resolution it was trained at (e.g. legacy-app ConvNeXts
+    default to 480, our trainer defaults to 232). When None we fall back to
+    whatever `_load()` picked from the checkpoint.
 
     Routed through `_get_executor()` so every call lands on the same
     thread, keeping cuDNN's per-thread algorithm cache warm. The caller

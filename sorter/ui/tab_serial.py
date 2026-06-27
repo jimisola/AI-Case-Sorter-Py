@@ -1,6 +1,5 @@
 """Serial config tab.
 
-Mirrors the controls in panel_serialConfig (MainFormWindow.Designer.cs:1822-1852).
 Each NumericField writes back into config.serial.init_settings under the exact
 wire-protocol key the firmware expects.
 """

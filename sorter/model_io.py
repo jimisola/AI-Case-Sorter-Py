@@ -1,13 +1,13 @@
-"""Model ZIP export/import compatible with the WinForms format.
+"""Model ZIP export/import compatible with the legacy app's format.
 
-ZIP layout (same as `SJS_Utilities.ExportModel`):
+ZIP layout (same as the legacy app's model export):
 
     manifest.json
     model/<filename>.pth        (optional — only when exporting model data)
     images/<label>__<ticks>.jpg (optional — only when exporting training images)
 
-The manifest is a flat JSON document mirroring the WinForms `ModelExport`
-shape closely enough for round-trips with community downloads:
+The manifest is a flat JSON document mirroring the legacy export shape closely
+enough for round-trips with community downloads:
 
     {
       "ModelName": "9mm-default",
@@ -60,6 +60,16 @@ class ExportMode(str, enum.Enum):
 
 
 _VALID_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+# Model checkpoints are PyTorch ``.pth``/``.pt`` files. The empty string is
+# tolerated because the extractor already defaults an extension-less entry to
+# ``.pth`` (some exporters drop the suffix).
+_VALID_MODEL_EXTS = {".pth", ".pt", ""}
+# A wildly high uncompressed:compressed ratio is the signature of a zip bomb;
+# real JPEGs and float32 checkpoints are already near-incompressible. Only large
+# entries are checked so small, legitimately-compressible files (a tiny JSON
+# manifest) never trip the guard.
+_MAX_COMPRESSION_RATIO = 100
+_RATIO_CHECK_MIN_BYTES = 1_000_000
 
 
 def _normalize(entry_name: str) -> str:
@@ -85,11 +95,11 @@ def model_to_export_dict(m: Model) -> dict[str, Any]:
     return d
 
 
-# WinForms Newtonsoft.Json serialises the ModelMode enum as its integer value.
-# Map back to our snake_case backbone identifiers; non-ConvNeXt modes fall
-# through to a ConvNeXt the OSSClient can actually run.
+# The legacy app serialises its ModelMode enum as its integer value. Map back
+# to our snake_case backbone identifiers; non-ConvNeXt modes fall through to a
+# ConvNeXt this app can actually run.
 _WINFORMS_MODELMODE_INT_TO_STR = {
-    0: "convnext_tiny",   # DeepLearning (ResNet50) — OSSClient can't run, fall back
+    0: "convnext_tiny",   # DeepLearning (ResNet50) — can't run, fall back
     1: "convnext_tiny",   # Inception           — fall back
     2: "openai",          # OpenAI
     3: "convnext_large",
@@ -102,10 +112,10 @@ _WINFORMS_MODELMODE_INT_TO_STR = {
 
 
 def _normalize_model_mode(raw: Any) -> str:
-    """Accept the OSSClient snake_case string or the WinForms enum int."""
+    """Accept the snake_case string or the legacy enum int."""
     if isinstance(raw, str):
         rl = raw.strip().lower()
-        # Tolerate hyphenated/CamelCase variants the C# UI shows
+        # Tolerate hyphenated/CamelCase variants
         # (`ConvNeXt-Tiny`, `convnext_tiny`, `ConvNeXtTiny`).
         rl = rl.replace("-", "_").replace(" ", "_")
         if rl in SUPPORTED_MODEL_MODES:
@@ -123,8 +133,8 @@ def _normalize_model_mode(raw: Any) -> str:
 
 
 def _normalize_model_type(raw: Any) -> str:
-    """ModelType is an enum in WinForms (Standard=0, ReadOnly=1, CommunityManaged=2);
-    OSSClient persists the name. Map ints back to names."""
+    """ModelType is an enum in the legacy app (Standard=0, ReadOnly=1,
+    CommunityManaged=2); this app persists the name. Map ints back to names."""
     if isinstance(raw, str) and raw:
         return raw
     if isinstance(raw, int):
@@ -135,10 +145,10 @@ def _normalize_model_type(raw: Any) -> str:
 def _g(d: dict[str, Any], *keys: str, default: Any = None) -> Any:
     """Lookup helper that accepts multiple key spellings.
 
-    WinForms manifests use Newtonsoft.Json's default PascalCase property
-    names (e.g. `ModelMode`, `PythonTrainingConfig`); OSSClient exports
-    use snake_case (e.g. `model_mode`, `training_config`). This walks
-    the candidates in order so callers can pass both spellings.
+    Legacy manifests use PascalCase property names (e.g. `ModelMode`,
+    `PythonTrainingConfig`); this app exports use snake_case (e.g. `model_mode`,
+    `training_config`). This walks the candidates in order so callers can pass
+    both spellings.
     """
     for k in keys:
         if k in d and d[k] is not None:
@@ -148,14 +158,14 @@ def _g(d: dict[str, Any], *keys: str, default: Any = None) -> Any:
 
 def model_from_export_dict(d: dict[str, Any]) -> Model:
     """Reverse of `model_to_export_dict`. Tolerates missing fields and
-    accepts both OSSClient snake_case and WinForms PascalCase manifests.
+    accepts both snake_case and legacy PascalCase manifests.
     """
     if not d:
         return Model()
     image_processing = ImageProcessingConfig.from_dict(
         _g(d, "image_processing", "ImageProcessingConfig")
     )
-    # WinForms persists two training_configs: PythonTrainingConfig (for
+    # The legacy app persists two training_configs: PythonTrainingConfig (for
     # the python training pipeline — what we care about) and
     # ModelTrainingConfig (for the legacy ML.NET pipeline). Prefer the
     # python one because it carries the ImageSize the model was actually
@@ -290,9 +300,8 @@ def write_manifest_sidecar(zip_path: Path | str) -> Path:
     """Extract manifest.json from a model ZIP and write it as a sibling
     ``<name>.manifest.json``.
 
-    Mirrors the WinForms ``ModelUploadStatus.StartUpload`` step that pulls the
-    manifest back out of the archive and serialises it to its own file so it
-    can be uploaded by itself once the model completes.
+    Pulls the manifest back out of the archive and serialises it to its own
+    file so it can be uploaded by itself once the model completes.
     """
     manifest = read_manifest(zip_path)
     sidecar = Path(zip_path).with_suffix(".manifest.json")
@@ -317,7 +326,7 @@ def export_for_share(
     """Build a community-share ZIP plus its standalone manifest sidecar.
 
     Stamps the community fields into the manifest's ModelInfo exactly as the
-    WinForms community export does (CommunityModelUID = the archive's UID,
+    legacy community export does (CommunityModelUID = the archive's UID,
     feedback-loop enable/floor, and FeedbackLoopUploadMode=Instant when the
     publisher turns the loop on). Returns ``(zip_path, manifest_path)``.
     """
@@ -373,13 +382,40 @@ def import_model(
     with zipfile.ZipFile(zip_path, "r") as zf:
         entries = list(zf.infolist())
 
-        # Pre-scan: reject path traversal entries before we touch the FS.
+        # Pre-scan: reject anything dangerous before we touch the FS —
+        # path-traversal entries, decompression bombs, and entries whose
+        # extension isn't one we expect to extract.
         for entry in entries:
             rel = _normalize(entry.filename)
             if _is_traversal(rel):
                 raise ValueError(
                     f"Refusing to import {zip_path}: traversal entry {entry.filename!r}"
                 )
+            if (
+                entry.file_size >= _RATIO_CHECK_MIN_BYTES
+                and entry.compress_size > 0
+                and entry.file_size / entry.compress_size > _MAX_COMPRESSION_RATIO
+            ):
+                raise ValueError(
+                    f"Refusing to import {zip_path}: entry {entry.filename!r} has an "
+                    f"implausible compression ratio "
+                    f"({entry.file_size} / {entry.compress_size})"
+                )
+            posix = PurePosixPath(rel)
+            if rel.endswith("/") or rel == "manifest.json":
+                continue
+            if posix.parts and posix.parts[0] == "images":
+                if Path(posix.parts[-1]).suffix.lower() not in _VALID_IMAGE_EXTS:
+                    raise ValueError(
+                        f"Refusing to import {zip_path}: unexpected image entry "
+                        f"{entry.filename!r}"
+                    )
+            elif posix.parts and posix.parts[0] == "model":
+                if Path(posix.parts[-1]).suffix.lower() not in _VALID_MODEL_EXTS:
+                    raise ValueError(
+                        f"Refusing to import {zip_path}: unexpected model entry "
+                        f"{entry.filename!r}"
+                    )
 
         manifest_entry = next(
             (e for e in entries if _normalize(e.filename) == "manifest.json"), None

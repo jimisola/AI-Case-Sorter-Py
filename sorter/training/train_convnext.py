@@ -1,8 +1,8 @@
-"""ConvNeXt training script for OSSClient.
+"""ConvNeXt training script.
 
-Stripped-down port of `python_env/train_convnext.py` retaining ConvNeXt
-Tiny/Small/Base/Large only. ResNet, Inception, and "custom" branches are
-removed. Parent classifications are dropped (legacy feature out of scope).
+Stripped-down trainer retaining ConvNeXt Tiny/Small/Base/Large only. ResNet,
+Inception, and "custom" branches are removed. Parent classifications are
+dropped (legacy feature out of scope).
 
 Progress markers are emitted as JSON-line tokens on stdout for the
 `training.manager` to parse:
@@ -58,7 +58,7 @@ def _emit(event: str, **payload: Any) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="ConvNeXt trainer (OSSClient)")
+    p = argparse.ArgumentParser(description="ConvNeXt trainer")
     p.add_argument("--image_dir", required=True)
     p.add_argument("--output_model", required=True)
 
@@ -136,7 +136,7 @@ class TransformSubset(Dataset):
 
 
 class FocalLoss(nn.Module):
-    """Single-class focal loss with label smoothing (matches WinForms impl)."""
+    """Single-class focal loss with label smoothing."""
 
     def __init__(self, gamma: float = 1.0, alpha: float = 1.0,
                  label_smoothing: float = 0.1) -> None:

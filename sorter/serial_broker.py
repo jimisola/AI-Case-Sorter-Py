@@ -1,8 +1,8 @@
 """Serial broker for the Case Sorter control board.
 
-Ports the behavior of SJS_SerialBroker.cs (open/handshake/ping/reader/dispatch) and
-the public command surface of SJS_SerialConnection.cs (feed_one, force_sort_and_move,
-sort_and_move, get_config, update_init_settings, etc.).
+Ports the legacy app's serial behavior (open/handshake/ping/reader/dispatch) and
+the public command surface (feed_one, force_sort_and_move, sort_and_move,
+get_config, update_init_settings, etc.).
 
 Threading model: one reader thread, one ping thread, writes serialized with a lock.
 Each callback is invoked on the reader thread; UI layers should post into an
@@ -24,9 +24,9 @@ PING_INTERVAL_S = 1.0
 PING_IDLE_THRESHOLD_S = 2.0
 HANDSHAKE_READ_TIMEOUT_S = 4.0  # configurable via Serial Config -> Probe timeout
 DISCOVERY_HANDSHAKE_TIMEOUT_S = 1.5  # legacy, retained for callers
-FEED_TIMEOUT_S = 2.0            # SJS_SerialConnection.cs:231
-FORCE_FEED_TIMEOUT_S = 3.0      # SJS_SerialConnection.cs:295
-SORT_TIMEOUT_S = 20.0           # SJS_SerialConnection.cs:375
+FEED_TIMEOUT_S = 2.0
+FORCE_FEED_TIMEOUT_S = 3.0
+SORT_TIMEOUT_S = 20.0
 
 
 Callback = Callable[[str], None]
@@ -37,7 +37,7 @@ def list_serial_ports() -> list[str]:
 
 
 class SerialBroker:
-    """Thread-safe wrapper around pyserial that mirrors SJS_SerialBroker."""
+    """Thread-safe wrapper around pyserial."""
 
     def __init__(
         self,
@@ -102,7 +102,7 @@ class SerialBroker:
                 self.is_connected = False
                 return False
 
-        # Handshake: read banner, write "version", inspect reply. SJS_SerialBroker.cs:151-177
+        # Handshake: read banner, write "version", inspect reply.
         try:
             banner = self._sp.readline().decode("ascii", errors="ignore")
         except Exception:
@@ -342,7 +342,7 @@ class SerialBroker:
         return result
 
     def update_init_settings(self, settings: dict[str, Any]) -> None:
-        """Push each key:value pair to the board. Mirrors SJS_SerialConnection.cs:193-206."""
+        """Push each key:value pair to the board."""
         for key, value in settings.items():
             if isinstance(value, bool):
                 value = 1 if value else 0

@@ -1,11 +1,11 @@
 """Azure B2C authentication via MSAL.
 
-Mirrors `SJS_AzureAuth.cs` from the WinForms app: same client/tenant, same
-B2C policy, same redirect URI, same scopes. The token cache is a file under
-the platform-specific user data dir (matches WinForms `LocalTokenFileStorage`).
+Uses the same client/tenant, B2C policy, redirect URI, and scopes as the
+legacy Windows app so accounts interchange. The token cache is a file under
+the platform-specific user data dir.
 
-Authentication is OPTIONAL in the OSSClient — the app boots fine without it.
-The community tab is the only gated surface this round.
+Authentication is OPTIONAL — the app boots fine without it. The community
+tab is the only gated surface.
 """
 from __future__ import annotations
 

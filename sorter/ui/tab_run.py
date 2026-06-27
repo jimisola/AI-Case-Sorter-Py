@@ -675,8 +675,7 @@ class SlotDetailsPanel(ttk.LabelFrame):
         """Assign/clear a parent group's children for this slot.
 
         Children locked to a different slot are left untouched — the group
-        header is not a back door around the one-slot-per-headstamp rule
-        (mirrors the WinForms ``Where(c => c.Enabled)`` bulk-toggle).
+        header is not a back door around the one-slot-per-headstamp rule.
         """
         if self.current_slot is None or self.current_slot == 0:
             return
@@ -1195,7 +1194,7 @@ class RunTab(ttk.Frame):
 
     def _on_package_full(self, payload: dict) -> None:
         slot = payload.get("slot")
-        # Non-blocking bell tone — mirrors the WinForms batch-complete beep.
+        # Non-blocking bell tone — the batch-complete beep.
         try:
             self.app.root.bell()
         except Exception:

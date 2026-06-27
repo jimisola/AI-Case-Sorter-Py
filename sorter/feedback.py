@@ -17,9 +17,8 @@ Drop-on-failure: anything that can't be uploaded — signed out, token expired,
 network error, or a server "not accepting feedback" reply — has its file
 deleted rather than retained. There is no durable cross-session retry queue.
 
-Mirrors the WinForms ``MainForm_Run`` feedback helpers: effective floor is
-``max(50, publisher_floor)`` and upload is a SAS round-trip (request ticket ->
-PUT blob -> complete).
+The effective floor is ``max(50, publisher_floor)`` and upload is a SAS
+round-trip (request ticket -> PUT blob -> complete).
 """
 from __future__ import annotations
 
@@ -37,22 +36,21 @@ from .repository import ModelRepo
 from .training.dataset import parse_feedback_filename, save_feedback_image
 
 
-# Client-side floor on the publisher's floor: even if a publisher set a very low
-# threshold, anything under 50% confidence is worth moderating. Mirrors the
-# WinForms ``Math.Max(50, FeedbackLoopConfidenceFloor)``.
+# Floor on the publisher's floor: even if a publisher set a very low
+# threshold, anything under 50% confidence is worth moderating.
 MIN_EFFECTIVE_FLOOR = 50
 
 
 def _debug_enabled() -> bool:
-    """Feedback-loop tracing is ON unless ``CASESORTER_FEEDBACK_DEBUG=0``."""
-    return os.environ.get("CASESORTER_FEEDBACK_DEBUG", "1") != "0"
+    """Feedback-loop tracing is OFF unless ``CASESORTER_FEEDBACK_DEBUG=1``."""
+    return os.environ.get("CASESORTER_FEEDBACK_DEBUG", "0") == "1"
 
 
 def debug_log(msg: str) -> None:
     """Console trace for the feedback pipeline (capture → queue → upload).
 
-    Prints to stderr with a ``[feedback]`` prefix so the whole chain can be
-    followed in one place. Silence with ``CASESORTER_FEEDBACK_DEBUG=0``.
+    Off by default; enable with ``CASESORTER_FEEDBACK_DEBUG=1`` to print the
+    whole chain to stderr with a ``[feedback]`` prefix.
     """
     if _debug_enabled():
         print(f"[feedback] {msg}", file=sys.stderr, flush=True)
