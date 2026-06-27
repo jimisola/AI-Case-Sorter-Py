@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS models (
 CREATE INDEX IF NOT EXISTS idx_models_cartridge ON models(cartridge_id);
 
 -- Parent classifications: named groups that child headstamps roll up into.
--- Mirrors the WinForms SJS_HeadStampParent table. Scoped per-model.
+-- Scoped per-model.
 CREATE TABLE IF NOT EXISTS headstamp_parents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,

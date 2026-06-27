@@ -23,8 +23,8 @@ from ..gpu_detect import GpuInfo, detect_supported_nvidia_gpu
 from .theme import PALETTE
 
 
-# Pin exactly the versions that the WinForms project's setup_torch.py
-# validates against. Floating versions (`torch>=2.2`) let pip pull the
+# Pin exactly the versions the legacy project validates against. Floating
+# versions (`torch>=2.2`) let pip pull the
 # latest — which is a moving target and has been observed to regress
 # ConvNeXt inference on the RTX 50-series.
 _TARGETS = ("torch==2.9.1", "torchvision==0.24.1")

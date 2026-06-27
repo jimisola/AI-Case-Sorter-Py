@@ -1,4 +1,4 @@
-"""HTML evaluation report generation (verbatim WinForms format)."""
+"""HTML evaluation report generation (verbatim legacy format)."""
 from __future__ import annotations
 
 import json
@@ -55,7 +55,7 @@ def test_report_row_key_order_matches_winforms(tmp_path: Path) -> None:
     img_dir = tmp_path / "imgs"
     img_dir.mkdir()
     rows = eval_report.report_rows(_results(img_dir))
-    # Key order must match python_env/batch_image_tester.py for byte-stable output.
+    # Key order must match the legacy report for byte-stable output.
     assert list(rows[0].keys()) == [
         "filename", "filepath", "thumbnail", "classification", "confidence",
         "original_classification", "raw_original_classification", "has_mapping",

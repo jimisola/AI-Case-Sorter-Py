@@ -1,8 +1,8 @@
 """Offline model evaluation: classify a folder of labelled images and score it.
 
-Mirrors the WinForms ModeImageTester / batch_image_tester.py feature, but runs
-inference **in-process** via :mod:`sorter.local_inference` instead of shelling
-out to a worker. The ground-truth label for each image is taken from the
+Provides the legacy app's batch-image-tester feature, but runs inference
+**in-process** via :mod:`sorter.local_inference` instead of shelling out to a
+worker. The ground-truth label for each image is taken from the
 training filename convention ``{label}__{ticks}.ext``; an optional
 folder-class -> model-class mapping lets a dataset labelled with different names
 be scored against the model's classes.
@@ -73,7 +73,7 @@ def match_status(predicted: str, original: str) -> str:
     return "match" if predicted == original else "mismatch"
 
 
-# ----- auto-map suggestion (ports ModelTesterClassMapper.SuggestMapping) -----
+# ----- auto-map suggestion ---------------------------------------------------
 
 def _tokenize(headstamp: str) -> list[str]:
     return [t for t in re.split(r"[ \-_+]+", headstamp) if t]
@@ -125,7 +125,7 @@ def _score_token_match(target: list[str], model: list[str]) -> float:
 
 
 def suggest_mapping(target_class: str, model_classes: list[str]) -> str | None:
-    """Best model class for a folder class, or None. Ported from WinForms."""
+    """Best model class for a folder class, or None."""
     target = (target_class or "").strip()
     if not target:
         return None

@@ -100,7 +100,7 @@ def test_import_normalizes_backslash_entries(tmp_path: Path) -> None:
     }
     with zipfile.ZipFile(zip_path, "w") as zf:
         zf.writestr("manifest.json", json.dumps(manifest))
-        # NOTE: backslashes — what Windows-side WinForms exports actually look like.
+        # NOTE: backslashes — what Windows-side legacy exports actually look like.
         zf.writestr("images\\FOO__100.jpg", b"jpg1")
         zf.writestr("model\\winexported.pth", b"PTH")
 
@@ -215,12 +215,12 @@ def test_unknown_model_mode_in_manifest_falls_back_to_tiny(tmp_path: Path) -> No
 
 
 def test_winforms_pascal_manifest_picks_up_training_config(tmp_path: Path) -> None:
-    """A WinForms export uses Newtonsoft.Json's PascalCase keys and ints
-    for the ModelMode enum. The OSSClient must pull the training image
-    size, model architecture, primer settings, and AI endpoint out of
-    that manifest — otherwise an imported community model classifies at
-    the wrong resolution and predictions look random."""
-    # Synthesize a WinForms-shaped manifest dict (no real zip needed).
+    """A legacy export uses PascalCase keys and ints for the ModelMode enum.
+    This app must pull the training image size, model architecture, primer
+    settings, and AI endpoint out of that manifest — otherwise an imported
+    community model classifies at the wrong resolution and predictions look
+    random."""
+    # Synthesize a legacy-shaped manifest dict (no real zip needed).
     payload = {
         "Name": "Community9mm",
         "ModelMode": 7,  # ConvNeXtSmall
@@ -288,7 +288,7 @@ def test_winforms_pascal_manifest_picks_up_training_config(tmp_path: Path) -> No
 
 def test_normalize_upload_mode_handles_int_string_and_missing() -> None:
     from sorter.models import normalize_upload_mode
-    # WinForms enum int (Instant=0, OnRunComplete=1, Manual=2)
+    # legacy enum int (Instant=0, OnRunComplete=1, Manual=2)
     assert normalize_upload_mode(0, feedback_enabled=True) == "Instant"
     assert normalize_upload_mode(1, feedback_enabled=True) == "OnRunComplete"
     assert normalize_upload_mode(2, feedback_enabled=True) == "Manual"
@@ -314,7 +314,7 @@ def test_model_from_row_normalizes_legacy_int_upload_mode(tmp_path: Path) -> Non
         name="Comm", cartridge_id=cart.id, community_model_uid="uid-7",
         feedback_loop_enabled=True, feedback_loop_confidence_floor=97,
     ))
-    # Simulate a legacy row that persisted the WinForms enum int.
+    # Simulate a legacy row that persisted the enum int.
     db.conn.execute(
         "UPDATE models SET feedback_loop_upload_mode = '0' WHERE id = ?", (m.id,)
     )
@@ -323,7 +323,7 @@ def test_model_from_row_normalizes_legacy_int_upload_mode(tmp_path: Path) -> Non
 
 
 def test_manifest_with_int_upload_mode_imports_as_name() -> None:
-    """A WinForms community export serializes the enum as an int (Instant=0);
+    """A legacy community export serializes the enum as an int (Instant=0);
     model_from_export_dict must store the canonical name, not the raw int."""
     m = model_from_export_dict({
         "ModelName": "Comm",
@@ -339,12 +339,12 @@ def test_manifest_with_int_upload_mode_imports_as_name() -> None:
 
 def test_model_mode_normalization_accepts_misc_spellings() -> None:
     from sorter.model_io import _normalize_model_mode
-    # Snake case (OSSClient export)
+    # Snake case (this app's export)
     assert _normalize_model_mode("convnext_tiny") == "convnext_tiny"
-    # WinForms display string variants
+    # legacy display string variants
     assert _normalize_model_mode("ConvNeXt-Large") == "convnext_large"
     assert _normalize_model_mode("ConvNeXtBase") == "convnext_base"
-    # WinForms enum int
+    # legacy enum int
     assert _normalize_model_mode(8) == "convnext_tiny"
     assert _normalize_model_mode(3) == "convnext_large"
     # Unknown / garbage → safe default

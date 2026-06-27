@@ -17,9 +17,8 @@ Drop-on-failure: anything that can't be uploaded — signed out, token expired,
 network error, or a server "not accepting feedback" reply — has its file
 deleted rather than retained. There is no durable cross-session retry queue.
 
-Mirrors the WinForms ``MainForm_Run`` feedback helpers: effective floor is
-``max(50, publisher_floor)`` and upload is a SAS round-trip (request ticket ->
-PUT blob -> complete).
+The effective floor is ``max(50, publisher_floor)`` and upload is a SAS
+round-trip (request ticket -> PUT blob -> complete).
 """
 from __future__ import annotations
 
@@ -37,9 +36,8 @@ from .repository import ModelRepo
 from .training.dataset import parse_feedback_filename, save_feedback_image
 
 
-# Client-side floor on the publisher's floor: even if a publisher set a very low
-# threshold, anything under 50% confidence is worth moderating. Mirrors the
-# WinForms ``Math.Max(50, FeedbackLoopConfidenceFloor)``.
+# Floor on the publisher's floor: even if a publisher set a very low
+# threshold, anything under 50% confidence is worth moderating.
 MIN_EFFECTIVE_FLOOR = 50
 
 

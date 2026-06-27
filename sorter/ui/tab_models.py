@@ -42,8 +42,7 @@ from .theme import PALETTE
 
 
 # Characters disallowed in headstamp / parent names — they would collide with
-# the training-image filename convention or the filesystem. Mirrors the
-# WinForms HeadstampManagerForm.CleanHeadstampName regex.
+# the training-image filename convention or the filesystem.
 _INVALID_NAME_CHARS = re.compile(r"""[#<>:'"/\\|*?,]""")
 
 
@@ -536,8 +535,8 @@ class HeadstampManagerDialog(tk.Toplevel):
     Right: the headstamp grid (name + assigned parent) with an inline parent
            picker, plus add / rename / delete and a Save button.
 
-    Mirrors the WinForms ``HeadstampManagerForm``. Parent and headstamp CRUD
-    commit immediately; parent *assignments* are held in memory and written
+    Parent and headstamp CRUD commit immediately; parent *assignments* are
+    held in memory and written
     only on Save, so auto-suggested groupings can be reviewed first.
     """
 
@@ -748,7 +747,7 @@ class HeadstampManagerDialog(tk.Toplevel):
 
     def _parent_cell_text(self, parent_id: int | None) -> str:
         """Parent-column text: always a value plus a dropdown chevron, so every
-        row advertises the inline picker (mirrors the WinForms DropDownButton)."""
+        row advertises the inline picker."""
         return f"{self._parent_name(parent_id) or self.NONE_LABEL}   ▾"
 
     # ----- data refresh -------------------------------------------------------
@@ -1039,7 +1038,7 @@ class HeadstampManagerDialog(tk.Toplevel):
                 "Duplicate", "A headstamp with that name already exists.", parent=self,
             )
             return
-        # Keep training images in sync with the new label (mirrors WinForms).
+        # Keep training images in sync with the new label.
         self._rename_headstamp_images(hs.name, name)
         with self.db.transaction():
             self.headstamps.rename(hs.id, name)

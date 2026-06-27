@@ -1,6 +1,6 @@
-"""HTML evaluation report — a verbatim port of the WinForms
-``batch_image_tester.generate_html_report`` so the OSSClient produces the exact
-same self-contained, interactive report file.
+"""HTML evaluation report — a verbatim port of the legacy app's batch image
+report so this app produces the exact same self-contained, interactive report
+file.
 
 Thumbnails are embedded as base64 data URIs, so the report is a single portable
 file. Everything here is cross-platform (pathlib + PIL only).
@@ -39,7 +39,7 @@ def create_thumbnail_b64(image_path: Path, size: int = 128) -> str:
 
 
 # The HTML template is split exactly where the original embeds the results JSON
-# (``const data = <json>;``). Verbatim from python_env/batch_image_tester.py.
+# (``const data = <json>;``). Verbatim from the legacy app's report.
 _HTML_HEAD = """<!DOCTYPE html>
 <html lang="en">
 <head>

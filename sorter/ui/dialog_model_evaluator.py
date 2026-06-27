@@ -1,8 +1,8 @@
 """Model evaluator — score a trained model against a folder of labelled images.
 
-Recreates the WinForms ModeImageTester / ModelTesterClassMapper feature using
-in-process inference (``sorter.evaluator``). Launched from the Models tab's
-per-row "Evaluate" button.
+Recreates the legacy app's batch-image-tester feature using in-process
+inference (``sorter.evaluator``). Launched from the Models tab's per-row
+"Evaluate" button.
 
 Two dialogs:
 
@@ -405,7 +405,7 @@ class ModelEvaluatorDialog(tk.Toplevel):
             progress=lambda i, n, name: self.app.bus.post(self._progress_topic, (i, n, name)),
             should_stop=self._stop_event.is_set,
         )
-        # Produce the self-contained HTML report (same format as the WinForms
+        # Produce the self-contained HTML report (same format as the legacy
         # app). Runs on the worker thread — thumbnail generation is I/O heavy.
         if out["results"]:
             self.app.bus.post(self._progress_topic, (0, 0, "Building report…"))

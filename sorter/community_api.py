@@ -1,9 +1,8 @@
 """Community API client for https://www.reloadingrecipes.com/api.
 
-Mirrors the WinForms `SJS_ReloadingRecipesAPI` surface. All calls go through
-a module-level `requests.Session` for connection pooling (matches the pattern
-in `api_client._session`). Bearer tokens are pulled from the `AuthManager`
-on each call so we always send the freshest token.
+All calls go through a module-level `requests.Session` for connection pooling
+(matches the pattern in `api_client._session`). Bearer tokens are pulled from
+the `AuthManager` on each call so we always send the freshest token.
 
 Model downloads use an Azure-blob SAS URL returned by the API. We just stream
 the URL with `requests`; no `azure-storage-blob` dependency needed.
@@ -33,7 +32,7 @@ class _ProgressReader:
 
     Azure Put-Blob rejects chunked transfer encoding, so the request body must
     advertise a Content-Length. Passing a generator made ``requests`` chunk the
-    upload and Azure dropped the TLS connection (the SSL-EOF on share). A
+    upload and Azure dropped the TLS connection (an SSL-EOF on share). A
     file-like object with ``__len__`` lets ``requests`` set Content-Length and
     stream without chunking, while ``read`` drives the progress callback.
     """
@@ -115,7 +114,7 @@ class ModelInfo:
 class FeedbackUploadTicket:
     """SAS ticket for a feedback-image upload.
 
-    Mirrors the WinForms ``SasResponse`` (PascalCase) plus the nested
+    Uses the server's PascalCase ``SasResponse`` shape plus the nested
     ``ModelInfo.feedbackAccepted``/``feedbackMessage`` (camelCase) rate-limit
     signal. The original payload is retained in ``raw`` so it can be POSTed
     back verbatim to ``CompleteFeedbackUpload``.
@@ -133,7 +132,7 @@ class FeedbackUploadTicket:
     @classmethod
     def from_json(cls, d: dict[str, Any]) -> "FeedbackUploadTicket":
         def get(key: str, default: Any = "") -> Any:
-            # Accept PascalCase (Newtonsoft default) and camelCase spellings.
+            # Accept PascalCase (the server's default) and camelCase spellings.
             return d.get(key, d.get(key[:1].lower() + key[1:], default))
 
         model_info = get("ModelInfo", {}) or {}
@@ -162,7 +161,7 @@ class FeedbackUploadTicket:
 class SasResponse:
     """SAS ticket for a model / manifest upload.
 
-    Mirrors the WinForms ``SasResponse`` (PascalCase). ``model_info`` carries
+    Uses the server's PascalCase ``SasResponse`` shape. ``model_info`` carries
     the server-assigned ``ModelUID`` back from FileUploadRequest, and ``raw``
     is kept so the whole payload can be POSTed verbatim to ``CompleteUpload``.
     """
@@ -359,7 +358,6 @@ class CommunityApi:
     ) -> FeedbackUploadTicket | None:
         """Ask the server for a SAS ticket to upload one feedback image.
 
-        Mirrors ``SJS_ReloadingRecipesAPI.GetFeedbackImageUploadRequest``.
         Returns ``None`` when the endpoint is unavailable for this user (the
         server answers with an HTML error page rather than JSON).
         """
@@ -402,8 +400,7 @@ class CommunityApi:
         """PUT the image bytes to the SAS blob URL (no azure-storage-blob dep).
 
         Single Put-Blob REST call: sets the block-blob type and stamps the
-        model version as blob metadata, matching the WinForms
-        ``UploadFeedbackImage`` + ``SetMetadataAsync`` pair.
+        model version as blob metadata.
         """
         url = ticket.blob_put_url()
         headers = {
@@ -417,7 +414,7 @@ class CommunityApi:
         resp.raise_for_status()
 
     def complete_feedback_upload(self, ticket: FeedbackUploadTicket) -> bool:
-        """Notify the server the upload finished. Mirrors ``CompleteFeedbackUpload``."""
+        """Notify the server the upload finished."""
         resp = self._post("/Models/CompleteFeedbackUpload", json=ticket.raw)
         debug_log(f"POST /Models/CompleteFeedbackUpload -> HTTP {resp.status_code}")
         return resp.status_code < 400
@@ -429,10 +426,9 @@ class CommunityApi:
     ) -> SasResponse:
         """Ask the server for a SAS ticket to upload the model ZIP.
 
-        Mirrors ``SJS_ReloadingRecipesAPI.GetFileUploadRequest`` — POSTs a
-        ``FileUploadReq { filename, ModelInfo }``. Raises ``CommunityApiError``
-        with the server's status + body on failure so the UI can show why the
-        upload was refused, rather than a generic "no SAS".
+        POSTs a ``FileUploadReq { filename, ModelInfo }``. Raises
+        ``CommunityApiError`` with the server's status + body on failure so the
+        UI can show why the upload was refused, rather than a generic "no SAS".
         """
         resp = self._post(
             "/Models/FileUploadRequest",
@@ -502,7 +498,7 @@ class CommunityApi:
             raise last_exc
 
     def complete_upload(self, ticket: SasResponse) -> bool:
-        """Notify the server the model ZIP finished. Mirrors ``CompleteUpload``."""
+        """Notify the server the model ZIP finished."""
         resp = self._post("/Models/CompleteUpload", json=ticket.raw)
         debug_log(f"POST /Models/CompleteUpload -> HTTP {resp.status_code}")
         return resp.status_code < 400
@@ -510,8 +506,8 @@ class CommunityApi:
     def request_manifest_upload(self, blob_path: str) -> SasResponse | None:
         """Ask for a SAS ticket to upload the standalone manifest.
 
-        Mirrors ``GetManifestUploadRequest`` — POSTs ``{ BlobPath }`` (the model
-        ZIP's blob path) so the server pairs the manifest with the model.
+        POSTs ``{ BlobPath }`` (the model ZIP's blob path) so the server pairs
+        the manifest with the model.
         """
         resp = self._post("/Models/ManifestUploadRequest", json={"BlobPath": blob_path})
         debug_log(f"POST /Models/ManifestUploadRequest -> HTTP {resp.status_code}")
@@ -539,15 +535,15 @@ class CommunityApi:
     ) -> str | None:
         """Run the full share sequence and return the server's model UID.
 
-        Order mirrors ``SJS_ModelUploader``:
+        Order:
           1. FileUploadRequest  → SAS for the ZIP,
           2. PUT the ZIP        (progress reported),
           3. CompleteUpload,
           4. ManifestUploadRequest → SAS for the manifest,
           5. PUT the manifest by itself.
 
-        The manifest is always uploaded once the model completes, matching the
-        WinForms behaviour. Raises CommunityApiError on a failed handshake.
+        The manifest is always uploaded once the model completes. Raises
+        CommunityApiError on a failed handshake.
         """
         zip_path = Path(zip_path)
         manifest_path = Path(manifest_path)

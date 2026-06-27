@@ -388,8 +388,8 @@ class MainWindow:
     def _auto_connect_serial(self) -> None:
         """Try the saved port first, then walk available ports until one handshakes.
 
-        Mirrors SJS_SerialConnection.cs:113-157 but falls through to alternate
-        ports if the saved port is present but unresponsive.
+        Falls through to alternate ports if the saved port is present but
+        unresponsive.
         """
         saved_port = (self.config.serial.get("port") or "").strip()
         if saved_port == EMULATED_PORT:

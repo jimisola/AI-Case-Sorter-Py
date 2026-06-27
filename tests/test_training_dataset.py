@@ -68,7 +68,7 @@ def test_class_counts_groups_by_label(tmp_path: Path) -> None:
     assert counts == {"FOO": 2, "BAR": 1}
 
 
-# ----- label sanitization (Security.md #2) -----------------------------------
+# ----- label sanitization -----------------------------------
 
 def test_safe_label_passes_through_normal_headstamps() -> None:
     for label in ("9mm WIN", "R-P", "+P", "FC", "S&B"):

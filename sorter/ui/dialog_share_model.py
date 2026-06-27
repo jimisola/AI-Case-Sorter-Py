@@ -1,7 +1,6 @@
 """Share-a-Model dialog — export a local model and upload it to the community.
 
-Mirrors the WinForms ModelPicker → ModelUploadInfo → ModelUploadStatus flow,
-collapsed into one dialog for the OSS client:
+Collapses the legacy pick → upload-info → upload-status flow into one dialog:
 
   * pick a local model,
   * fill the share metadata (name, description, community cartridge, what to
@@ -36,10 +35,9 @@ _EXPORT_LABELS = {
     "Images only": ExportMode.IMAGES_ONLY,
 }
 
-# Server-side ModelExportMode is a C# enum the WinForms client serializes with
-# Newtonsoft (numeric by default). Send the matching integer so an ASP.NET
-# System.Text.Json endpoint binds it (ModelOnly=0, ModelAndImages=1,
-# ImagesOnly=2, ManifestOnly=3 — see SJS_Utilities.ModelExportMode).
+# Server-side ModelExportMode is a numeric enum. Send the matching integer so
+# the endpoint binds it (ModelOnly=0, ModelAndImages=1, ImagesOnly=2,
+# ManifestOnly=3).
 _EXPORT_MODE_INT = {
     ExportMode.MODEL_ONLY: 0,
     ExportMode.MODEL_AND_IMAGES: 1,
@@ -239,7 +237,7 @@ class ShareModelDialog(tk.Toplevel):
         images_dir = paths.model_images_dir(model.id)
         image_count = _image_count(images_dir)
         # Reuse an existing community UID (re-publish/update) or mint a new one.
-        # Standard GUID *with* dashes, matching the WinForms Guid.NewGuid().
+        # Standard GUID *with* dashes.
         uid = model.community_model_uid or str(uuid4())
         version = model.model_version + 1 if model.community_model_uid else model.model_version
 
@@ -248,8 +246,8 @@ class ShareModelDialog(tk.Toplevel):
 
         def _work():
             api = CommunityApi(auth=self.app.auth)
-            # Export into the app's own temp folder, not the OS temp dir — the
-            # latter triggered a WinError 267 on Windows. Created fresh and
+            # Export into the app's own temp folder, not the OS temp dir, which
+            # on Windows can be locked or cleaned mid-write. Created fresh and
             # cleaned up afterwards regardless of success.
             scratch_root = paths.export_temp_dir()
             scratch_root.mkdir(parents=True, exist_ok=True)

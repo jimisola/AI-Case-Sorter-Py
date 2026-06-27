@@ -1,8 +1,8 @@
 """Typed dataclasses for SQLite-backed entities.
 
-These mirror the WinForms `SJS_Model` / `SJS_Cartridge` / `SJS_HeadStamp` /
-`TrainingConfig` shapes closely enough to make ZIP import/export and community
-download round-trips lossless. JSON-blob columns (`image_processing_json`,
+These mirror the legacy app's model / cartridge / headstamp / training-config
+shapes closely enough to make ZIP import/export and community download
+round-trips lossless. JSON-blob columns (`image_processing_json`,
 `training_config_json`, `ai_model_config_json`) on the `models` table hold the
 nested sub-objects so the SQL schema does not have to churn when those sub-
 objects gain fields.
@@ -27,7 +27,7 @@ FEEDBACK_UPLOAD_MODES = ("Instant", "OnRunComplete", "Manual")
 def normalize_upload_mode(raw: Any, *, feedback_enabled: bool) -> str:
     """Coerce a feedback upload-mode value to a canonical name string.
 
-    Accepts the OSSClient name (any case), the WinForms enum int
+    Accepts the canonical name (any case), the legacy enum int
     (``Instant=0, OnRunComplete=1, Manual=2``), or a stringified int such as
     ``"0"``. Unrecognized/missing values fall back to the publisher's usual
     default (``Instant``) for a feedback-enabled model, else ``Manual``.
@@ -67,8 +67,8 @@ class Headstamp:
     name: str = ""
     model_id: int = 0
     slot: int = 0
-    # Parent classification grouping. None = unassigned (no parent). Mirrors the
-    # WinForms SJS_HeadStampParentLink relationship (one parent per headstamp).
+    # Parent classification grouping. None = unassigned (no parent). One parent
+    # per headstamp.
     parent_id: int | None = None
 
     @classmethod
@@ -87,8 +87,8 @@ class Headstamp:
 class HeadstampParent:
     """A parent classification: a named group child headstamps roll up into.
 
-    Mirrors the WinForms ``SJS_HeadStampParent``. Scoped to a single model so
-    two models can reuse the same parent name without collision. ``slot`` is
+    Scoped to a single model so two models can reuse the same parent name
+    without collision. ``slot`` is
     the physical bin this parent routes to when the model runs in parent-
     classification mode (analogous to ``Headstamp.slot`` for child routing).
     """
@@ -153,9 +153,9 @@ class AIModelConfig:
     image_quality: int = 100
     image_scale: int = 100
 
-    # WinForms AIModelConfig uses OpenAI_* keys (mirrors SJS_DataProvider.cs);
-    # accept those alongside our snake_case ones so a community-imported model
-    # picks up the endpoint/prompt/quality settings on first activate.
+    # The legacy app's AI model config uses OpenAI_* keys; accept those
+    # alongside our snake_case ones so a community-imported model picks up the
+    # endpoint/prompt/quality settings on first activate.
     _WINFORMS_ALIASES = {
         "OpenAI_EndpointUrl": "endpoint_url",
         "OpenAI_APIKey": "api_key",
@@ -184,9 +184,9 @@ class AIModelConfig:
 
 @dataclass
 class TrainingConfig:
-    """27 fields mirroring MLTrainingConfig.cs.
+    """27 fields mirroring the legacy app's training config.
 
-    Defaults follow the WinForms defaults verbatim so an exported community
+    Defaults follow the legacy defaults verbatim so an exported community
     model is round-trippable without coercion.
     """
     model_name: str = "convnext_tiny"
@@ -219,7 +219,7 @@ class TrainingConfig:
 
     use_parent_classifications: bool = False
 
-    # WinForms PascalCase → our snake_case field name. Anything not in
+    # Legacy PascalCase → our snake_case field name. Anything not in
     # this map can still come in via snake_case and will be matched directly.
     _WINFORMS_ALIASES = {
         "ModelName": "model_name",

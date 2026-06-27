@@ -10,7 +10,7 @@ current one has a black border, and the few before it fade from dark blue out
 to white; everything older has no border. Resizing recomputes how many tiles
 fit and rebuilds the grid, preserving the newest records.
 
-Ports `ImageHistoryTrayForm` / `ImageHistoryControl` from the WinForms app.
+Ports the legacy app's image-history tray.
 """
 from __future__ import annotations
 
@@ -32,8 +32,8 @@ GUTTER = 6
 BORDER = 2
 
 # Most-recent → oldest border colours. Index 0 (the current classification)
-# is black; the trailing few fade dark-blue → white. Matches the WinForms
-# SnakeColors gradient with a black head per the Monitor spec.
+# is black; the trailing few fade dark-blue → white. Matches the legacy
+# snake-colors gradient with a black head per the Monitor spec.
 SNAKE_COLORS = (
     "#000000",  # current classification
     "#00334d",  # dark blue

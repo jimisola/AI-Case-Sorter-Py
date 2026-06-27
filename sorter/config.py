@@ -109,20 +109,19 @@ DEFAULT_CONFIDENCE_FLOOR = 30
 # Package mode (batch sorting). When on, the same headstamp may be assigned to
 # several slots; the run fills one slot to `run_package_size` then advances to
 # the next configured slot, halting when every slot for a headstamp is full.
-# Mirrors WinForms `Run_PackageMode` / `Run_PackageSize` plus the per-(model,
-# PackageMode) SJS_SlotConfig list — package assignments are kept separate from
-# the single-slot routing so a headstamp can live in multiple bins at once.
+# Package assignments are kept separate from the single-slot routing so a
+# headstamp can live in multiple bins at once.
 _RUN_PACKAGE_MODE_KEY = "run_package_mode"
 _RUN_PACKAGE_SIZE_KEY = "run_package_size"
 _PACKAGE_SLOTS_KEY = "package_slots"
 DEFAULT_PACKAGE_SIZE = 50
 
 # Auto-select trays: when on, an above-floor headstamp that isn't assigned to
-# any slot is auto-routed to the first empty slot (mirrors `checkBox_autosort`).
+# any slot is auto-routed to the first empty slot.
 _RUN_AUTO_SELECT_KEY = "run_auto_select_trays"
 
 # Sort While Training: send xf:<slot> for a labelled case instead of xf:0
-# during training (mirrors `checkBox1_trainAndSort`).
+# during training.
 _SORT_WHILE_TRAINING_KEY = "sort_while_training"
 
 
@@ -576,8 +575,8 @@ class Config:
         """Route an unassigned headstamp to the first empty slot. Returns the
         slot it landed in, or None when there is no free slot.
 
-        Mirrors the WinForms auto-sort block: respects existing assignments and
-        only ever places one headstamp into an empty slot.
+        Respects existing assignments and only ever places one headstamp into
+        an empty slot.
         """
         if not name:
             return None

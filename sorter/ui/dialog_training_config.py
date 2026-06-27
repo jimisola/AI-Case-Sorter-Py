@@ -1,7 +1,7 @@
 """Modal for editing the per-model TrainingConfig (27 fields).
 
-Mirrors MLTrainingConfig.cs in scope. Fields not used by ConvNeXt-only
-training (Inception/DeepLearning bits) are omitted.
+Fields not used by ConvNeXt-only training (Inception/DeepLearning bits) are
+omitted.
 """
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
 """Training-image dataset helpers.
 
-The OSSClient uses the same filename convention as the WinForms app so
-community model exports interchange cleanly:
+Uses the same filename convention as the legacy app so community model
+exports interchange cleanly:
 
     {classification}__{ticks}.jpg
 
@@ -63,8 +63,8 @@ def _assert_within(out_dir: Path, dest: Path) -> None:
 
 
 # Difference between Unix epoch (1970-01-01) and .NET reference (0001-01-01)
-# expressed in 100-ns ticks. Lifted straight from the WinForms convention so
-# Ticks generated here are byte-for-byte compatible with DateTime.Now.Ticks.
+# expressed in 100-ns ticks. Uses the .NET DateTime.Ticks convention so the
+# ticks generated here interchange byte-for-byte with the legacy app's.
 _DOTNET_EPOCH_OFFSET_TICKS = 621_355_968_000_000_000
 
 
@@ -117,7 +117,7 @@ def feedback_filename(
 ) -> str:
     """Build a ``{label}__{confidence}__{ticks}{ext}`` feedback-image filename.
 
-    Confidence is a rounded integer percent. Mirrors the WinForms feedback-loop
+    Confidence is a rounded integer percent. Uses the legacy feedback-loop
     naming so the label + confidence can be recovered from the filename at
     upload time — the folder is the queue, so no database row is needed.
     """

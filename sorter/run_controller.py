@@ -1,8 +1,8 @@
 """Single-image classify→sort loop.
 
-Mirrors the happy path of MainForm_Run.cs: feed one → capture frame → crop →
-optional primer mask → classify → look up slot (below floor or unknown → slot 0)
-→ sort to slot → post UI update. Loops until Stop pressed.
+The happy path: feed one → capture frame → crop → optional primer mask →
+classify → look up slot (below floor or unknown → slot 0) → sort to slot →
+post UI update. Loops until Stop pressed.
 """
 from __future__ import annotations
 
@@ -36,8 +36,7 @@ class RunController:
         self._stop_event = threading.Event()
         # Package-mode batch counters: slot -> cases dropped this run. Owned by
         # the run thread but read/reset from the UI thread (live reset button),
-        # so every access is guarded. Mirrors the per-slot Counter the WinForms
-        # SlotConfigV2 keeps; the catch-all (0) is never batched.
+        # so every access is guarded. The catch-all (0) is never batched.
         self._package_counts: dict[int, int] = {}
         self._package_lock = threading.Lock()
         # Slot to send on the NEXT wheel-rotate command. The 5-hole wheel
@@ -112,7 +111,7 @@ class RunController:
     def _resolve_destination(self, label: str, confidence: float) -> tuple[int, bool, bool]:
         """Full routing decision for a prediction: ``(slot, above_floor, halt)``.
 
-        Order mirrors WinForms ``RunProcessImage``:
+        Order:
           1. confidence floor (below → catch-all),
           2. auto-select trays (assign an unmapped headstamp to an empty slot),
           3. package-mode batch routing OR plain single-slot routing.

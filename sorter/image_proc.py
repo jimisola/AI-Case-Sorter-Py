@@ -3,11 +3,9 @@
 Two crop strategies behind a common signature and a separate primer-mask step.
 Output is always a 480x480 BGR uint8 frame on a black background.
 
-Ports the relevant pieces of SJS_ImageProcessing.cs:
- - ScanImageHalves (lines 835-1017) → linescan_crop
- - HoughCircles invocation (line 147) → hough_crop
- - GetCircleInfo (lines 1142-1150) → _square_to_circle
- - ClipToCircle / CoverCircle (lines 386-419, 547-575) → _clip_to_circle / primer mask
+Ports the relevant pieces of the legacy app's image processing: the line-scan
+crop, the HoughCircles crop, the square-to-circle conversion, and the
+clip-to-circle / primer-mask steps.
 """
 from __future__ import annotations
 
@@ -68,9 +66,8 @@ class LineScanParams:
 def _clip_to_circle(src: np.ndarray, center: tuple[int, int], radius: int) -> np.ndarray:
     """Paste a circular ROI from `src` onto a 480x480 black canvas.
 
-    Mirrors ClipToCircle (SJS_ImageProcessing.cs:547-575): destination ROI is the
-    full 480x480; source rectangle is the square bounding box of the circle,
-    resized to fit.
+    Destination ROI is the full 480x480; source rectangle is the square
+    bounding box of the circle, resized to fit.
     """
     if radius <= 0:
         return np.zeros((OUTPUT_SIZE, OUTPUT_SIZE, 3), dtype=np.uint8)
@@ -127,14 +124,14 @@ def hough_detect(
 
 
 def hough_crop(frame_bgr: np.ndarray, params: HoughParams) -> np.ndarray:
-    """cv2.HoughCircles based crop. Mirrors FindCircleCV (SJS_ImageProcessing.cs:137)."""
+    """cv2.HoughCircles based crop."""
     detection = hough_detect(frame_bgr, params)
     if detection is None:
-        # Fall back to the middle 30% of the image (SJS_ImageProcessing.cs:354-356).
+        # Fall back to the middle 30% of the image.
         h, w = frame_bgr.shape[:2]
         return _clip_to_circle(frame_bgr, (w // 2, h // 2), int(min(w, h) * 0.30))
     cx, cy, r = detection
-    # Match the C# 5% radial buffer (SJS_ImageProcessing.cs:341, 369).
+    # 5% radial buffer.
     r_padded = int(r * 1.05)
     return _clip_to_circle(frame_bgr, (int(cx), int(cy)), r_padded)
 
@@ -166,9 +163,9 @@ def overlay_detection(
 def _line_means_x(gray_minus_cliff: np.ndarray, col_idx: int, scale: int = 3) -> float:
     """Average brightness of a single vertical line (col_idx) summed over 3 channels.
 
-    Mirrors the C# ScanX behavior (lines 1018-1047) where each pixel sample sums
-    R+G+B (after bg_cliff). Since we already work in grayscale, we multiply by 3
-    so the sensitivity threshold has comparable scale to the original.
+    The original sums R+G+B per pixel sample (after bg_cliff). Since we already
+    work in grayscale, we multiply by 3 so the sensitivity threshold has
+    comparable scale to the original.
     """
     if col_idx < 0 or col_idx >= gray_minus_cliff.shape[1]:
         return 0.0
@@ -182,7 +179,7 @@ def _line_means_y(gray_minus_cliff: np.ndarray, row_idx: int) -> float:
 
 
 def linescan_crop(frame_bgr: np.ndarray, params: LineScanParams) -> np.ndarray:
-    """Numpy port of ScanImageHalves (SJS_ImageProcessing.cs:835-1017).
+    """Numpy port of the legacy app's ScanImageHalves crop.
 
     The original walks raw bitmap bytes in three-channel order. Here we precompute
     a grayscale and per-row / per-col means, then do the coarse-grid + fine-walk in
@@ -206,7 +203,7 @@ def linescan_crop(frame_bgr: np.ndarray, params: LineScanParams) -> np.ndarray:
     sensitivity = float(params.scan_sensitivity)
     precision = max(1, int(params.scan_precision))
 
-    # Coarse passes mirror the four foreach loops at SJS_ImageProcessing.cs:887-941.
+    # Coarse passes mirror the four foreach loops in the original.
     def _coarse_start(samples: list[float], step: int, reverse: bool, limit: int) -> int:
         running_sum = 0.0
         for i, val in enumerate(samples, start=1):
@@ -226,8 +223,8 @@ def linescan_crop(frame_bgr: np.ndarray, params: LineScanParams) -> np.ndarray:
     scan_bottom_start = _coarse_start(list(reversed(y_samples)), rough_h_step, reverse=True, limit=h)
 
     # Fine-walk: walk from each rough boundary inward until the running mean diverges
-    # from the just-read line mean by more than `sensitivity`. Mirrors the four loops
-    # at SJS_ImageProcessing.cs:946-1009.
+    # from the just-read line mean by more than `sensitivity`. Mirrors the four
+    # corresponding loops in the original.
     def _fine_walk(start: int, step: int, axis_fn, limit: int, *, from_low: bool) -> int:
         scan_data = [0.0]
         i = start
@@ -274,7 +271,7 @@ def linescan_crop(frame_bgr: np.ndarray, params: LineScanParams) -> np.ndarray:
     )
 
     if sqcrp_right <= sqcrp_left or sqcrp_bottom <= sqcrp_top:
-        # Fall back to centered 30% (matches SJS_ImageProcessing.cs:354-356).
+        # Fall back to centered 30%.
         return _clip_to_circle(frame_bgr, (w // 2, h // 2), int(min(w, h) * 0.30))
 
     cx = (sqcrp_left + sqcrp_right) // 2
@@ -308,8 +305,8 @@ def crop_headstamp(frame_bgr: np.ndarray, config: dict[str, Any]) -> np.ndarray:
 def apply_primer_mask(img_bgr: np.ndarray, mode: str, radius: int) -> np.ndarray:
     """Apply the primer-mask post-step.
 
-    "use"  → clip to a centered circle (mirrors CircleMask, SJS_ImageProcessing.cs:386-390)
-    "hide" → draw a black filled circle over the primer (CircleMaskCover lines 399-419)
+    "use"  → clip to a centered circle
+    "hide" → draw a black filled circle over the primer
     "none" → return unchanged
     """
     if radius <= 0 or mode == "none":

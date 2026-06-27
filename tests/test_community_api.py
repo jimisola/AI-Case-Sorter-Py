@@ -175,7 +175,7 @@ def test_non_200_raises() -> None:
 
 
 def test_user_metadata_can_contribute_role_flag() -> None:
-    """RSRoles flags mirror the WinForms enum: 1=Read, 2=Contribute, 4=Admin.
+    """Role flags are a bitfield: 1=Read, 2=Contribute, 4=Admin.
     can_contribute() must return True iff the Contribute bit is set,
     regardless of other bits."""
     assert UserMetaData(roles=0).can_contribute() is False
@@ -188,7 +188,7 @@ def test_user_metadata_can_contribute_role_flag() -> None:
 
 
 def test_user_metadata_from_json_picks_up_roles() -> None:
-    """Server payload uses Newtonsoft PascalCase keys; tolerate camelCase too."""
+    """Server payload uses PascalCase keys; tolerate camelCase too."""
     m1 = UserMetaData.from_json({"ProfileName": "x", "Country": "US", "Roles": 2})
     assert m1.profile_name == "x" and m1.country == "US" and m1.can_contribute()
     m2 = UserMetaData.from_json({"profileName": "y", "country": "CA", "roles": 1})
