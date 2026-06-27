@@ -19,7 +19,7 @@ the device firmware are out of scope.
 
 | # | Severity | Finding | Location |
 |---|----------|---------|----------|
-| 1 | **Critical** | Arbitrary code execution via untrusted model deserialization (`torch.load(weights_only=False)`) | `sorter/local_inference.py:329` |
+| 1 | **Critical** ✅ resolved | Arbitrary code execution via untrusted model deserialization — fixed by `weights_only=True` | `sorter/local_inference.py:329` |
 | 2 | **Medium** | Path traversal / arbitrary file write from unsanitized classification labels used as filenames | `sorter/training/dataset.py`, `sorter/run_controller.py`, `sorter/feedback.py` |
 | 3 | **Medium** | Stored XSS in generated HTML evaluation report | `sorter/eval_report.py:827-850` |
 | 4 | **Medium** | Unbounded ZIP extraction (decompression bomb / disk exhaustion) on model import | `sorter/model_io.py:351-453` |
@@ -72,10 +72,17 @@ the project is open source and models circulate freely.
 4. [FIX] Until fixed, surface a clear warning in the import/download UI that models run 
    code, and prefer models from known authors.
 
-**Status (done — point 4 only).** A "models run code" confirmation warning was
-added to both load paths: the Models-tab import (`tab_models._import_zip`) and the
-Community download (`tab_community._download`), each defaulting to "No". The
-`torch.load(weights_only=False)` call itself is unchanged per the `[PARTIAL]` scope.
+**Status (RESOLVED).** `local_inference._load` now calls
+`torch.load(..., weights_only=True)`, so a malicious `.pth` can no longer execute
+code on load (validated against the same checkpoint format the server-side
+evaluator loads this way). Defense-in-depth retained: the "models run code"
+confirmation warning still guards both load paths — the Models-tab import
+(`tab_models._import_zip`) and the Community download (`tab_community._download`),
+each defaulting to "No". A checkpoint carrying a non-allowlisted type now fails
+*closed* (refuses to load); allowlist a specific safe type with
+`torch.serialization.add_safe_globals(...)` only if a real legacy/community file
+needs it. Recommendations 2–3 (checkpoint-shape validation, safetensors) remain
+optional hardening.
 
 ---
 

@@ -177,8 +177,9 @@ used, headstamps in the `headstamps` table). Activating a model posts
 - **`local_inference.py`** — lazy-imports torch; picks the device once; caches
   loaded models by `(path, mtime)`; runs all inference through a single-threaded
   executor to keep cuDNN state warm. Detects the checkpoint's classifier layout
-  and rebuilds the ConvNeXt head. ⚠️ Loads checkpoints with
-  `torch.load(..., weights_only=False)` — see `Security.md`.
+  and rebuilds the ConvNeXt head. Loads checkpoints with
+  `torch.load(..., weights_only=True)` so a malicious `.pth` cannot execute code
+  on load (see `Security.md` #1).
 - **`api_client.py`** — stateless HTTP client (`classify`, `get_headstamps`)
   against an OpenAI-compatible server. JPEG-encodes the frame to a base64 data
   URL, renders the `{{headstamps}}` prompt placeholder, parses `choices[0]...`

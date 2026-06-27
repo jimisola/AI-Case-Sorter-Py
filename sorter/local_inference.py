@@ -326,7 +326,15 @@ def _load(model_path: str) -> _LoadedModel:
         if cached is not None:
             return cached
 
-        ckpt = torch.load(str(path), map_location="cpu", weights_only=False)
+        # weights_only=True restricts unpickling to tensors + plain Python
+        # containers/primitives, so a malicious .pth (community download or
+        # imported ZIP) cannot execute code on load. Our checkpoints only carry
+        # model_state_dict / classes / base / image_size, all of which load
+        # under this mode (mirrors the server-side evaluator). A checkpoint that
+        # carries a non-allowlisted type fails closed (refuses to load) rather
+        # than running code; allowlist the specific safe type with
+        # torch.serialization.add_safe_globals(...) only if a real file needs it.
+        ckpt = torch.load(str(path), map_location="cpu", weights_only=True)
         classes = list(ckpt.get("classes") or [])
         base = ckpt.get("base") or "convnext_tiny"
         if not classes:
