@@ -25,6 +25,11 @@ log()  { printf '[start] %s\n' "$*"; }
 warn() { printf '[start] %s\n' "$*" >&2; }
 die()  { printf '[start] ERROR: %s\n' "$*" >&2; exit 1; }
 
+if [ "$AUTO_INSTALL" = "1" ]; then
+    warn "AUTO_INSTALL is enabled: any required system packages (tkinter, libGL,"
+    warn "glib, venv) will be installed via 'sudo' WITHOUT prompting."
+fi
+
 # ---------------------------------------------------------------------------
 # Package-manager detection. We only know how to auto-install on apt, dnf,
 # pacman. On anything else we still print a clear hint.
@@ -98,6 +103,8 @@ try_install() {
     if [ -z "$pkg" ]; then
         return 1
     fi
+    warn "About to install the system package '$pkg' ($purpose)."
+    warn "This runs '$PKG_INSTALL $pkg' with sudo and modifies system packages."
     if ! confirm "Install $pkg ($purpose)?"; then
         return 1
     fi

@@ -60,6 +60,16 @@ class ExportMode(str, enum.Enum):
 
 
 _VALID_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+# Model checkpoints are PyTorch ``.pth``/``.pt`` files. The empty string is
+# tolerated because the extractor already defaults an extension-less entry to
+# ``.pth`` (some exporters drop the suffix).
+_VALID_MODEL_EXTS = {".pth", ".pt", ""}
+# A wildly high uncompressed:compressed ratio is the signature of a zip bomb;
+# real JPEGs and float32 checkpoints are already near-incompressible. Only large
+# entries are checked so small, legitimately-compressible files (a tiny JSON
+# manifest) never trip the guard.
+_MAX_COMPRESSION_RATIO = 100
+_RATIO_CHECK_MIN_BYTES = 1_000_000
 
 
 def _normalize(entry_name: str) -> str:
@@ -373,13 +383,40 @@ def import_model(
     with zipfile.ZipFile(zip_path, "r") as zf:
         entries = list(zf.infolist())
 
-        # Pre-scan: reject path traversal entries before we touch the FS.
+        # Pre-scan: reject anything dangerous before we touch the FS —
+        # path-traversal entries, decompression bombs, and entries whose
+        # extension isn't one we expect to extract.
         for entry in entries:
             rel = _normalize(entry.filename)
             if _is_traversal(rel):
                 raise ValueError(
                     f"Refusing to import {zip_path}: traversal entry {entry.filename!r}"
                 )
+            if (
+                entry.file_size >= _RATIO_CHECK_MIN_BYTES
+                and entry.compress_size > 0
+                and entry.file_size / entry.compress_size > _MAX_COMPRESSION_RATIO
+            ):
+                raise ValueError(
+                    f"Refusing to import {zip_path}: entry {entry.filename!r} has an "
+                    f"implausible compression ratio "
+                    f"({entry.file_size} / {entry.compress_size})"
+                )
+            posix = PurePosixPath(rel)
+            if rel.endswith("/") or rel == "manifest.json":
+                continue
+            if posix.parts and posix.parts[0] == "images":
+                if Path(posix.parts[-1]).suffix.lower() not in _VALID_IMAGE_EXTS:
+                    raise ValueError(
+                        f"Refusing to import {zip_path}: unexpected image entry "
+                        f"{entry.filename!r}"
+                    )
+            elif posix.parts and posix.parts[0] == "model":
+                if Path(posix.parts[-1]).suffix.lower() not in _VALID_MODEL_EXTS:
+                    raise ValueError(
+                        f"Refusing to import {zip_path}: unexpected model entry "
+                        f"{entry.filename!r}"
+                    )
 
         manifest_entry = next(
             (e for e in entries if _normalize(e.filename) == "manifest.json"), None

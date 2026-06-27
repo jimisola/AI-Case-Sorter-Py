@@ -358,6 +358,17 @@ class CommunityTab(ttk.Frame):
 
     def _download(self, info: ModelInfo) -> None:
         name = info.model_name or info.model_uid or "model"
+        if not messagebox.askyesno(
+            "Download model — security notice",
+            f"\"{name}\" is a community-published model. Models are loaded with "
+            "PyTorch and can execute code embedded in the file, so only download "
+            "models from authors you trust.\n\n"
+            "Download and import this model?",
+            icon="warning",
+            default="no",
+            parent=self,
+        ):
+            return
         self._post_progress(f"Downloading {name}…")
 
         def _work():

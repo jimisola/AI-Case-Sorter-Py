@@ -476,6 +476,17 @@ class ModelsTab(ttk.Frame):
         )
         if not zip_path:
             return
+        if not messagebox.askyesno(
+            "Import model — security notice",
+            "A model archive contains a serialized neural network that is loaded "
+            "with PyTorch. Loading a model can execute code embedded in the file, "
+            "so only import models from sources you trust.\n\n"
+            "Import this archive?",
+            icon="warning",
+            default="no",
+            parent=self,
+        ):
+            return
         try:
             _cart_id, model_id = import_model(zip_path, db=self.db)
         except Exception as exc:

@@ -72,6 +72,11 @@ the project is open source and models circulate freely.
 4. [FIX] Until fixed, surface a clear warning in the import/download UI that models run 
    code, and prefer models from known authors.
 
+**Status (done — point 4 only).** A "models run code" confirmation warning was
+added to both load paths: the Models-tab import (`tab_models._import_zip`) and the
+Community download (`tab_community._download`), each defaulting to "No". The
+`torch.load(weights_only=False)` call itself is unchanged per the `[PARTIAL]` scope.
+
 ---
 
 ## 2. Medium — Path traversal / arbitrary file write from classification labels [FIX]
@@ -107,6 +112,12 @@ nested directories or fail writes.
   and refuse otherwise.
 - Apply the same treatment to labels written into ZIP manifests/headstamp rows on
   import.
+
+**Status (done).** Added `dataset.safe_label()` (strips path separators, `..`,
+control/illegal chars, reserved Windows names; caps length; empty → `"unknown"`)
+and applied it in `training_filename` / `feedback_filename`. `save_training_image`
+and `save_feedback_image` now also assert the destination resolves inside the
+target dir (`_assert_within`). Regression tests in `tests/test_training_dataset.py`.
 
 ---
 
@@ -165,6 +176,13 @@ model archive.
   exceeded. [IGNORE]
 - Reject archives whose compression ratio is implausibly high. [FIX]
 - Validate that model/image entries have expected extensions before writing. [FIX]
+
+**Status (done — ratio + extension checks).** `import_model`'s pre-scan now
+rejects entries with an implausible uncompressed:compressed ratio
+(`_MAX_COMPRESSION_RATIO`, gated to entries ≥ 1 MB to avoid false positives) and
+entries under `images/`/`model/` whose extension isn't an expected image/weights
+type. The absolute byte/entry-count ceilings were left out per the `[IGNORE]` tag.
+Regression tests in `tests/test_model_io.py`.
 
 ---
 
@@ -231,6 +249,9 @@ These are not secrets (SAS *tokens* are not logged), but the default-on verbosit
 leaks operational detail and clutters output. Recommend defaulting the flag
 **off** and ensuring no token/credential ever reaches a log line.
 
+**Status (done).** `feedback._debug_enabled()` now defaults **off** — tracing
+requires `CASESORTER_FEEDBACK_DEBUG=1`.
+
 ## 9. Low — Unattended `sudo` in the bootstrap launcher [FIX] [Add Warnings]
 
 **Location:** `start.sh:74-107`
@@ -241,6 +262,10 @@ libGL, glib, venv), so risk is limited, but unattended `sudo` is worth a clear
 warning in docs and an explicit "this will install system packages" notice.
 (Positive: without `--auto` and without a TTY, the script declines to run `sudo`
 silently — good default.)
+
+**Status (done — warnings added).** `start.sh` now prints an explicit notice when
+`AUTO_INSTALL` is enabled, and `try_install` warns (package name + the exact
+`sudo` command + "modifies system packages") before every install attempt.
 
 ## 10. Info — JWT signature not verified (by design) [IGNORE]
 

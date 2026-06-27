@@ -44,15 +44,15 @@ MIN_EFFECTIVE_FLOOR = 50
 
 
 def _debug_enabled() -> bool:
-    """Feedback-loop tracing is ON unless ``CASESORTER_FEEDBACK_DEBUG=0``."""
-    return os.environ.get("CASESORTER_FEEDBACK_DEBUG", "1") != "0"
+    """Feedback-loop tracing is OFF unless ``CASESORTER_FEEDBACK_DEBUG=1``."""
+    return os.environ.get("CASESORTER_FEEDBACK_DEBUG", "0") == "1"
 
 
 def debug_log(msg: str) -> None:
     """Console trace for the feedback pipeline (capture → queue → upload).
 
-    Prints to stderr with a ``[feedback]`` prefix so the whole chain can be
-    followed in one place. Silence with ``CASESORTER_FEEDBACK_DEBUG=0``.
+    Off by default; enable with ``CASESORTER_FEEDBACK_DEBUG=1`` to print the
+    whole chain to stderr with a ``[feedback]`` prefix.
     """
     if _debug_enabled():
         print(f"[feedback] {msg}", file=sys.stderr, flush=True)

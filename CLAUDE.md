@@ -235,8 +235,8 @@ used, headstamps in the `headstamps` table). Activating a model posts
   clamped to ≥ 50), the cropped image is staged to
   `data/models/<id>/feedback_images/`. **The folder is the queue** (no DB mirror);
   `upload_pending` drains it via `CommunityApi`, deleting on success or drop on
-  failure. Debug tracing to stderr is **on by default**
-  (`CASESORTER_FEEDBACK_DEBUG`).
+  failure. Debug tracing to stderr is **off by default** — enable with
+  `CASESORTER_FEEDBACK_DEBUG=1`.
 
 ---
 

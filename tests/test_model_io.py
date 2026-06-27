@@ -138,6 +138,43 @@ def test_import_rejects_path_traversal(tmp_path: Path) -> None:
                      models_target_dir=tmp_path / "m")
 
 
+def _import_manifest() -> dict:
+    return {
+        "ModelName": "M",
+        "CartridgeName": "9mm",
+        "Headstamps": [],
+        "ExportMode": "ModelAndImages",
+        "ModelInfo": {"name": "M", "model_mode": "convnext_tiny"},
+    }
+
+
+def test_import_rejects_decompression_bomb(tmp_path: Path) -> None:
+    db = _seed_db(tmp_path)
+    zip_path = tmp_path / "bomb.zip"
+    # ~5 MB of zeros compresses to a few KB — a ratio far above the guard.
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps(_import_manifest()))
+        zf.writestr("images/BOOM__1.jpg", b"\x00" * (5 * 1024 * 1024))
+
+    with pytest.raises(ValueError, match="compression ratio"):
+        import_model(zip_path, db=db,
+                     images_target_dir=tmp_path / "i",
+                     models_target_dir=tmp_path / "m")
+
+
+def test_import_rejects_unexpected_entry_extension(tmp_path: Path) -> None:
+    db = _seed_db(tmp_path)
+    zip_path = tmp_path / "weird.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(_import_manifest()))
+        zf.writestr("images/notanimage.exe", b"MZ")
+
+    with pytest.raises(ValueError, match="unexpected image entry"):
+        import_model(zip_path, db=db,
+                     images_target_dir=tmp_path / "i",
+                     models_target_dir=tmp_path / "m")
+
+
 def test_export_atomic_write_no_partial_file(tmp_path: Path) -> None:
     db = _seed_db(tmp_path)
     cart = CartridgeRepo(db).create("test")
