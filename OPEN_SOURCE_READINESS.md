@@ -14,18 +14,19 @@ Severity legend: **Blocker** (do not open-source without it) · **High** ·
 
 ## A. Licensing & legal
 
-### A1. **Blocker — No LICENSE file**
-There is no `LICENSE`/`COPYING` anywhere in the repo. Under copyright law, code
-published with **no license is "all rights reserved"**: people can view it but
-cannot legally use, modify, fork, or contribute. This is the single most
-important gap.
-- **Action:** Choose and add a license. For a permissive, contribution-friendly
-  posture use **MIT** or **Apache-2.0** (Apache-2.0 additionally grants an
-  explicit patent license — a plus given the CV/ML domain). Add the SPDX
-  identifier to `pyproject.toml` (`license = "Apache-2.0"`) and a short header or
-  `NOTICE` as appropriate.
-- Confirm you (the author) hold rights to all code being released — i.e. it
-  wasn't written under an employment/contract assignment that would conflict.
+### A1. **Blocker — No LICENSE file** ✅ resolved
+~~There is no `LICENSE`/`COPYING` anywhere in the repo.~~ **Done.** Added the
+verbatim **GPL-3.0** text as `LICENSE`, declared `license = "GPL-3.0-or-later"`
+plus the matching trove classifier in `pyproject.toml`, and added the standard
+GPLv3 notice + `Copyright (C) 2026 SJSeth Solutions` to the README. The copyleft
+choice reflects the project's intent that distributed forks stay open source.
+- **Still confirm:** that the copyright holder (SJSeth Solutions) holds rights to
+  all code being released — i.e. none of it was written under a conflicting
+  employment/contract assignment. (Project owner's call; nothing to change in code.)
+- **Optional follow-up:** GPLv3 makes contributions inbound-under-the-same-license
+  by default. If you want contributors to affirm that explicitly (your "if they
+  give to the project, it belongs to the project" goal), add a **DCO** sign-off
+  policy or a lightweight CLA in `CONTRIBUTING.md` (see C2).
 
 ### A2. **High — Third-party dependency license compatibility**
 You redistribute behavior built on these runtime deps: `pyserial`,
@@ -132,12 +133,13 @@ The code is consistently typed and styled, but there's no enforced tooling
 (`ruff`/`black`/`flake8`, `mypy`/`pyright`, `pre-commit`). Add configuration so
 contributions stay consistent; wire it into CI (C3).
 
-### C5. **Medium — `pyproject.toml` metadata gaps**
-Missing `license`, `authors`, `readme`, `urls` (Homepage/Repository/Issues), and
-trove `classifiers`. (The distribution `name`/`description` have been updated to
-`ai-case-sorter-py` and a full-app description — the early "OSS client" framing is
-no longer in `pyproject.toml`.) `version = 0.1.0` implies possible PyPI intent —
-decide whether you're publishing. If so, also reconcile **C6**.
+### C5. **Medium — `pyproject.toml` metadata gaps** ✅ resolved
+**Done.** Added `readme`, `license` (`GPL-3.0-or-later`), `authors`
+(SJSeth Solutions), `[project.urls]` (Homepage/Repository/Issues), and trove
+`classifiers` (license, OS, Python versions, topic). The `name`/`description`
+were already updated to `ai-case-sorter-py` and a full-app description. Remaining
+open question: `version = 0.1.0` implies possible PyPI intent — decide whether
+you're publishing; if so, also reconcile **C6** (runtime data dir).
 
 ### C6. **Low — Runtime writes next to the source tree**
 `paths.app_data_dir()` defaults to `<repo>/data/`. That works when launched from a
@@ -203,12 +205,15 @@ These aren't defects, but they will generate issues if undocumented:
 ## Prioritized "make it public" checklist
 
 **Must-have before going public (Blockers):**
-1. Add a **LICENSE** (A1).
-2. Add a **README.md** (C1) — including the local-vs-community scope (B1),
+1. ✅ Add a **LICENSE** (A1) — GPL-3.0 added.
+2. ✅ Add a **README.md** (C1) — added with local-vs-community scope (B1),
    domain/safety disclaimers (A3/A4), and the emulator path (B3).
 
 **Strongly recommended (High):**
 3. Verify dependency-license compatibility + third-party notices (A2).
+   ⚠️ Re-check under copyleft: GPL-3.0 is compatible with the permissive deps
+   (BSD/MIT/Apache-2.0/HPND) used here, but confirm nothing pulls in an
+   incompatible license.
 4. Document backend coupling / make endpoints configurable (B1/B2).
 5. Add `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, and a disclosure-policy
    `SECURITY.md`; rename the existing review file to avoid confusion (C2).
@@ -217,7 +222,7 @@ These aren't defects, but they will generate issues if undocumented:
 
 **Polish (Medium/Low):**
 8. Linter/formatter/type-check config + pre-commit (C4).
-9. Fill in `pyproject.toml` metadata; decide on PyPI (C5/C6).
+9. ✅ Fill in `pyproject.toml` metadata (C5); decide on PyPI (C6 still open).
 10. CHANGELOG + release process (C7).
 11. Document the UX surprises (Section D) and the privacy note (E1).
 
