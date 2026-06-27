@@ -1,0 +1,10 @@
+pyserial>=3.5
+opencv-python>=4.8
+numpy>=1.24
+Pillow>=10.0
+requests>=2.31
+msal>=1.28
+platformdirs>=4.0
+# Windows-only: enumerates friendly DirectShow camera names so the Camera
+# tab can show real device names instead of just "Camera N".
+pygrabber>=0.2; platform_system == "Windows"

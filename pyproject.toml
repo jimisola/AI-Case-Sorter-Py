@@ -1,0 +1,25 @@
+[project]
+name = "sjseth-casesorter-ossclient"
+version = "0.1.0"
+description = "Cross-platform Open Source client for the Case Sorter Server API."
+requires-python = ">=3.10"
+dependencies = [
+    "pyserial>=3.5",
+    "opencv-python>=4.8",
+    "numpy>=1.24",
+    "Pillow>=10.0",
+    "requests>=2.31",
+    "msal>=1.28",
+    "platformdirs>=4.0",
+]
+
+[project.optional-dependencies]
+# Local PyTorch training/inference. Install with `pip install .[ml]`.
+ml = ["torch>=2.2", "torchvision>=0.17"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["sorter", "sorter.ui", "sorter.training"]

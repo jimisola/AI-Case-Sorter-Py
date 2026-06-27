@@ -1,0 +1,140 @@
+"""Training-image dataset helpers.
+
+The OSSClient uses the same filename convention as the WinForms app so
+community model exports interchange cleanly:
+
+    {classification}__{ticks}.jpg
+
+where `ticks` is the .NET ``DateTime.Ticks`` value (100-nanosecond intervals
+since 0001-01-01).  Inference, training, and community export/import all
+depend on this exact format.
+"""
+from __future__ import annotations
+
+import os
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Iterable
+
+import cv2
+import numpy as np
+
+
+# Difference between Unix epoch (1970-01-01) and .NET reference (0001-01-01)
+# expressed in 100-ns ticks. Lifted straight from the WinForms convention so
+# Ticks generated here are byte-for-byte compatible with DateTime.Now.Ticks.
+_DOTNET_EPOCH_OFFSET_TICKS = 621_355_968_000_000_000
+
+
+def dotnet_ticks(when: datetime | None = None) -> int:
+    """Return a .NET ``DateTime.Ticks`` value for the given moment (default now)."""
+    if when is None:
+        when = datetime.now(timezone.utc)
+    elif when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    unix_seconds = when.timestamp()
+    return int(unix_seconds * 10_000_000) + _DOTNET_EPOCH_OFFSET_TICKS
+
+
+def training_filename(label: str, *, ext: str = ".jpg", when: datetime | None = None) -> str:
+    """Build a {label}__{ticks}{ext} filename. `label` may contain spaces."""
+    if not label:
+        raise ValueError("label cannot be empty")
+    return f"{label}__{dotnet_ticks(when)}{ext}"
+
+
+def save_training_image(
+    image_bgr: np.ndarray,
+    out_dir: Path | str,
+    label: str,
+    *,
+    quality: int = 95,
+    when: datetime | None = None,
+) -> Path:
+    """JPEG-encode an OpenCV BGR frame and write it to `<out_dir>/<filename>`."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    fname = training_filename(label, ext=".jpg", when=when)
+    dest = out_dir / fname
+    ok, buf = cv2.imencode(".jpg", image_bgr, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
+    if not ok:
+        raise RuntimeError("Failed to JPEG-encode training image")
+    tmp = dest.with_suffix(dest.suffix + ".tmp")
+    tmp.write_bytes(buf.tobytes())
+    os.replace(tmp, dest)
+    return dest
+
+
+def feedback_filename(
+    label: str, confidence: float, *, ext: str = ".jpg", when: datetime | None = None
+) -> str:
+    """Build a ``{label}__{confidence}__{ticks}{ext}`` feedback-image filename.
+
+    Confidence is a rounded integer percent. Mirrors the WinForms feedback-loop
+    naming so the label + confidence can be recovered from the filename at
+    upload time — the folder is the queue, so no database row is needed.
+    """
+    safe = label or "unknown"
+    return f"{safe}__{int(round(float(confidence)))}__{dotnet_ticks(when)}{ext}"
+
+
+def save_feedback_image(
+    image_bgr: np.ndarray,
+    out_dir: Path | str,
+    label: str,
+    confidence: float,
+    *,
+    quality: int = 95,
+    when: datetime | None = None,
+) -> Path:
+    """JPEG-encode a BGR frame to ``<out_dir>/<feedback_filename>`` (atomic write)."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dest = out_dir / feedback_filename(label, confidence, ext=".jpg", when=when)
+    ok, buf = cv2.imencode(".jpg", image_bgr, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
+    if not ok:
+        raise RuntimeError("Failed to JPEG-encode feedback image")
+    tmp = dest.with_suffix(dest.suffix + ".tmp")
+    tmp.write_bytes(buf.tobytes())
+    os.replace(tmp, dest)
+    return dest
+
+
+def parse_feedback_filename(filename: str) -> tuple[str, int] | None:
+    """Inverse of `feedback_filename`: return ``(label, confidence)`` or None."""
+    stem = Path(filename).stem
+    parts = stem.split("__")
+    if len(parts) < 3:
+        return None
+    label = parts[0]
+    try:
+        confidence = int(round(float(parts[1])))
+    except ValueError:
+        return None
+    return label, confidence
+
+
+def parse_label(filename: str) -> str | None:
+    """Return the class label encoded in a training filename, or None."""
+    base = Path(filename).name
+    if "__" not in base:
+        return None
+    return base.split("__", 1)[0]
+
+
+def class_counts(image_dir: Path | str) -> dict[str, int]:
+    """Return a dict of {class_label: count} from filenames in `image_dir`."""
+    d = Path(image_dir)
+    if not d.exists():
+        return {}
+    counter: Counter[str] = Counter()
+    for entry in d.iterdir():
+        if not entry.is_file():
+            continue
+        if entry.suffix.lower() not in (".jpg", ".jpeg", ".png", ".bmp", ".webp"):
+            continue
+        label = parse_label(entry.name)
+        if label:
+            counter[label] += 1
+    return dict(counter)

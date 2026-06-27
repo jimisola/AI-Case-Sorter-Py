@@ -1,0 +1,600 @@
+"""Main Tk application shell — notebook + status bar + cross-thread wiring."""
+from __future__ import annotations
+
+import threading
+import tkinter as tk
+import traceback
+from tkinter import ttk
+from typing import Any, Callable
+
+from .. import serial_broker
+from ..camera import Camera
+from ..config import Config
+from ..events import EventBus
+from ..run_controller import RunController
+from ..serial_emulator import EmulatorBroker, EMULATED_PORT
+from .tab_ai import AiTab
+from .tab_camera import CameraTab
+from .tab_community import CommunityTab
+from .tab_imageproc import ImageProcTab
+from .tab_models import ModelsTab
+from .tab_run import RunTab
+from .tab_serial import SerialTab
+from .tab_train import TrainTab
+from .theme import PALETTE, apply_theme, paint_gradient
+from .widgets import ScrollableFrame
+
+
+PREVIEW_FPS = 20
+HEADER_HEIGHT = 36
+
+
+class MainWindow:
+    def __init__(self, config: Config, db: Any | None = None) -> None:
+        self.config = config
+        self.db = db if db is not None else getattr(config, "db", None)
+        self.bus = EventBus()
+        self.root = tk.Tk()
+        self.root.title("AI Case Sorter")
+        self.root.geometry("1024x768")
+        self.root.minsize(960, 660)
+
+        self.fonts = apply_theme(self.root)
+
+        self.broker: Any | None = None
+        self.camera = Camera(
+            device_index=int(config.camera.get("device_index", 0)),
+            width=int(config.camera.get("width", 640)),
+            height=int(config.camera.get("height", 480)),
+        )
+        self.run_controller: RunController | None = None
+
+        # Gradient title bar at the top — the visible "gradient background"
+        # of the modernised look. Painted on a Canvas because Tk widgets
+        # can't render gradients directly.
+        self.header_canvas = tk.Canvas(
+            self.root,
+            height=HEADER_HEIGHT,
+            bg=PALETTE["bg_window"],
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        self.header_canvas.pack(side=tk.TOP, fill=tk.X)
+        self.header_canvas.bind("<Configure>", self._repaint_header)
+
+        # Status bar (must exist before tabs that call set_status).
+        self.status_var = tk.StringVar(value="Idle.")
+        self.serial_status_var = tk.StringVar(value="Serial: disconnected")
+        self.camera_status_var = tk.StringVar(value="Camera: disconnected")
+        status_bar = ttk.Frame(self.root, style="StatusBar.TFrame")
+        status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        ttk.Separator(status_bar, orient=tk.HORIZONTAL).pack(side=tk.TOP, fill=tk.X)
+        ttk.Label(
+            status_bar, textvariable=self.status_var,
+            anchor=tk.W, style="Status.TLabel",
+        ).pack(side=tk.LEFT, padx=12, pady=6)
+        # Sign-in / sign-out button on the right side of the status bar.
+        self.signin_var = tk.StringVar(value="Sign in")
+        self.signin_button = ttk.Button(
+            status_bar, textvariable=self.signin_var, command=self._on_signin_click,
+        )
+        self.signin_button.pack(side=tk.RIGHT, padx=12, pady=4)
+        # Pack serial first so it ends up rightmost; camera sits to its left.
+        # Each indicator is a [dot][text] pair grouped in a sub-frame so the
+        # dot stays glued to its label when the bar resizes.
+        self.serial_dot = self._build_status_indicator(status_bar, self.serial_status_var)
+        self.camera_dot = self._build_status_indicator(status_bar, self.camera_status_var)
+
+        notebook = ttk.Notebook(self.root)
+        notebook.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=12, pady=(8, 0))
+        # Expose the notebook BEFORE constructing tabs so that tabs that
+        # want to bind <<NotebookTabChanged>> on it (e.g. TrainTab) can
+        # find it via `app.notebook`.
+        self.notebook = notebook
+
+        # Each tab sits inside a ScrollableFrame so that on small displays
+        # (e.g. 1280x720) the content can scroll vertically rather than
+        # being clipped beyond the window edge.
+        def _add_scrolled(tab_cls, label):
+            container = ScrollableFrame(notebook)
+            tab = tab_cls(container.body, config=config, bus=self.bus, app=self)
+            tab.pack(fill=tk.BOTH, expand=True)
+            notebook.add(container, text=label)
+            return tab
+
+        self.run_tab = _add_scrolled(RunTab, "Run")
+        self.models_tab = _add_scrolled(ModelsTab, "Models")
+        self._train_tab_container = ScrollableFrame(notebook)
+        self.train_tab = TrainTab(self._train_tab_container.body, config=config, bus=self.bus, app=self)
+        self.train_tab.pack(fill=tk.BOTH, expand=True)
+        notebook.add(self._train_tab_container, text="Train")
+        # AI Config tab — always created, but its visibility tracks the
+        # active runtime mode. The Notebook's `hide()` / `add()` methods
+        # let us toggle the tab in/out of the tab bar without destroying it.
+        self._ai_tab_container = ScrollableFrame(notebook)
+        self.ai_tab = AiTab(self._ai_tab_container.body, config=config, bus=self.bus, app=self)
+        self.ai_tab.pack(fill=tk.BOTH, expand=True)
+        notebook.add(self._ai_tab_container, text="AI Config")
+        self.imageproc_tab = _add_scrolled(ImageProcTab, "Image Processing")
+        self.serial_tab = _add_scrolled(SerialTab, "Serial Config")
+        self.camera_tab = _add_scrolled(CameraTab, "Camera")
+        # Community tab is hidden until the user signs in.
+        self.community_tab: CommunityTab | None = None
+        self._community_container: ttk.Frame | None = None
+        self._add_scrolled = _add_scrolled
+        from ..auth import AuthManager
+        try:
+            self.auth: AuthManager | None = AuthManager()
+        except Exception:
+            self.auth = None
+        if self.auth is not None and self.auth.is_authenticated():
+            self._mount_community_tab()
+
+        # Apply initial tab visibility for the AI Config + Train tabs.
+        # AI Config shows in AI mode; Train shows in local-model mode.
+        self._apply_ai_config_visibility()
+        self._apply_train_tab_visibility()
+        self.bus.subscribe("mode/changed", lambda _payload: self._apply_ai_config_visibility())
+        self.bus.subscribe("mode/changed", lambda _payload: self._apply_train_tab_visibility())
+
+        self.bus.subscribe("status", self.set_status)
+
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.root.after(50, self._drain_bus)
+        self.root.after(int(1000 / PREVIEW_FPS), self._refresh_preview)
+
+        # The Camera tab runs a full device/resolution probe on startup and
+        # starts the preview once it picks the best resolution (see
+        # CameraTab._auto_detect_on_startup). Starting it here too would
+        # race with that probe trying to open the same device.
+        # Auto-connect to the board once the UI is on screen.
+        self.root.after(200, self._auto_connect_serial)
+
+    # ----- status -------------------------------------------------------------
+
+    # ----- AI Config tab visibility (mode-gated) ------------------------------
+
+    def _apply_ai_config_visibility(self) -> None:
+        """Show the AI Config tab in AI-Config mode; hide it when a local model is active."""
+        if self.db is None:
+            return
+        from ..repository import SettingsRepo
+        active_id = SettingsRepo(self.db).get_active_model_id()
+        try:
+            if active_id is None:
+                self.notebook.add(self._ai_tab_container, text="AI Config")
+                # Re-add appends to the end; re-order so it lands after Train.
+                self._restore_ai_config_position()
+            else:
+                self.notebook.hide(self._ai_tab_container)
+        except tk.TclError:
+            # `hide` on an already-hidden tab or `add` on an unknown widget
+            # both raise — both are safe no-ops here.
+            pass
+
+    def _restore_ai_config_position(self) -> None:
+        """Keep the AI Config tab between Train and Image Processing."""
+        try:
+            target_index = self.notebook.index(self._ai_tab_container)
+            # Find the Train tab index; AI Config should follow it.
+            tabs = self.notebook.tabs()
+            train_index = None
+            for i, tid in enumerate(tabs):
+                if self.notebook.tab(tid, "text") == "Train":
+                    train_index = i
+                    break
+            if train_index is not None and target_index != train_index + 1:
+                self.notebook.insert(train_index + 1, self._ai_tab_container)
+        except tk.TclError:
+            pass
+
+    def _apply_train_tab_visibility(self) -> None:
+        """Show the Train tab when a local model is active; hide in AI Config mode.
+
+        Inverse of `_apply_ai_config_visibility`: AI models can't be trained
+        from this client, so the tab vanishes when the active model is the
+        AI Config sentinel.
+        """
+        if self.db is None:
+            return
+        from ..repository import SettingsRepo
+        active_id = SettingsRepo(self.db).get_active_model_id()
+        try:
+            if active_id is None:
+                self.notebook.hide(self._train_tab_container)
+            else:
+                self.notebook.add(self._train_tab_container, text="Train")
+                # Re-add appends to the end; nudge it back to the position it
+                # occupied at construction (after Models, before AI Config).
+                self._restore_train_tab_position()
+        except tk.TclError:
+            pass
+
+    def _restore_train_tab_position(self) -> None:
+        """Keep the Train tab between Models and AI Config."""
+        try:
+            target_index = self.notebook.index(self._train_tab_container)
+            tabs = self.notebook.tabs()
+            models_index = None
+            for i, tid in enumerate(tabs):
+                if self.notebook.tab(tid, "text") == "Models":
+                    models_index = i
+                    break
+            if models_index is not None and target_index != models_index + 1:
+                self.notebook.insert(models_index + 1, self._train_tab_container)
+        except tk.TclError:
+            pass
+
+    # ----- community tab (auth-gated) -----------------------------------------
+
+    def _mount_community_tab(self) -> None:
+        """Add the Community tab if not already present."""
+        if self.community_tab is not None:
+            return
+        container = self._add_scrolled(CommunityTab, "Community")
+        self.community_tab = container
+        self.signin_var.set("Sign out")
+
+    def _unmount_community_tab(self) -> None:
+        """Remove the Community tab (called on logout)."""
+        if self.community_tab is None:
+            return
+        for tab_id in self.notebook.tabs():
+            if self.notebook.tab(tab_id, "text") == "Community":
+                self.notebook.forget(tab_id)
+                break
+        self.community_tab = None
+        self.signin_var.set("Sign in")
+
+    def _on_signin_click(self) -> None:
+        if self.auth is None:
+            self.set_status("Authentication unavailable.")
+            return
+        if self.auth.is_authenticated():
+            try:
+                self.auth.logout()
+            except Exception as exc:
+                self.set_status(f"Sign-out failed: {exc}")
+                return
+            self._unmount_community_tab()
+            self.set_status("Signed out.")
+            return
+        from .dialog_login import LoginDialog
+        LoginDialog(self.root, self)
+
+    def set_status(self, message: str) -> None:
+        self.status_var.set(message)
+
+    def _build_status_indicator(
+        self, parent: tk.Misc, text_var: tk.StringVar,
+    ) -> tk.Label:
+        """[●][text] pair on the right side of the status bar.
+
+        Returns the dot Label so callers can recolour it (green/red) when
+        the underlying connection state flips.
+        """
+        frame = ttk.Frame(parent, style="StatusBar.TFrame")
+        frame.pack(side=tk.RIGHT, padx=12, pady=6)
+        dot = tk.Label(
+            frame,
+            text="●",  # BLACK CIRCLE
+            background=PALETTE["bg_window"],
+            foreground=PALETTE["error"],
+            font=self.fonts["small"],
+        )
+        dot.pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Label(frame, textvariable=text_var, style="Status.TLabel").pack(
+            side=tk.LEFT,
+        )
+        return dot
+
+    def _set_camera_indicator(self, message: str, *, connected: bool) -> None:
+        self.camera_status_var.set(message)
+        self.camera_dot.config(
+            foreground=PALETTE["success" if connected else "error"],
+        )
+
+    def _set_serial_indicator(self, message: str, *, connected: bool) -> None:
+        self.serial_status_var.set(message)
+        self.serial_dot.config(
+            foreground=PALETTE["success" if connected else "error"],
+        )
+
+    # ----- header gradient ----------------------------------------------------
+
+    def _repaint_header(self, _event=None) -> None:
+        """Paint the gradient header and overlay the app title."""
+        canvas = self.header_canvas
+        paint_gradient(
+            canvas,
+            color_a=PALETTE["bg_gradient_a"],
+            color_b=PALETTE["bg_gradient_b"],
+            direction="horizontal",
+        )
+        canvas.delete("title")
+        title_id = canvas.create_text(
+            18, HEADER_HEIGHT // 2,
+            anchor=tk.W,
+            text="AI Case Sorter",
+            fill=PALETTE["text"],
+            font=self.fonts["title"],
+            tags="title",
+        )
+        # Place the subtitle to the right of the actual rendered title text.
+        bbox = canvas.bbox(title_id)
+        subtitle_x = (bbox[2] + 12) if bbox else 200
+        canvas.create_text(
+            subtitle_x, HEADER_HEIGHT // 2 + 3,
+            anchor=tk.W,
+            text="Open Source Lite Client",
+            fill=PALETTE["text_muted"],
+            font=self.fonts["small"],
+            tags="title",
+        )
+
+    # ----- camera -------------------------------------------------------------
+
+    def start_camera(self) -> None:
+        try:
+            ok = self.camera.start_preview()
+            if not ok:
+                self.set_status("Camera failed to start. Check device index in Camera tab.")
+                self._set_camera_indicator("Camera: failed to start", connected=False)
+            else:
+                self._set_camera_indicator(
+                    f"Camera: connected ({self.camera.width}x{self.camera.height})",
+                    connected=True,
+                )
+        except Exception as exc:
+            self.set_status(f"Camera error: {exc}")
+            self._set_camera_indicator("Camera: error", connected=False)
+
+    def stop_camera(self) -> None:
+        self.camera.stop()
+        self.set_status("Camera stopped.")
+        self._set_camera_indicator("Camera: disconnected", connected=False)
+
+    def restart_camera(
+        self,
+        device_index: int | None = None,
+        width: int | None = None,
+        height: int | None = None,
+    ) -> None:
+        """Recreate the Camera with the given (or saved) device + size."""
+        self.camera.stop()
+        cam_cfg = self.config.camera
+        self.camera = Camera(
+            device_index=int(device_index if device_index is not None
+                             else cam_cfg.get("device_index", 0)),
+            width=int(width if width is not None else cam_cfg.get("width", 640)),
+            height=int(height if height is not None else cam_cfg.get("height", 480)),
+        )
+        self.start_camera()
+        if self.run_controller is not None:
+            self.run_controller.camera = self.camera
+
+    def capture_frame(self):
+        return self.camera.capture_frame()
+
+    def _refresh_preview(self) -> None:
+        frame = self.camera.latest_frame()
+        if frame is not None:
+            self.ai_tab.update_preview(frame)
+            self.camera_tab.refresh_preview(frame)
+        self.root.after(int(1000 / PREVIEW_FPS), self._refresh_preview)
+
+    # ----- serial -------------------------------------------------------------
+
+    def _auto_connect_serial(self) -> None:
+        """Try the saved port first, then walk available ports until one handshakes.
+
+        Mirrors SJS_SerialConnection.cs:113-157 but falls through to alternate
+        ports if the saved port is present but unresponsive.
+        """
+        saved_port = (self.config.serial.get("port") or "").strip()
+        if saved_port == EMULATED_PORT:
+            self.connect_serial()
+            return
+
+        available = serial_broker.list_serial_ports()
+        candidates: list[str] = []
+        if saved_port and saved_port in available:
+            candidates.append(saved_port)
+        for port in available:
+            if port not in candidates:
+                candidates.append(port)
+
+        if not candidates:
+            self.set_status("Serial: no serial ports detected.")
+            return
+
+        baud = int(self.config.serial.get("baud", 9600))
+        probe_timeout = float(
+            self.config.serial.get(
+                "handshake_timeout_s", serial_broker.HANDSHAKE_READ_TIMEOUT_S
+            )
+        )
+
+        def _probe() -> tuple[object, str] | tuple[None, None]:
+            for port in candidates:
+                self.bus.post("status", f"Auto-connect: probing {port}…")
+                # Opening the port asserts DTR which resets the Arduino, and
+                # the board needs ~1-2 s to boot before it can answer
+                # `version`. Probe timeout is configurable in Serial Config.
+                broker = serial_broker.SerialBroker(
+                    port=port,
+                    baud=baud,
+                    require_serial_ready=True,
+                    handshake_timeout_s=probe_timeout,
+                )
+                if broker.try_open():
+                    broker.start()
+                    return broker, port
+            return None, None
+
+        self.set_status(
+            f"Auto-connecting to serial — {len(candidates)} port(s) to try…"
+        )
+        self.run_worker(
+            _probe,
+            on_done=self._finalize_auto_connect,
+            on_error=lambda exc: self.set_status(f"Auto-connect error: {exc}"),
+        )
+
+    def _finalize_auto_connect(self, result) -> None:
+        broker, port = result
+        if broker is None:
+            self.set_status("Serial: no board responded on any port.")
+            self._set_serial_indicator("Serial: disconnected", connected=False)
+            return
+        self._after_connect(broker, port, source="auto")
+
+    def _after_connect(self, broker, port: str, *, source: str) -> None:
+        """Wire callbacks, persist the port, optionally push init settings.
+
+        Shared by auto-connect and the manual Connect button.
+        """
+        broker.on_received.append(lambda line: self.bus.post("serial/rx", line))
+        broker.on_sent.append(lambda line: self.bus.post("serial/tx", line))
+        self.broker = broker
+        if port != (self.config.serial.get("port") or ""):
+            self.config.serial["port"] = port
+            self.config.save()
+        self._set_serial_indicator(
+            f"Serial: connected ({port}) — {broker.firmware_version}",
+            connected=True,
+        )
+        self.set_status(
+            f"{'Auto-connected' if source == 'auto' else 'Connected'} to {port}."
+        )
+        self._rebuild_run_controller()
+
+        if self.config.serial.get("init_on_startup", False):
+            self.set_status(f"Connected to {port}. Pushing init settings…")
+            settings = dict(self.config.serial.get("init_settings", {}))
+            self.run_worker(
+                lambda: broker.update_init_settings(settings),
+                on_done=lambda _r: self.set_status(
+                    f"Connected to {port}. Init settings pushed."
+                ),
+                on_error=lambda err: self.set_status(f"Init push failed: {err}"),
+            )
+
+    def connect_serial(self, port: str | None = None) -> None:
+        """Open a single, explicit port. If port is None, use the saved value.
+
+        Run on the Tk main thread; the open is synchronous because the user
+        clicked Connect and is waiting for the result.
+        """
+        if self.broker is not None:
+            try:
+                self.broker.stop()
+            except Exception:
+                pass
+            self.broker = None
+
+        if port is None:
+            port = (self.config.serial.get("port") or "").strip()
+        if not port:
+            self.set_status("Serial: no port selected.")
+            self._set_serial_indicator("Serial: disconnected", connected=False)
+            return
+
+        if port == EMULATED_PORT:
+            broker = EmulatorBroker()
+            broker.try_open()
+        else:
+            broker = serial_broker.SerialBroker(
+                port=port,
+                baud=int(self.config.serial.get("baud", 9600)),
+                require_serial_ready=True,
+            )
+            if not broker.try_open():
+                self.set_status(f"Serial: failed to open {port}.")
+                self._set_serial_indicator("Serial: disconnected", connected=False)
+                return
+            broker.start()
+
+        self._after_connect(broker, port, source="manual")
+
+    def disconnect_serial(self) -> None:
+        if self.broker is not None:
+            try:
+                self.broker.stop()
+            except Exception:
+                pass
+            self.broker = None
+        self._set_serial_indicator("Serial: disconnected", connected=False)
+        self.set_status("Serial disconnected.")
+
+    def _rebuild_run_controller(self) -> None:
+        if self.broker is None:
+            return
+        self.run_controller = RunController(
+            config=self.config,
+            broker=self.broker,
+            camera=self.camera,
+            bus=self.bus,
+            db=self.db,
+        )
+
+    # ----- worker dispatch ----------------------------------------------------
+
+    def run_worker(
+        self,
+        fn: Callable[[], Any],
+        *,
+        on_done: Callable[[Any], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
+        """Run `fn` in a daemon thread and post the result back via the bus."""
+
+        topic_done = f"worker/done/{id(fn)}"
+        topic_err = f"worker/err/{id(fn)}"
+
+        if on_done is not None:
+            self.bus.subscribe(topic_done, on_done)
+        if on_error is not None:
+            self.bus.subscribe(topic_err, on_error)
+
+        def _run() -> None:
+            try:
+                result = fn()
+                self.bus.post(topic_done, result)
+            except Exception as exc:
+                traceback.print_exc()
+                self.bus.post(topic_err, exc)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    # ----- bus drain loop -----------------------------------------------------
+
+    def _drain_bus(self) -> None:
+        self.bus.drain(max_items=128)
+        # Pump serial-log events into the serial tab.
+        self.root.after(50, self._drain_bus)
+
+    # ----- lifecycle ----------------------------------------------------------
+
+    def run(self) -> None:
+        # Wire serial-log topics to the Serial tab now that the bus is alive.
+        self.bus.subscribe("serial/rx", lambda line: self.serial_tab.append_log(f"<- {line}"))
+        self.bus.subscribe("serial/tx", lambda line: self.serial_tab.append_log(f"-> {line}"))
+        self.root.mainloop()
+
+    def _on_close(self) -> None:
+        try:
+            if self.run_controller is not None:
+                self.run_controller.stop()
+        except Exception:
+            pass
+        try:
+            if self.broker is not None:
+                self.broker.stop()
+        except Exception:
+            pass
+        try:
+            self.camera.stop()
+        except Exception:
+            pass
+        self.root.destroy()
