@@ -158,12 +158,14 @@ pip install -r requirements.txt pytest
 pytest                       # ~200 tests covering the non-UI logic
 ```
 
-There is no CI configured yet — please run `pytest` before opening a PR. The UI
-itself is not covered by automated tests.
+Please run `pytest` before opening a PR. The UI itself is not covered by
+automated tests. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup and
+guidelines, and [`SECURITY.md`](SECURITY.md) to report a vulnerability.
 
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to set up, run the tests, and submit
+  changes.
 - [`CLAUDE.md`](CLAUDE.md) — architecture map for contributors and AI coding
   assistants (layers, event bus, module reference, UI tabs, data layout).
-- [`Security.md`](Security.md) — security review and remediation status.
 - [`OPEN_SOURCE_READINESS.md`](OPEN_SOURCE_READINESS.md) — open-source readiness
   assessment and checklist.
 

@@ -4,8 +4,8 @@
 **Review date:** 2026-06-27
 **Goal:** Identify everything that would make this repository problematic,
 surprising, or legally risky to open-source — and what to add before flipping it
-public. This is a companion to `Security.md` (which covers vulnerabilities).
-Nothing here is fixed; it is an actionable checklist.
+public. (Security vulnerabilities were tracked and remediated separately.)
+It is an actionable checklist.
 
 Severity legend: **Blocker** (do not open-source without it) · **High** ·
 **Medium** · **Low/Polish**.
@@ -107,18 +107,18 @@ microcontroller running specific firmware (the serial protocol in
 
 ## C. Project hygiene & contributor onboarding (all missing)
 
-### C1. **Blocker — No README.md**
-There is no README at all. A public repo needs, at minimum: what it is, a
-screenshot, supported platforms, install/run (`start.sh` / `start.bat` /
-`python main.py`), the local-only vs community distinction, the hardware/emulator
-note, and links to `CLAUDE.md`, `Security.md`, and the license.
+### C1. **Blocker — No README.md** ✅ resolved
+**Done.** Added a `README.md` covering what it is, supported platforms,
+install/run (`start.sh` / `start.bat` / `python main.py`), the local-only vs
+community distinction, the hardware/emulator note, a screenshot placeholder, and
+links to `CLAUDE.md`, `CONTRIBUTING.md`, and the license.
 
-### C2. **High — No contribution / community files**
-Missing: `CONTRIBUTING.md` (how to set up, run `pytest`, coding style, branch/PR
-flow), `CODE_OF_CONDUCT.md`, and a **`SECURITY.md` vulnerability-disclosure
-policy** (note: the existing `Security.md` is a *review*, not a reporting policy —
-consider renaming to avoid confusion, e.g. `docs/security-review.md`, and add a
-real disclosure `SECURITY.md`). Issue/PR templates under `.github/` help too.
+### C2. **High — No contribution / community files** ✅ resolved
+**Done.** Added `CONTRIBUTING.md` (setup, run `pytest`, coding style, branch/PR
+flow), `CODE_OF_CONDUCT.md` (Contributor Covenant), and a `SECURITY.md`
+vulnerability-disclosure policy. (The earlier `Security.md` review document was
+removed to avoid confusion with the disclosure policy; its findings were
+addressed in code.) Issue/PR templates under `.github/` remain a nice-to-have.
 
 ### C3. **High — No CI**
 There are ~30 pytest modules but **no `.github/workflows`** to run them. New
@@ -187,8 +187,8 @@ These aren't defects, but they will generate issues if undocumented:
   bright previews; document how to adjust.
 - **D4. Windows-only dependency.** `pygrabber` (friendly camera names) is
   Windows-only; behavior differs across platforms by design.
-- **D5. `start.sh --auto` installs system packages via `sudo`.** Document this
-  (also noted in `Security.md` #9) so users opt in knowingly.
+- **D5. `start.sh --auto` installs system packages via `sudo`.** The script now
+  warns before doing so; document it in the README too so users opt in knowingly.
 
 ## E. Privacy / data-flow transparency
 
@@ -197,8 +197,8 @@ These aren't defects, but they will generate issues if undocumented:
   and uploaded to the backend (`feedback.py` → `community_api.py`). This is a
   reasonable feature, but for an open-source release add a short **privacy note**:
   what is collected, when, where it goes, and that it only applies to
-  community-managed models the user has opted into. Default the verbose feedback
-  debug logging **off** (see `Security.md` #8).
+  community-managed models the user has opted into. (The verbose feedback debug
+  logging now defaults **off**.)
 
 ---
 

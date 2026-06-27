@@ -178,8 +178,8 @@ used, headstamps in the `headstamps` table). Activating a model posts
   loaded models by `(path, mtime)`; runs all inference through a single-threaded
   executor to keep cuDNN state warm. Detects the checkpoint's classifier layout
   and rebuilds the ConvNeXt head. Loads checkpoints with
-  `torch.load(..., weights_only=True)` so a malicious `.pth` cannot execute code
-  on load (see `Security.md` #1).
+  `torch.load(..., weights_only=True)` so a malicious `.pth` (community download
+  or imported ZIP) cannot execute code on load.
 - **`api_client.py`** — stateless HTTP client (`classify`, `get_headstamps`)
   against an OpenAI-compatible server. JPEG-encodes the frame to a base64 data
   URL, renders the `{{headstamps}}` prompt placeholder, parses `choices[0]...`
@@ -203,15 +203,17 @@ used, headstamps in the `headstamps` table). Activating a model posts
   `spawn` DataLoader workers can pickle them.
 - **`training/dataset.py`** — filename convention helpers. Training images are
   `{label}__{ticks}.jpg` where `ticks` is the **.NET `DateTime.Ticks`** value
-  (WinForms interop). `save_training_image`, `feedback_filename`
-  (`{label}__{confidence}__{ticks}.jpg`), `parse_label`, `class_counts`.
-  ⚠️ Labels are not sanitized before becoming filenames — see `Security.md`.
+  (for interop with the legacy Windows app). `save_training_image`,
+  `feedback_filename` (`{label}__{confidence}__{ticks}.jpg`), `parse_label`,
+  `class_counts`. Labels are run through `safe_label` before becoming filenames
+  (classification labels can come from an untrusted classification server).
 - **`evaluator.py`** — offline batch evaluation of a model against a labeled
   folder, with folder-label→model-class mapping (auto-suggest via token scoring)
   and `summarize` (per-class accuracy/confidence).
 - **`eval_report.py`** — self-contained interactive HTML report (base64 thumbnails
-  + embedded results JSON), a verbatim port of the WinForms report.
-  ⚠️ Result rows are interpolated into a `<script>` block — see `Security.md`.
+  + embedded results JSON), a verbatim port of the legacy app's report. ⚠️ Result
+  rows are interpolated into a `<script>` block, so the report is only safe to
+  open for locally-evaluated, trusted image folders.
 - **`gpu_detect.py`** — shells out to `nvidia-smi` (torch not yet installed) to
   detect a compute-capability ≥ 8.0 NVIDIA GPU for the Install-PyTorch dialog.
 - **`image_store.py`** — pure pathlib helpers to list/filter/reclassify/delete
@@ -317,11 +319,10 @@ where `ticks` is the .NET `DateTime.Ticks` value.
 - **Threading rule:** never touch Tk widgets off the main thread. Do blocking
   work in `run_worker`/daemon threads and `bus.post(...)`; the drain loop
   delivers handlers on the main thread.
-- **WinForms interop is intentional.** Many odd choices (PascalCase manifest
+- **Legacy-app interop is intentional.** Many odd choices (PascalCase manifest
   keys, .NET ticks filenames, ConvNeXt-mode integer mapping, the exact serial
-  command strings, the verbatim HTML report) exist so this app round-trips
-  with the legacy WinForms app. Comments cite the C# source — preserve compatibility when
-  editing these.
+  command strings, the verbatim HTML report) exist so this app round-trips with
+  the legacy Windows app — preserve that compatibility when editing these.
 - **PyTorch is optional and lazily imported.** Guard any torch use; surface a
   friendly "install PyTorch" path rather than letting an `ImportError` escape.
   Don't add torch to `requirements.txt` (it's the `[ml]` extra).
@@ -334,5 +335,5 @@ where `ticks` is the .NET `DateTime.Ticks` value.
   (not in this repo); a fork cannot run community features against its own infra
   without editing `auth.py` / `community_api.py`.
 - **No CI yet.** Run `pytest` before pushing; UI is not covered by tests.
-- See **`Security.md`** for the security review and **`OPEN_SOURCE_READINESS.md`**
-  for the open-source readiness assessment.
+- See **`OPEN_SOURCE_READINESS.md`** for the open-source readiness assessment and
+  **`CONTRIBUTING.md`** for how to set up and contribute.
