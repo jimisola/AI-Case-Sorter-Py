@@ -404,3 +404,41 @@ def test_write_manifest_sidecar_roundtrips(tmp_path: Path) -> None:
     sidecar = write_manifest_sidecar(zip_out)
     assert sidecar == tmp_path / "x.manifest.json"
     assert json.loads(sidecar.read_text()) == read_manifest(zip_out)
+
+
+def test_import_accepts_legacy_trainedmodel_zip(tmp_path: Path) -> None:
+    """Community downloads use model/trainedmodel.zip for a PyTorch archive."""
+    db = _seed_db(tmp_path)
+    zip_path = tmp_path / "community.zip"
+    checkpoint = b"PK\x03\x04fake-pytorch-checkpoint"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(_import_manifest()))
+        zf.writestr("model/trainedmodel.zip", checkpoint)
+
+    mod_target = tmp_path / "mods"
+    _, model_id = import_model(
+        zip_path,
+        db=db,
+        images_target_dir=tmp_path / "imgs",
+        models_target_dir=mod_target,
+    )
+
+    imported = mod_target / f"{model_id}.pth"
+    assert imported.read_bytes() == checkpoint
+    assert ModelRepo(db).get(model_id).model_path == str(imported)
+
+
+def test_import_rejects_arbitrary_model_zip(tmp_path: Path) -> None:
+    db = _seed_db(tmp_path)
+    zip_path = tmp_path / "unexpected.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(_import_manifest()))
+        zf.writestr("model/payload.zip", b"not a supported checkpoint name")
+
+    with pytest.raises(ValueError, match="unexpected model entry"):
+        import_model(
+            zip_path,
+            db=db,
+            images_target_dir=tmp_path / "imgs",
+            models_target_dir=tmp_path / "mods",
+        )

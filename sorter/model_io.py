@@ -64,6 +64,11 @@ _VALID_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 # tolerated because the extractor already defaults an extension-less entry to
 # ``.pth`` (some exporters drop the suffix).
 _VALID_MODEL_EXTS = {".pth", ".pt", ""}
+# Legacy community downloads name the PyTorch checkpoint
+# ``model/trainedmodel.zip``. PyTorch checkpoints are ZIP containers internally,
+# and ``torch.load`` does not require a .pth suffix. We accept only this exact
+# legacy basename, then normalize it to ``<model_id>.pth`` during extraction.
+_LEGACY_ZIP_MODEL_NAME = "trainedmodel.zip"
 # A wildly high uncompressed:compressed ratio is the signature of a zip bomb;
 # real JPEGs and float32 checkpoints are already near-incompressible. Only large
 # entries are checked so small, legitimately-compressible files (a tiny JSON
@@ -411,7 +416,10 @@ def import_model(
                         f"{entry.filename!r}"
                     )
             elif posix.parts and posix.parts[0] == "model":
-                if Path(posix.parts[-1]).suffix.lower() not in _VALID_MODEL_EXTS:
+                model_basename = posix.parts[-1]
+                suffix = Path(model_basename).suffix.lower()
+                is_legacy_zip = model_basename.lower() == _LEGACY_ZIP_MODEL_NAME
+                if suffix not in _VALID_MODEL_EXTS and not is_legacy_zip:
                     raise ValueError(
                         f"Refusing to import {zip_path}: unexpected model entry "
                         f"{entry.filename!r}"
@@ -471,7 +479,11 @@ def import_model(
                 model_basename = posix.parts[-1]
                 # Standardize on `<model_id>.pth` so the runtime knows where to look
                 # regardless of what the exporter named the file.
-                suffix = Path(model_basename).suffix or ".pth"
+                suffix = Path(model_basename).suffix.lower()
+                if model_basename.lower() == _LEGACY_ZIP_MODEL_NAME:
+                    suffix = ".pth"
+                elif not suffix:
+                    suffix = ".pth"
                 dest = mod_dir / f"{saved.id}{suffix}"
                 _extract_to(zf, entry, dest)
                 saved.model_path = str(dest)
