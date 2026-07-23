@@ -35,7 +35,7 @@ class MainWindow:
         self.db = db if db is not None else getattr(config, "db", None)
         self.bus = EventBus()
         self.root = tk.Tk()
-        self.root.title("AI Case Sorter")
+        self.root.title("AI Case Sorter - v2.0.1")
         self.root.geometry("1024x768")
         self.root.minsize(960, 660)
 
@@ -326,7 +326,7 @@ class MainWindow:
         canvas.create_text(
             subtitle_x, HEADER_HEIGHT // 2 + 3,
             anchor=tk.W,
-            text="Open Source Lite Client",
+            text="Open Source Client",
             fill=PALETTE["text_muted"],
             font=self.fonts["small"],
             tags="title",
