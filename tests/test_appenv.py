@@ -255,3 +255,98 @@ def test_default_verify_stays_true_so_env_ca_bundles_still_work(tmp_path) -> Non
     s.next_responses[url] = _FakeResp(json_data=[])
     api.fetch_wish_list("uid-1")
     assert s.verify_args == [True]
+
+
+# ----- .env encodings (Windows) ----------------------------------------------
+
+
+BODY = (
+    "CASESORTER_API_BASE=https://localhost:5001/api\n"
+    "#CASESORTER_API_CA_BUNDLE=./devcert.pem\n"
+    "CASESORTER_API_INSECURE=1\n"
+)
+
+ENCODINGS = {
+    "plain_lf": BODY.encode(),
+    "crlf": BODY.replace("\n", "\r\n").encode(),
+    # Notepad's default. The BOM used to corrupt the first key's NAME, so the
+    # base URL was silently dropped and the app kept talking to production.
+    "utf8_bom": b"\xef\xbb\xbf" + BODY.encode(),
+    "utf8_bom_crlf": b"\xef\xbb\xbf" + BODY.replace("\n", "\r\n").encode(),
+    # PowerShell's `>` redirection.
+    "utf16_le_bom": BODY.encode("utf-16"),
+    "trailing_space": BODY.replace("\n", "   \n").encode(),
+}
+
+
+@pytest.mark.parametrize("name", sorted(ENCODINGS))
+def test_env_file_applies_whatever_the_editor_saved(name, tmp_path, monkeypatch) -> None:
+    env_file = tmp_path / "dev.env"
+    env_file.write_bytes(ENCODINGS[name])
+    monkeypatch.setenv("CASESORTER_ENV_FILE", str(env_file))
+
+    assert appenv.load_dotenv() == [env_file]
+    assert appenv.api_base() == "https://localhost:5001/api"
+    assert appenv.tls_verify() is False        # loopback + insecure
+    # The commented-out line stays commented out.
+    assert not os.environ.get("CASESORTER_API_CA_BUNDLE")
+
+
+@pytest.mark.parametrize("raw", [b"", b"\x00\x01\x02", bytes(range(256))])
+def test_unparseable_env_file_never_crashes_startup(raw, tmp_path, monkeypatch) -> None:
+    """os.environ rejects keys with NULs — garbage must not reach it."""
+    env_file = tmp_path / "dev.env"
+    env_file.write_bytes(raw)
+    monkeypatch.setenv("CASESORTER_ENV_FILE", str(env_file))
+    appenv.load_dotenv()                        # must not raise
+    assert appenv.api_base() == appenv.DEFAULT_API_BASE
+
+
+def test_parse_drops_keys_that_are_not_env_var_names() -> None:
+    parsed = appenv.parse_env_text(
+        "GOOD=1\nbad key=2\n\x00NUL=3\n9LEADING=4\ndot.ted=5\n"
+    )
+    assert parsed == {"GOOD": "1"}
+
+
+# ----- startup diagnostics ----------------------------------------------------
+
+
+def test_startup_report_is_silent_by_default() -> None:
+    assert appenv.startup_report([]) == []
+
+
+def test_startup_report_names_the_file_its_keys_and_the_effect(tmp_path, monkeypatch) -> None:
+    env_file = tmp_path / "dev.env"
+    env_file.write_bytes(ENCODINGS["utf8_bom"])
+    monkeypatch.setenv("CASESORTER_ENV_FILE", str(env_file))
+    lines = appenv.startup_report(appenv.load_dotenv())
+    assert str(env_file) in lines[0]
+    assert "CASESORTER_API_BASE" in lines[0]
+    assert "localhost:5001" in lines[1] and "DISABLED" in lines[1]
+
+
+def test_startup_report_flags_a_file_that_held_nothing(tmp_path, monkeypatch) -> None:
+    """A found-but-useless file reads as such instead of looking applied."""
+    env_file = tmp_path / "dev.env"
+    env_file.write_text("# just a comment\n")
+    monkeypatch.setenv("CASESORTER_ENV_FILE", str(env_file))
+    lines = appenv.startup_report(appenv.load_dotenv())
+    assert "no settings found" in lines[0]
+    assert appenv.DEFAULT_API_BASE in lines[1]
+
+
+def test_startup_report_hints_at_a_misnamed_env_file(tmp_path, monkeypatch) -> None:
+    """Explorer hides .txt, so 'Save as .env' in Notepad yields '.env.txt'."""
+    monkeypatch.setenv("CASESORTER_ENV_FILE", str(tmp_path / ".env"))
+    (tmp_path / ".env.txt").write_text("CASESORTER_API_BASE=https://localhost:5001/api\n")
+    lines = appenv.startup_report(appenv.load_dotenv())
+    assert lines and "misnamed" in lines[0] and ".env.txt" in lines[0]
+
+
+def test_no_misnaming_hint_once_settings_are_in_effect(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CASESORTER_ENV_FILE", str(tmp_path / ".env"))
+    monkeypatch.setenv("CASESORTER_API_BASE", "https://localhost:5001/api")
+    (tmp_path / ".env.txt").write_text("x")
+    lines = appenv.startup_report(appenv.load_dotenv())
+    assert not any("misnamed" in line for line in lines)

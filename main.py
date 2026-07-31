@@ -15,12 +15,10 @@ def main() -> int:
     from sorter.db import Database
     from sorter.ui.app import MainWindow
 
-    # Developer overrides (community API base URL / TLS trust). A no-op unless
-    # a .env exists — see sorter/appenv.py and .env.example.
-    for env_file in appenv.load_dotenv():
-        print(f"[casesorter] loaded {env_file}")
-    if appenv.api_base() != appenv.DEFAULT_API_BASE:
-        print(f"[casesorter] {appenv.describe()}")
+    # Developer overrides (community API base URL / TLS trust). Silent unless
+    # something is actually configured — see sorter/appenv.py and .env.example.
+    for line in appenv.startup_report(appenv.load_dotenv()):
+        print(f"[casesorter] {line}")
 
     paths.ensure_directories()
     legacy_json = here / "data" / "config.json"

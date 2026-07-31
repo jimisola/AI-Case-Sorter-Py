@@ -35,6 +35,7 @@ relocating. Set it as a real environment variable, or in the app-root ``.env``.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -49,6 +50,9 @@ ENV_CA_BUNDLE = "CASESORTER_API_CA_BUNDLE"
 ENV_INSECURE = "CASESORTER_API_INSECURE"
 
 _TRUTHY = {"1", "true", "yes", "on"}
+
+# A plain environment-variable name; anything else in a .env is discarded.
+_VALID_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 # One-shot warnings: these are evaluated per request, and nobody needs the same
 # line a thousand times in a run.
@@ -69,23 +73,51 @@ def _flag(name: str) -> bool:
 # ----- .env loading -----------------------------------------------------------
 
 
+def read_env_text(path: Path) -> str:
+    """Decode a ``.env`` whatever the editor saved it as.
+
+    Notepad writes UTF-8 **with a BOM** by default and PowerShell's ``>``
+    redirection writes UTF-16 — both are what a Windows user is most likely to
+    end up with, and both broke naive UTF-8 decoding (a BOM silently corrupts
+    the first key's name; UTF-16 raises). ``utf-8-sig`` strips a BOM if present
+    and is otherwise plain UTF-8; ``utf-16`` picks LE/BE off its own BOM;
+    latin-1 cannot fail, so decoding always succeeds.
+    """
+    raw = path.read_bytes()
+    for encoding in ("utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "latin-1"):
+        try:
+            text = raw.decode(encoding)
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+        # NUL characters mean we guessed the codec wrong (UTF-8 happily decodes
+        # the zero bytes of UTF-16 text). Keep looking.
+        if "\x00" in text:
+            continue
+        return text
+    return ""
+
+
 def parse_env_text(text: str) -> dict[str, str]:
     """Parse ``KEY=VALUE`` lines. Blank lines and ``#`` comments are skipped.
 
-    Tolerates a leading ``export ``, surrounding whitespace, and single or
-    double quotes around the value. Deliberately minimal — no interpolation,
-    no multi-line values — so there is no dependency on python-dotenv.
+    Tolerates a leading ``export ``, surrounding whitespace, single or double
+    quotes around the value, CRLF line endings, and a stray byte-order mark.
+    Deliberately minimal — no interpolation, no multi-line values — so there is
+    no dependency on python-dotenv.
     """
     values: dict[str, str] = {}
     for raw in text.splitlines():
-        line = raw.strip()
+        line = raw.strip().lstrip("\ufeff").strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         if line.startswith("export "):
             line = line[len("export "):].lstrip()
         key, _, value = line.partition("=")
         key = key.strip()
-        if not key:
+        # Anything that isn't a plain environment-variable name is garbage from
+        # a mis-decoded file. Dropping it beats handing os.environ a key it
+        # rejects (an embedded NUL raises ValueError) at app startup.
+        if not _VALID_KEY.fullmatch(key):
             continue
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
@@ -105,13 +137,30 @@ def env_file_candidates() -> list[Path]:
     return candidates
 
 
+# Names a ``.env`` commonly ends up with by accident. Windows Explorer hides
+# known extensions, so "Save as .env" in Notepad quietly produces ".env.txt"
+# and the file looks correct in the folder listing.
+_NEAR_MISS_NAMES = (".env.txt", "env.txt", "env", ".env.env")
+
+
+def near_miss_env_files() -> list[Path]:
+    """Files that look like a misnamed ``.env`` next to a candidate location."""
+    found: list[Path] = []
+    for candidate in env_file_candidates():
+        for name in _NEAR_MISS_NAMES:
+            sibling = candidate.parent / name
+            if sibling.is_file() and sibling not in found:
+                found.append(sibling)
+    return found
+
+
 def load_dotenv() -> list[Path]:
     """Apply every ``.env`` that exists into ``os.environ``; return those files.
 
     Never overwrites a variable that is already set, so the real environment
     (and, between files, the more specific one) wins. Safe to call more than
-    once. An unreadable file is reported and skipped rather than fatal — a
-    developer convenience must not stop the app from starting.
+    once. A file that can't be read or parsed is reported and skipped rather
+    than fatal — a developer convenience must never stop the app from starting.
     """
     applied: list[Path] = []
     seen: set[Path] = set()
@@ -126,9 +175,12 @@ def load_dotenv() -> list[Path]:
         if not path.is_file():
             continue
         try:
-            values = parse_env_text(path.read_text(encoding="utf-8"))
-        except OSError as exc:
-            _warn_once(f"envfile:{path}", f"could not read {path}: {exc}")
+            values = parse_env_text(read_env_text(path))
+        except Exception as exc:
+            _warn_once(
+                f"envfile:{path}",
+                f"could not read {path} ({exc.__class__.__name__}: {exc}) — ignoring it.",
+            )
             continue
         for key, value in values.items():
             os.environ.setdefault(key, value)
@@ -208,6 +260,40 @@ def _silence_insecure_warnings() -> None:
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     except Exception:
         pass
+
+
+def startup_report(applied: list[Path] | None = None) -> list[str]:
+    """Lines describing where the community settings came from.
+
+    Silent in the default case — a normal user with no ``.env`` and no
+    overrides sees nothing. When anything IS configured it says which file was
+    read, which keys it held, and the settings that actually took effect, so a
+    file that was found but didn't apply (a misspelled key, a value overridden
+    by a real environment variable) is visible instead of mysterious.
+    """
+    lines: list[str] = []
+    applied = list(applied or [])
+    for path in applied:
+        try:
+            keys = ", ".join(parse_env_text(read_env_text(path))) or "no settings found"
+        except Exception:
+            keys = "unreadable"
+        lines.append(f"loaded {path} ({keys})")
+
+    configured = bool(
+        os.environ.get(ENV_API_BASE, "").strip()
+        or os.environ.get(ENV_CA_BUNDLE, "").strip()
+        or _flag(ENV_INSECURE)
+    )
+    if applied or configured:
+        lines.append(describe())
+    else:
+        for miss in near_miss_env_files():
+            lines.append(
+                f"note: {miss} looks like a misnamed .env and is being ignored "
+                "(Windows Explorer hides the .txt extension)."
+            )
+    return lines
 
 
 def describe() -> str:
