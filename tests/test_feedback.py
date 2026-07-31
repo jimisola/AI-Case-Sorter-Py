@@ -209,3 +209,127 @@ def test_upload_pending_empty_queue_is_noop(db) -> None:
     m = _model(db)
     result = svc.upload_pending(m.id, auth=_OkAuth())
     assert result == {"uploaded": 0, "dropped": 0, "declined": False, "skipped": False}
+
+
+# ----- wish list (model-balancing feedback) ----------------------------------
+
+
+class _WishApi:
+    """Fake CommunityApi that records the UID it was asked about."""
+    names: list[str] = []
+    boom = False
+    calls: list[str] = []
+
+    def __init__(self, auth=None, **kw) -> None:
+        pass
+
+    def fetch_wish_list(self, uid: str) -> list[str]:
+        _WishApi.calls.append(uid)
+        if _WishApi.boom:
+            raise RuntimeError("offline")
+        return list(_WishApi.names)
+
+
+@pytest.fixture
+def wish_api(monkeypatch):
+    import sorter.community_api as ca
+    _WishApi.names, _WishApi.boom, _WishApi.calls = [], False, []
+    monkeypatch.setattr(ca, "CommunityApi", _WishApi)
+    return _WishApi
+
+
+def test_set_wish_list_normalises_and_clears(db) -> None:
+    svc = FeedbackService(db)
+    svc.set_wish_list(1, ["  FC ", "R-P", "", None, "fc"])
+    assert svc.wish_list() == ["fc", "r-p"]
+    svc.clear_wish_list()
+    assert svc.wish_list() == []
+
+
+def test_wish_list_captures_regardless_of_confidence(db) -> None:
+    svc = FeedbackService(db)
+    m = _model(db, floor=95)
+    svc.set_wish_list(m.id, ["WIN 9MM"])
+    # Well above the floor, but wanted → captured (case-insensitively).
+    assert svc.should_capture(m, 100.0, "win 9mm", wish_list=True) is True
+    # Not wanted, above floor → still not captured.
+    assert svc.should_capture(m, 100.0, "FC", wish_list=True) is False
+
+
+def test_wish_list_ignored_outside_a_continuous_run(db) -> None:
+    """Manual Feed passes wish_list=False and keeps confidence-only behavior."""
+    svc = FeedbackService(db)
+    m = _model(db, floor=95)
+    svc.set_wish_list(m.id, ["WIN"])
+    assert svc.should_capture(m, 100.0, "WIN") is False
+    assert svc.should_capture(m, 90.0, "WIN") is True    # confidence rule still applies
+
+
+def test_wish_list_is_bound_to_its_model(db) -> None:
+    svc = FeedbackService(db)
+    m = _model(db, floor=95)
+    other = _model(db, floor=95, community="uid-2")
+    svc.set_wish_list(other.id, ["WIN"])
+    assert svc.should_capture(m, 100.0, "WIN", wish_list=True) is False
+
+
+def test_wish_list_requires_a_feedback_model(db) -> None:
+    svc = FeedbackService(db)
+    m = _model(db, enabled=False)
+    svc.set_wish_list(m.id, ["WIN"])
+    assert svc.should_capture(m, 100.0, "WIN", wish_list=True) is False
+
+
+def test_wish_list_capped_per_label_per_run(db) -> None:
+    from sorter.feedback import MAX_WISH_LIST_CAPTURES_PER_LABEL as CAP
+    svc = FeedbackService(db)
+    m = _model(db, floor=95)
+    svc.set_wish_list(m.id, ["WIN", "FC"])
+    assert all(svc.should_capture(m, 100.0, "WIN", wish_list=True) for _ in range(CAP))
+    assert svc.should_capture(m, 100.0, "WIN", wish_list=True) is False
+    # The cap is per classification…
+    assert svc.should_capture(m, 100.0, "FC", wish_list=True) is True
+    # …and the confidence rule stays unbounded.
+    assert svc.should_capture(m, 10.0, "WIN", wish_list=True) is True
+    # A new run reinstalls the list and refills the quota.
+    svc.set_wish_list(m.id, ["WIN"])
+    assert svc.should_capture(m, 100.0, "WIN", wish_list=True) is True
+
+
+def test_below_floor_capture_does_not_spend_wish_quota(db) -> None:
+    from sorter.feedback import MAX_WISH_LIST_CAPTURES_PER_LABEL as CAP
+    svc = FeedbackService(db)
+    m = _model(db, floor=95)
+    svc.set_wish_list(m.id, ["WIN"])
+    for _ in range(CAP):
+        assert svc.should_capture(m, 10.0, "WIN", wish_list=True) is True
+    assert svc.should_capture(m, 100.0, "WIN", wish_list=True) is True
+
+
+def test_refresh_wish_list_installs_server_names(db, wish_api) -> None:
+    svc = FeedbackService(db)
+    m = _model(db)
+    wish_api.names = ["FC", "R-P"]
+    assert svc.refresh_wish_list(m, auth=_OkAuth()) == ["FC", "R-P"]
+    assert svc.wish_list() == ["fc", "r-p"]
+    assert wish_api.calls == ["uid-1"]
+
+
+def test_refresh_wish_list_skips_non_feedback_models_and_signed_out(db, wish_api) -> None:
+    """The auth path is never touched when the loop is off or nobody's signed in."""
+    svc = FeedbackService(db)
+    wish_api.names = ["FC"]
+    assert svc.refresh_wish_list(_model(db, enabled=False), auth=_OkAuth()) == []
+    assert svc.refresh_wish_list(_model(db, community=None), auth=_OkAuth()) == []
+    assert svc.refresh_wish_list(None, auth=_OkAuth()) == []
+    assert svc.refresh_wish_list(_model(db, community="uid-9"), auth=None) == []
+    assert wish_api.calls == []
+
+
+def test_refresh_wish_list_fails_open_on_error(db, wish_api) -> None:
+    svc = FeedbackService(db)
+    m = _model(db)
+    svc.set_wish_list(m.id, ["stale"])
+    wish_api.boom = True
+    assert svc.refresh_wish_list(m, auth=_OkAuth()) == []
+    assert svc.wish_list() == []          # the stale list is dropped too

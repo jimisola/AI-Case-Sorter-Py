@@ -234,3 +234,81 @@ def test_trigger_drain_coalesces_while_inflight(root, db) -> None:
         assert tab._feedback_upload_inflight is True
     finally:
         tab.destroy()
+
+
+# ----- run-tab wish-list fetch ------------------------------------------------
+
+
+class _FakeController:
+    """Stands in for RunController's wish-list surface."""
+
+    def __init__(self) -> None:
+        self.cleared = 0
+        self.refreshed: list = []
+
+    def refresh_wish_list(self, *, auth):
+        self.refreshed.append(auth)
+        return ["FC"]
+
+    def clear_wish_list(self) -> None:
+        self.cleared += 1
+
+
+def test_wish_list_fetched_on_worker_at_run_start(root, db) -> None:
+    m = _community_model(db, mode="Instant")
+    SettingsRepo(db).set_active_model_id(m.id)
+    tab, app, _cfg = _make_run_tab(root, db)
+    try:
+        app.auth = object()
+        ctrl = _FakeController()
+        tab._begin_wish_list_fetch(ctrl)
+        # Stale list dropped up front, fetch deferred to a worker thread so the
+        # run isn't blocked on the round-trip.
+        assert ctrl.cleared == 1
+        assert len(app.worker_calls) == 1
+        assert app.worker_calls[0][0]() == ["FC"]
+        assert ctrl.refreshed == [app.auth]
+    finally:
+        tab.destroy()
+
+
+def test_wish_list_not_fetched_when_signed_out(root, db) -> None:
+    m = _community_model(db, mode="Instant")
+    SettingsRepo(db).set_active_model_id(m.id)
+    tab, app, _cfg = _make_run_tab(root, db)
+    try:
+        app.auth = None
+        ctrl = _FakeController()
+        tab._begin_wish_list_fetch(ctrl)
+        assert app.worker_calls == []
+        assert ctrl.cleared == 1
+    finally:
+        tab.destroy()
+
+
+def test_wish_list_not_fetched_when_feedback_loop_off(root, db) -> None:
+    """No community-model round-trip (and no auth touch) for an opted-out model."""
+    m = _community_model(db, enabled=False)
+    SettingsRepo(db).set_active_model_id(m.id)
+    tab, app, _cfg = _make_run_tab(root, db)
+    try:
+        app.auth = object()
+        ctrl = _FakeController()
+        tab._begin_wish_list_fetch(ctrl)
+        assert app.worker_calls == []
+        assert ctrl.refreshed == []
+    finally:
+        tab.destroy()
+
+
+def test_wish_list_cleared_when_the_run_stops(root, db) -> None:
+    m = _community_model(db, mode="Manual")
+    SettingsRepo(db).set_active_model_id(m.id)
+    tab, app, _cfg = _make_run_tab(root, db)
+    try:
+        ctrl = _FakeController()
+        app.run_controller = ctrl
+        tab._on_run_stopped()
+        assert ctrl.cleared == 1
+    finally:
+        tab.destroy()

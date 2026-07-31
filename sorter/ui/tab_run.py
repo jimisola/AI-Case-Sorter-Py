@@ -1269,8 +1269,39 @@ class RunTab(ttk.Frame):
             debug_log("tab_run: not auto-draining (mode!=Instant or declined) — manual/OnRunComplete path")
             self._update_feedback_button()
 
+    def _begin_wish_list_fetch(self, controller) -> None:
+        """Fetch the active community model's wish list for the run starting now.
+
+        Fire-and-forget on a worker thread — the run starts immediately and
+        picks the list up when it lands, so at most the first case or two are
+        judged on confidence alone. Gated on a feedback-enabled community model
+        so a user who left the feedback loop off never touches the auth path.
+        Any failure leaves the list empty: normal confidence-only feedback.
+        """
+        if not hasattr(controller, "refresh_wish_list"):
+            return
+        # Drop the previous run's list (and its per-headstamp quotas) up front,
+        # so a failed or skipped fetch can't leave a stale one in play.
+        controller.clear_wish_list()
+        model = self._active_feedback_model()
+        auth = getattr(self.app, "auth", None)
+        if model is None or auth is None:
+            debug_log(
+                f"tab_run: wish list not fetched (model={model.id if model else None}, "
+                f"auth={auth is not None})"
+            )
+            return
+        self.app.run_worker(
+            lambda: controller.refresh_wish_list(auth=auth),
+            on_done=lambda names: debug_log(f"tab_run: wish list for this run: {names}"),
+            on_error=lambda _exc: None,
+        )
+
     def _on_run_stopped(self) -> None:
         self._set_running(False)
+        controller = self.app.run_controller
+        if controller is not None and hasattr(controller, "clear_wish_list"):
+            controller.clear_wish_list()
         model = self._active_feedback_model()
         if model is not None:
             debug_log(
@@ -1356,6 +1387,7 @@ class RunTab(ttk.Frame):
         if self._is_running:
             controller.stop()
         else:
+            self._begin_wish_list_fetch(controller)
             controller.start()
 
     def _manual_feed(self) -> None:

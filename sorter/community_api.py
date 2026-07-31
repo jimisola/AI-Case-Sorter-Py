@@ -390,6 +390,44 @@ class CommunityApi:
         debug_log(f"  ticket: accepted={ticket.feedback_accepted} container={ticket.container_uri!r} blob={ticket.blob_path!r}")
         return ticket
 
+    def fetch_wish_list(self, community_model_uid: str) -> list[str]:
+        """Classifications this community model wants more training images for.
+
+        ``GET /Models/FetchWishList?communityModelId={uid}`` answers with a JSON
+        array of classification names (the same strings the classifier returns).
+
+        The server has no error path — an unknown or malformed UID, a disabled
+        feedback loop, no configured threshold, or an unpopulated image folder
+        all answer ``200 []``, meaning "don't collect anything extra". We extend
+        that to our side too: not signed in, a non-200, or an unparseable body
+        all return ``[]`` so the feature fails open to confidence-only feedback
+        and a run is never blocked on this call.
+        """
+        if not community_model_uid:
+            return []
+        try:
+            resp = self._get(
+                f"/Models/FetchWishList?communityModelId={quote_plus(community_model_uid)}"
+            )
+        except Exception as exc:
+            debug_log(f"GET /Models/FetchWishList failed ({exc.__class__.__name__}: {exc})")
+            return []
+        debug_log(f"GET /Models/FetchWishList -> HTTP {resp.status_code}")
+        if resp.status_code != 200:
+            debug_log(f"  non-200 body: {(resp.text or '')[:200]!r}")
+            return []
+        try:
+            data = resp.json()
+        except ValueError:
+            debug_log(f"  non-JSON body: {(resp.text or '')[:200]!r}")
+            return []
+        if not isinstance(data, list):
+            debug_log(f"  unexpected JSON shape: {type(data).__name__}")
+            return []
+        names = [item.strip() for item in data if isinstance(item, str) and item.strip()]
+        debug_log(f"  wish list ({len(names)}): {names}")
+        return names
+
     def upload_feedback_blob(
         self,
         file_path: Path | str,

@@ -231,8 +231,9 @@ used, headstamps in the `headstamps` table). Activating a model posts
   optional; the only gated surface is the Community tab.
 - **`community_api.py`** — `CommunityApi`: HTTPS client for
   `reloadingrecipes.com/api` (cartridges, model search, download via Azure-blob
-  SAS URL, feedback-image upload, model share). Bearer token pulled fresh from
-  `AuthManager` per call. Downloads/uploads stream with atomic writes.
+  SAS URL, feedback-image upload, wish-list fetch, model share). Bearer token
+  pulled fresh from `AuthManager` per call. Downloads/uploads stream with atomic
+  writes.
 - **`feedback.py`** — `FeedbackService`: the community **feedback loop**. When a
   community model with the loop enabled produces a below-floor prediction (floor
   clamped to ≥ 50), the cropped image is staged to
@@ -240,6 +241,15 @@ used, headstamps in the `headstamps` table). Activating a model posts
   `upload_pending` drains it via `CommunityApi`, deleting on success or drop on
   failure. Debug tracing to stderr is **off by default** — enable with
   `CASESORTER_FEEDBACK_DEBUG=1`.
+  Also owns the **wish list** (model balancing): `GET /Models/FetchWishList`
+  returns the classifications a model is short of images for. The Run tab fetches
+  it on a worker thread at Start (gated on `is_feedback_model`, so an opted-out
+  user's auth path is untouched) and clears it at Stop; `should_capture` then
+  captures on *below floor **or** wanted label*. Wish-list capture applies to
+  continuous runs only (not Manual Feed), is capped at
+  `MAX_WISH_LIST_CAPTURES_PER_LABEL` (40) per classification per run, and **fails
+  open** — any error or non-200 installs an empty list, i.e. confidence-only
+  behavior. No UI surface.
 
 ---
 

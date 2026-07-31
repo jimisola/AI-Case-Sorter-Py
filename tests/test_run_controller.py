@@ -257,3 +257,63 @@ def test_test_once_returns_parent_label_in_parent_mode(tmp_path) -> None:
     assert result["label"] == "WIN"
     assert result["parent"] == "Brass"
     assert events and events[0]["parent"] == "Brass"
+
+
+# ----- wish list (model-balancing feedback) ----------------------------------
+
+
+def test_wish_list_capture_during_a_run(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CASESORTER_DATA_DIR", str(tmp_path / "data"))
+    ctrl, _, db = _make_controller(tmp_path)
+    mid = _enable_feedback(db, floor=95, mode="Instant")
+    from sorter.feedback import FeedbackService
+    ctrl._feedback.set_wish_list(mid, ["WIN"])
+    events: list[dict] = []
+    ctrl.bus.subscribe("feedback/queued", events.append)
+    # 99 is well above the 95 floor, but WIN is wanted → captured anyway.
+    with patch("sorter.classifier.classify_active", return_value=("WIN", 99)):
+        ctrl.run_once()
+    ctrl.bus.drain()
+    assert FeedbackService(db).count_pending(mid) == 1
+    assert events and events[0]["model_id"] == mid
+
+
+def test_wish_list_not_applied_to_manual_feed(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CASESORTER_DATA_DIR", str(tmp_path / "data"))
+    ctrl, _, db = _make_controller(tmp_path)
+    mid = _enable_feedback(db, floor=95)
+    from sorter.feedback import FeedbackService
+    ctrl._feedback.set_wish_list(mid, ["WIN"])
+    with patch("sorter.classifier.classify_active", return_value=("WIN", 99)):
+        ctrl.cycle_once()
+    assert FeedbackService(db).count_pending(mid) == 0
+
+
+def test_wish_list_off_leaves_confidence_only_behaviour(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CASESORTER_DATA_DIR", str(tmp_path / "data"))
+    ctrl, _, db = _make_controller(tmp_path)
+    mid = _enable_feedback(db, floor=95)
+    from sorter.feedback import FeedbackService
+    with patch("sorter.classifier.classify_active", return_value=("WIN", 99)):
+        ctrl.run_once()
+    assert FeedbackService(db).count_pending(mid) == 0
+
+
+def test_refresh_and_clear_wish_list(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CASESORTER_DATA_DIR", str(tmp_path / "data"))
+    ctrl, _, db = _make_controller(tmp_path)
+    _enable_feedback(db)
+
+    class _Api:
+        def __init__(self, auth=None, **kw) -> None: pass
+        def fetch_wish_list(self, uid): return ["FC"]
+
+    class _Auth:
+        def acquire_token_silent(self, scopes=None): return object()
+
+    import sorter.community_api as ca
+    monkeypatch.setattr(ca, "CommunityApi", _Api)
+    assert ctrl.refresh_wish_list(auth=_Auth()) == ["FC"]
+    assert ctrl._feedback.wish_list() == ["fc"]
+    ctrl.clear_wish_list()
+    assert ctrl._feedback.wish_list() == []
