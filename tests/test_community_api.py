@@ -53,18 +53,24 @@ class _FakeSession:
         self.get_calls: list[tuple[str, dict[str, str]]] = []
         self.post_calls: list[tuple[str, Any]] = []
         self.put_calls: list[tuple[str, dict[str, str]]] = []
+        # `verify` as passed per request — see the note in CommunityApi.__init__
+        # on why it must not live on the session.
+        self.verify_args: list = []
         self.next_responses: dict[str, _FakeResp] = {}
 
     def get(self, url: str, headers=None, timeout=None, **kw) -> _FakeResp:
         self.get_calls.append((url, headers or {}))
+        self.verify_args.append(kw.get("verify"))
         return self.next_responses.get(url, _FakeResp(404))
 
-    def post(self, url: str, headers=None, json=None, timeout=None) -> _FakeResp:
+    def post(self, url: str, headers=None, json=None, timeout=None, **kw) -> _FakeResp:
         self.post_calls.append((url, json))
+        self.verify_args.append(kw.get("verify"))
         return self.next_responses.get(url, _FakeResp(404))
 
     def put(self, url: str, data=None, headers=None, timeout=None, **kw) -> _FakeResp:
         self.put_calls.append((url, headers or {}))
+        self.verify_args.append(kw.get("verify"))
         # Drain the body the way requests would: read() a file-like (drives the
         # progress callback) or iterate a generator.
         if hasattr(data, "read"):
@@ -95,7 +101,9 @@ class _FakeAuth(AuthManager):
 
 
 def _api(session: _FakeSession) -> CommunityApi:
-    return CommunityApi(auth=_FakeAuth(), session=session)
+    # base_url pinned so these URL assertions don't depend on the developer's
+    # CASESORTER_API_BASE; the override itself is covered below.
+    return CommunityApi(auth=_FakeAuth(), session=session, base_url=API_BASE)
 
 
 def test_authorization_header_added(tmp_path: Path) -> None:

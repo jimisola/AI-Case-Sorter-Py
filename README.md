@@ -162,6 +162,24 @@ Please run `pytest` before opening a PR. The UI itself is not covered by
 automated tests. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup and
 guidelines, and [`SECURITY.md`](SECURITY.md) to report a vulnerability.
 
+### Pointing at a local community backend
+
+The community client talks to `https://www.reloadingrecipes.com/api` and
+verifies TLS normally. To develop against a local copy of that backend, copy
+[`.env.example`](.env.example) to `.env` (next to `main.py`, or in
+`data/config/`) and set:
+
+| Variable | Purpose |
+|----------|---------|
+| `CASESORTER_API_BASE` | Base URL of the community API, e.g. `https://localhost:7043/api`. |
+| `CASESORTER_API_CA_BUNDLE` | PEM cert/bundle to trust — the right way to make a local HTTPS dev server verify. |
+| `CASESORTER_API_INSECURE` | `1` skips TLS verification. **Honoured only when the API base is localhost**, so it can't weaken production traffic. |
+
+Real environment variables take precedence over the `.env` file, and `.env` is
+gitignored. For an ASP.NET Core dev server, export its certificate with
+`dotnet dev-certs https --export-path devcert.pem --format PEM --no-password`
+and point `CASESORTER_API_CA_BUNDLE` at it.
+
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to set up, run the tests, and submit
   changes.
 - [`CLAUDE.md`](CLAUDE.md) — architecture map for contributors and AI coding

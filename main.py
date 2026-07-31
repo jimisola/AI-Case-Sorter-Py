@@ -10,10 +10,17 @@ def main() -> int:
     if str(here) not in sys.path:
         sys.path.insert(0, str(here))
 
-    from sorter import paths
+    from sorter import appenv, paths
     from sorter.config import Config
     from sorter.db import Database
     from sorter.ui.app import MainWindow
+
+    # Developer overrides (community API base URL / TLS trust). A no-op unless
+    # a .env exists — see sorter/appenv.py and .env.example.
+    for env_file in appenv.load_dotenv():
+        print(f"[casesorter] loaded {env_file}")
+    if appenv.api_base() != appenv.DEFAULT_API_BASE:
+        print(f"[casesorter] {appenv.describe()}")
 
     paths.ensure_directories()
     legacy_json = here / "data" / "config.json"

@@ -136,6 +136,14 @@ sanctioned way for worker threads to update the UI.
   (`normalize_upload_mode`, `SUPPORTED_MODEL_MODES`).
 - **`paths.py`** — single source of truth for the on-disk layout (see §6).
   `CASESORTER_DATA_DIR` overrides the data root.
+- **`appenv.py`** — developer overrides for the community backend, read from the
+  environment with an optional `.env` (real env vars always win; see
+  `.env.example`). `api_base()` applies `CASESORTER_API_BASE` over the
+  production default; `tls_verify()` returns what to pass `requests` as
+  `verify=` — a `CASESORTER_API_CA_BUNDLE` path, or `False` when
+  `CASESORTER_API_INSECURE=1` **and** the base URL is loopback (it is ignored,
+  with a warning, for any other host). `main.py` calls `load_dotenv()` at
+  startup; `CommunityApi` resolves both at construction, not import.
 
 ### Active-model concept
 "Active model" = `settings.default_model_id`. When **absent**, the app is in
@@ -233,7 +241,10 @@ used, headstamps in the `headstamps` table). Activating a model posts
   `reloadingrecipes.com/api` (cartridges, model search, download via Azure-blob
   SAS URL, feedback-image upload, wish-list fetch, model share). Bearer token
   pulled fresh from `AuthManager` per call. Downloads/uploads stream with atomic
-  writes.
+  writes. Base URL and TLS trust come from `appenv` (see above); `verify` is
+  passed **per request**, never set on the session — `REQUESTS_CA_BUNDLE` /
+  `CURL_CA_BUNDLE` in the environment outrank `session.verify`, so a
+  session-level setting is silently ignored on machines that set them.
 - **`feedback.py`** — `FeedbackService`: the community **feedback loop**. When a
   community model with the loop enabled produces a below-floor prediction (floor
   clamped to ≥ 50), the cropped image is staged to
@@ -341,9 +352,11 @@ where `ticks` is the .NET `DateTime.Ticks` value.
 - **Headstamps are read fresh, not cached** — don't reintroduce a cached
   snapshot (it previously caused silent data loss).
 - **Cloud features depend on the hosted `reloadingrecipes.com` backend** and a
-  specific Azure B2C tenant, both hardcoded. The backend is a separate service
-  (not in this repo); a fork cannot run community features against its own infra
-  without editing `auth.py` / `community_api.py`.
+  specific Azure B2C tenant. The API base URL and its TLS trust are
+  environment-overridable (`appenv`, `.env.example`) so you can run against a
+  local copy of the backend; the **Azure B2C tenant/client/scopes in `auth.py`
+  are still hardcoded**, so a fork pointing at its own identity provider has to
+  edit that file. The backend itself is a separate service, not in this repo.
 - **No CI yet.** Run `pytest` before pushing; UI is not covered by tests.
 - See **`OPEN_SOURCE_READINESS.md`** for the open-source readiness assessment and
   **`CONTRIBUTING.md`** for how to set up and contribute.
