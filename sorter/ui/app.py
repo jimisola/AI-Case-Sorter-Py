@@ -21,12 +21,22 @@ from .tab_models import ModelsTab
 from .tab_run import RunTab
 from .tab_serial import SerialTab
 from .tab_train import TrainTab
-from .theme import PALETTE, apply_theme, paint_gradient
+from .theme import (
+    PALETTE,
+    SETTING_THEME,
+    apply_theme,
+    paint_gradient,
+    resolve_theme,
+    retheme_widgets,
+    theme_names,
+)
 from .widgets import ScrollableFrame
 
 
 PREVIEW_FPS = 20
 HEADER_HEIGHT = 36
+# Gap between the theme picker and the right edge of the title bar.
+HEADER_PAD = 12
 
 
 class MainWindow:
@@ -39,7 +49,8 @@ class MainWindow:
         self.root.geometry("1024x768")
         self.root.minsize(960, 660)
 
-        self.fonts = apply_theme(self.root)
+        self.theme_name = resolve_theme(self._load_saved_theme())
+        self.fonts = apply_theme(self.root, theme=self.theme_name)
 
         self.broker: Any | None = None
         self.camera = Camera(
@@ -60,6 +71,22 @@ class MainWindow:
             borderwidth=0,
         )
         self.header_canvas.pack(side=tk.TOP, fill=tk.X)
+        # Theme picker, parked in the top-right of the title bar. It rides on
+        # the canvas as a window item so it floats over the gradient;
+        # `_repaint_header` keeps it pinned to the right edge on resize.
+        self.theme_var = tk.StringVar(value=self.theme_name)
+        self.theme_combo = ttk.Combobox(
+            self.header_canvas,
+            textvariable=self.theme_var,
+            values=theme_names(),
+            state="readonly",
+            style="Header.TCombobox",
+            width=max(len(name) for name in theme_names()) + 1,
+        )
+        self.theme_combo.bind("<<ComboboxSelected>>", self._on_theme_selected)
+        self._theme_window = self.header_canvas.create_window(
+            0, HEADER_HEIGHT // 2, anchor=tk.E, window=self.theme_combo,
+        )
         self.header_canvas.bind("<Configure>", self._repaint_header)
 
         # Status bar (must exist before tabs that call set_status).
@@ -93,6 +120,8 @@ class MainWindow:
         # Pack serial first so it ends up rightmost; camera sits to its left.
         # Each indicator is a [dot][text] pair grouped in a sub-frame so the
         # dot stays glued to its label when the bar resizes.
+        self._serial_connected = False
+        self._camera_connected = False
         self.serial_dot = self._build_status_indicator(status_bar, self.serial_status_var)
         self.camera_dot = self._build_status_indicator(status_bar, self.camera_status_var)
 
@@ -386,21 +415,39 @@ class MainWindow:
 
     def _set_camera_indicator(self, message: str, *, connected: bool) -> None:
         self.camera_status_var.set(message)
+        self._camera_connected = connected
         self.camera_dot.config(
             foreground=PALETTE["success" if connected else "error"],
         )
 
     def _set_serial_indicator(self, message: str, *, connected: bool) -> None:
         self.serial_status_var.set(message)
+        self._serial_connected = connected
         self.serial_dot.config(
             foreground=PALETTE["success" if connected else "error"],
         )
 
+    def _refresh_status_indicators(self) -> None:
+        """Re-apply the dot colors from the live palette (after a theme switch).
+
+        The generic re-colouring pass can't tell a red dot from any other red,
+        so the source of truth — connected or not — repaints them here.
+        """
+        for dot, connected in (
+            (self.camera_dot, self._camera_connected),
+            (self.serial_dot, self._serial_connected),
+        ):
+            dot.config(
+                background=PALETTE["bg_window"],
+                foreground=PALETTE["success" if connected else "error"],
+            )
+
     # ----- header gradient ----------------------------------------------------
 
     def _repaint_header(self, _event=None) -> None:
-        """Paint the gradient header and overlay the app title."""
+        """Paint the gradient header, overlay the app title, pin the theme picker."""
         canvas = self.header_canvas
+        canvas.configure(bg=PALETTE["bg_window"])
         paint_gradient(
             canvas,
             color_a=PALETTE["bg_gradient_a"],
@@ -408,6 +455,7 @@ class MainWindow:
             direction="horizontal",
         )
         canvas.delete("title")
+        self._place_theme_picker()
         title_id = canvas.create_text(
             18, HEADER_HEIGHT // 2,
             anchor=tk.W,
@@ -427,6 +475,70 @@ class MainWindow:
             font=self.fonts["small"],
             tags="title",
         )
+
+    def _place_theme_picker(self) -> None:
+        """Right-align the theme dropdown and label it, after a paint or resize."""
+        canvas = self.header_canvas
+        combo = getattr(self, "theme_combo", None)
+        if combo is None:
+            return
+        width = canvas.winfo_width()
+        canvas.coords(self._theme_window, width - HEADER_PAD, HEADER_HEIGHT // 2)
+        canvas.tag_raise(self._theme_window)
+        canvas.create_text(
+            width - HEADER_PAD - combo.winfo_reqwidth() - 8,
+            HEADER_HEIGHT // 2,
+            anchor=tk.E,
+            text="Theme",
+            fill=PALETTE["text_muted"],
+            font=self.fonts["small"],
+            tags="title",
+        )
+
+    # ----- theme --------------------------------------------------------------
+
+    def _load_saved_theme(self) -> str | None:
+        """Theme name persisted from a previous session, if any."""
+        if self.db is None:
+            return None
+        try:
+            from ..repository import SettingsRepo
+
+            return SettingsRepo(self.db).get(SETTING_THEME)
+        except Exception:
+            return None
+
+    def _on_theme_selected(self, _event=None) -> None:
+        self.set_theme(self.theme_var.get())
+        # The dropdown keeps focus (and its highlight) after a pick; hand it
+        # back so the title bar settles.
+        self.root.focus_set()
+
+    def set_theme(self, name: str) -> None:
+        """Switch palettes live and remember the choice."""
+        resolved = resolve_theme(name)
+        previous = dict(PALETTE)
+        self.theme_name = resolved
+        self.theme_var.set(resolved)
+        self.fonts = apply_theme(self.root, theme=resolved)
+        # ttk widgets follow the restyled theme on their own; the classic Tk
+        # widgets (and any open dialog's) need their baked-in colors remapped.
+        retheme_widgets(self.root, previous)
+        self._repaint_header()
+        self._refresh_status_indicators()
+        self._save_theme(resolved)
+        self.set_status(f"Theme: {resolved}.")
+
+    def _save_theme(self, name: str) -> None:
+        if self.db is None:
+            return
+        try:
+            from ..repository import SettingsRepo
+
+            SettingsRepo(self.db).set(SETTING_THEME, name)
+        except Exception:
+            # A theme that can't be persisted still applies for this session.
+            pass
 
     # ----- camera -------------------------------------------------------------
 

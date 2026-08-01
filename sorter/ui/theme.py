@@ -1,20 +1,30 @@
-"""Modern dark theme for the OSS Client UI.
+"""Themes for the OSS Client UI.
 
 Centralises colors, fonts, and ttk styles so the rest of the app can stay
-focused on layout. The chrome — window, panels, cards, inputs, borders,
-text — is **neutral grayscale**: a flat luminance ladder that gives the UI
-depth without bevels, relief, or a hue of its own. Color is reserved for
-things that mean something: action buttons (green = go / primary,
-red = stop / destructive) and status text (success / warning / error).
-Keeping the surfaces colorless means a green Start or a red Stop is the
-only saturated thing on screen, so it reads instantly.
+focused on layout. Every color lives in one of the palettes below; the
+rest of the app reads the *live* ``PALETTE`` dict, which always holds the
+selected theme's values.
 
-Two helpers are exported:
+**The role of each key is fixed; only its color changes per theme.** The
+original theme (``"Dark"``) keeps its chrome — window, panels, cards,
+inputs, borders, text — **neutral grayscale**: a flat luminance ladder
+that gives the UI depth without bevels, relief, or a hue of its own,
+reserving color for things that mean something (action buttons, status
+text). The alternative themes tint the chrome, but they keep that
+discipline internally: their surfaces stay a single low-saturation family
+so the action buttons remain the most saturated thing on screen.
 
-* ``apply_theme(root)`` — call once after the root is created. Applies
-  ttk styles, sets default fonts on the legacy Tk widgets (Listbox / Text
-  / Canvas), and returns the resolved fonts dict for callers that need to
-  match.
+Adding a theme means copying ``_DARK`` and re-colouring it — every theme
+must define exactly the same keys (``tests/test_theme.py`` enforces it).
+
+Exported helpers:
+
+* ``apply_theme(root, theme=...)`` — call once after the root is created,
+  and again on every theme switch. Selects the palette, applies ttk styles,
+  sets defaults for the legacy Tk widgets (Listbox / Text / Canvas), and
+  returns the resolved fonts dict for callers that need to match.
+* ``retheme_widgets(root, previous)`` — after a switch, repaint the classic
+  Tk widgets that baked their colors in at construction time.
 * ``paint_gradient(canvas, ...)`` — paint a vertical/horizontal linear
   gradient across the canvas. Used for the title bar.
 """
@@ -25,17 +35,21 @@ from tkinter import font as tkfont
 from tkinter import ttk
 
 
-# Color palette — single source of truth.
+# Settings key holding the user's chosen theme name (see repository.SettingsRepo).
+SETTING_THEME = "ui.theme"
+
+
+# The original theme, and the reference for every other palette's key set.
 #
 # Everything above the "Action colors" block is neutral gray (R == G == B):
 # surfaces, borders, text, and the selection/focus tints. Only the action
 # and status entries carry hue. If you add a color here, ask which of the
 # two groups it belongs to — a new tinted surface breaks the contrast the
 # colored buttons rely on.
-PALETTE = {
+_DARK = {
     # Backgrounds — neutral gray, darkest to lightest.
     "bg_window":     "#131313",   # app background / gradient bottom
-    "bg_gradient_a": "#2e2e2e",   # title bar left
+    "bg_gradient_a": "#2f2f2f",   # title bar left
     "bg_gradient_b": "#0c0c0c",   # title bar right
     "bg_surface":    "#1c1c1c",   # panels — one step up from the window
     "bg_card":       "#272727",   # raised surfaces (slot cards, monitor log)
@@ -52,7 +66,7 @@ PALETTE = {
     "text_highlight": "#ffffff",  # emphasised values (Accent.TLabel)
     "text_muted":    "#9a9a9a",
     "text_subtle":   "#6f6f6f",
-    "text_inverse":  "#131313",   # for text on light/action backgrounds
+    "text_inverse":  "#121212",   # for text on light/action backgrounds
 
     # Neutral "accent" — section titles, focus, indicators, selection fills.
     # Kept gray on purpose: emphasis here comes from brightness so that the
@@ -75,12 +89,233 @@ PALETTE = {
     "danger_hover":  "#f87171",
     "danger_press":  "#dc2626",
 
-    # Status colors — text and small indicators.
+    # Status colors — text and small indicators. `success` tracks `action`
+    # and `error` tracks `danger` in every theme: they are the same idea
+    # rendered as text instead of a button.
     "success":       "#22c55e",
     "success_dim":   "#14331f",   # muted green fill — e.g. applied auto-suggestions
     "warning":       "#f59e0b",
     "error":         "#ef4444",
 }
+
+# Daylight theme: the gray ladder inverted, so "lifted" reads as *darker*
+# rather than brighter. The action colors are the darker 700-weight shades
+# because they now sit against white and carry light text.
+_LIGHT = {
+    "bg_window":     "#eaeaea",
+    "bg_gradient_a": "#fbfbfb",
+    "bg_gradient_b": "#d4d4d4",
+    "bg_surface":    "#f4f4f4",
+    "bg_card":       "#ffffff",
+    "bg_card_hover": "#ededed",
+    "bg_card_sel":   "#d8d8d8",
+    "bg_input":      "#fdfdfd",
+
+    "border":        "#c2c2c2",
+    "border_focus":  "#5b5b5b",
+
+    "text":          "#1c1c1c",
+    "text_highlight": "#000000",
+    "text_muted":    "#565656",
+    "text_subtle":   "#868686",
+    "text_inverse":  "#fafafa",
+
+    "accent":        "#3d3d3d",
+    "accent_hover":  "#292929",
+    "accent_press":  "#101010",
+    "accent_dim":    "#e2e2e2",
+
+    "action":        "#15803d",
+    "action_hover":  "#16a34a",
+    "action_press":  "#0f5f2e",
+    "update":        "#1d4ed8",
+    "update_hover":  "#2563eb",
+    "update_press":  "#1e40af",
+    "danger":        "#b91c1c",
+    "danger_hover":  "#dc2626",
+    "danger_press":  "#991b1b",
+
+    "success":       "#15803d",
+    "success_dim":   "#d5f0de",
+    "warning":       "#b45309",
+    "error":         "#b91c1c",
+}
+
+# Warm paper — the light theme's twin for people who find pure white harsh.
+_SEPIA = {
+    "bg_window":     "#e8dfcf",
+    "bg_gradient_a": "#f6efe0",
+    "bg_gradient_b": "#d3c6ae",
+    "bg_surface":    "#f2ebdc",
+    "bg_card":       "#fdf8ee",
+    "bg_card_hover": "#eee5d3",
+    "bg_card_sel":   "#dccfb6",
+    "bg_input":      "#fffdf7",
+
+    "border":        "#c3b498",
+    "border_focus":  "#6b5b43",
+
+    "text":          "#3a2f22",
+    "text_highlight": "#1c150c",
+    "text_muted":    "#6d5f4c",
+    "text_subtle":   "#948673",
+    "text_inverse":  "#fdf9f0",
+
+    "accent":        "#5b4a34",
+    "accent_hover":  "#453727",
+    "accent_press":  "#2e2419",
+    "accent_dim":    "#e0d6c1",
+
+    "action":        "#46733a",
+    "action_hover":  "#558a45",
+    "action_press":  "#35592c",
+    "update":        "#2f6690",
+    "update_hover":  "#3d7fb0",
+    "update_press":  "#255273",
+    "danger":        "#a33232",
+    "danger_hover":  "#c04040",
+    "danger_press":  "#872828",
+
+    "success":       "#46733a",
+    "success_dim":   "#dbe8cf",
+    "warning":       "#9a6b12",
+    "error":         "#a33232",
+}
+
+# Deep navy chrome. The surfaces carry the hue, so the accent is pulled
+# almost to white to keep selection fills legible.
+_MIDNIGHT_BLUE = {
+    "bg_window":     "#0b1220",
+    "bg_gradient_a": "#1b2a4a",
+    "bg_gradient_b": "#060b16",
+    "bg_surface":    "#121c2e",
+    "bg_card":       "#1a2740",
+    "bg_card_hover": "#22334f",
+    "bg_card_sel":   "#31456a",
+    "bg_input":      "#070d18",
+
+    "border":        "#2c3b57",
+    "border_focus":  "#7ea2d8",
+
+    "text":          "#d6e2f5",
+    "text_highlight": "#ffffff",
+    "text_muted":    "#93a6c4",
+    "text_subtle":   "#6a7c99",
+    "text_inverse":  "#0a1120",
+
+    "accent":        "#cfe0fb",
+    "accent_hover":  "#e8f1ff",
+    "accent_press":  "#a9c4ea",
+    "accent_dim":    "#22314d",
+
+    "action":        "#22c55e",
+    "action_hover":  "#4ade80",
+    "action_press":  "#16a34a",
+    "update":        "#60a5fa",
+    "update_hover":  "#93c5fd",
+    "update_press":  "#3b82f6",
+    "danger":        "#ef4444",
+    "danger_hover":  "#f87171",
+    "danger_press":  "#dc2626",
+
+    "success":       "#22c55e",
+    "success_dim":   "#123a2a",
+    "warning":       "#fbbf24",
+    "error":         "#ef4444",
+}
+
+# Near-black with a violet cast; the "update" blue becomes violet so the
+# one cool accent belongs to the palette. Green/red keep their meaning.
+_GOTHIC = {
+    "bg_window":     "#0d0a10",
+    "bg_gradient_a": "#35233f",
+    "bg_gradient_b": "#0a070d",
+    "bg_surface":    "#16111b",
+    "bg_card":       "#211829",
+    "bg_card_hover": "#2c2036",
+    "bg_card_sel":   "#402f4d",
+    "bg_input":      "#0a070e",
+
+    "border":        "#3a2b45",
+    "border_focus":  "#b08bd0",
+
+    "text":          "#ded3e6",
+    "text_highlight": "#ffffff",
+    "text_muted":    "#a394ae",
+    "text_subtle":   "#766a80",
+    "text_inverse":  "#0c0910",
+
+    "accent":        "#c9a7e0",
+    "accent_hover":  "#ddc4ee",
+    "accent_press":  "#a684bd",
+    "accent_dim":    "#2b2034",
+
+    "action":        "#3fb950",
+    "action_hover":  "#56d364",
+    "action_press":  "#2ea043",
+    "update":        "#a78bfa",
+    "update_hover":  "#c4b5fd",
+    "update_press":  "#8b5cf6",
+    "danger":        "#e5484d",
+    "danger_hover":  "#ef6b6f",
+    "danger_press":  "#c93c41",
+
+    "success":       "#3fb950",
+    "success_dim":   "#1b2a1e",
+    "warning":       "#d29922",
+    "error":         "#e5484d",
+}
+
+# Display name → palette. Insertion order drives the picker's order.
+THEMES: dict[str, dict[str, str]] = {
+    "Dark": _DARK,
+    "Light": _LIGHT,
+    "Sepia": _SEPIA,
+    "Midnight Blue": _MIDNIGHT_BLUE,
+    "Gothic": _GOTHIC,
+}
+
+DEFAULT_THEME = "Dark"
+
+# The live palette. Modules do `from .theme import PALETTE` and index it at
+# call time, so switching themes **mutates this dict in place** — rebinding
+# the name here would leave every importer holding the old colors.
+PALETTE: dict[str, str] = dict(THEMES[DEFAULT_THEME])
+
+_current_theme = DEFAULT_THEME
+
+
+def theme_names() -> list[str]:
+    """Selectable theme names, in display order."""
+    return list(THEMES)
+
+
+def current_theme() -> str:
+    """Name of the palette currently loaded into ``PALETTE``."""
+    return _current_theme
+
+
+def resolve_theme(name: str | None) -> str:
+    """Map a stored/user-supplied name onto a real theme, case-insensitively."""
+    if name:
+        for known in THEMES:
+            if known.casefold() == str(name).casefold():
+                return known
+    return DEFAULT_THEME
+
+
+def set_palette(name: str | None) -> dict[str, str]:
+    """Load a theme into ``PALETTE`` in place; returns the palette it replaced.
+
+    The returned snapshot is what ``retheme_widgets`` needs to recognise the
+    colors already baked into existing classic Tk widgets.
+    """
+    global _current_theme
+    previous = dict(PALETTE)
+    _current_theme = resolve_theme(name)
+    PALETTE.clear()
+    PALETTE.update(THEMES[_current_theme])
+    return previous
 
 
 def _pick_font(
@@ -166,8 +401,16 @@ def _colored_button(
     )
 
 
-def apply_theme(root: tk.Tk) -> dict[str, tuple]:
-    """Apply the modern dark theme to the given root. Returns the fonts dict."""
+def apply_theme(root: tk.Tk, theme: str | None = None) -> dict[str, tuple]:
+    """Apply a theme to the given root. Returns the fonts dict.
+
+    Passing ``theme`` selects that palette first (unknown names fall back to
+    the default). Safe to call repeatedly: ttk styles are reconfigured in
+    place, so every ttk widget already on screen picks the new colors up.
+    Classic Tk widgets don't — see ``retheme_widgets``.
+    """
+    if theme is not None:
+        set_palette(theme)
     fonts = get_fonts(root)
 
     root.configure(bg=PALETTE["bg_window"])
@@ -500,6 +743,41 @@ def apply_theme(root: tk.Tk) -> dict[str, tuple]:
             arrowcolor=[("active", accent)],
         )
 
+    # Title-bar theme picker. Sits on the gradient rather than a panel, so it
+    # borrows the card color to read as a control without drawing a border.
+    _header_fill = PALETTE["bg_card"]
+    style.configure(
+        "Header.TCombobox",
+        fieldbackground=_header_fill,
+        background=_header_fill,
+        foreground=text,
+        bordercolor=_header_fill,
+        darkcolor=_header_fill,
+        lightcolor=_header_fill,
+        arrowcolor=PALETTE["text_muted"],
+        # Readonly comboboxes render their text through the selection colors;
+        # matching them to the fill keeps the closed control from showing a
+        # highlight bar whenever it holds focus.
+        selectbackground=_header_fill,
+        selectforeground=text,
+        padding=(6, 2),
+    )
+    style.map(
+        "Header.TCombobox",
+        fieldbackground=[
+            ("readonly", _header_fill),
+            ("active", PALETTE["bg_card_hover"]),
+        ],
+        background=[("active", PALETTE["bg_card_hover"])],
+        foreground=[("readonly", text)],
+        selectbackground=[("readonly", _header_fill)],
+        selectforeground=[("readonly", text)],
+        bordercolor=[("focus", _header_fill)],
+        lightcolor=[("focus", _header_fill)],
+        darkcolor=[("focus", _header_fill)],
+        arrowcolor=[("active", accent)],
+    )
+
     # Combobox dropdown list (uses the option database).
     root.option_add("*TCombobox*Listbox.background", PALETTE["bg_card"])
     root.option_add("*TCombobox*Listbox.foreground", text)
@@ -673,6 +951,82 @@ def apply_theme(root: tk.Tk) -> dict[str, tuple]:
     )
 
     return fonts
+
+
+# Color options carried by the classic Tk widgets we build (Label, Frame,
+# Canvas, Text, Listbox, Menu). ttk widgets don't accept these — their colors
+# come from the styles above — so a TclError on cget just means "skip".
+_WIDGET_COLOR_OPTIONS = (
+    "background",
+    "foreground",
+    "activebackground",
+    "activeforeground",
+    "disabledforeground",
+    "highlightbackground",
+    "highlightcolor",
+    "insertbackground",
+    "selectbackground",
+    "selectforeground",
+    "selectcolor",
+    "troughcolor",
+    "readonlybackground",
+)
+
+
+def _reverse_map(previous: dict[str, str]) -> dict[str, str]:
+    """Map each color of the outgoing palette to its counterpart in ``PALETTE``.
+
+    Keys are visited in palette order, so when two roles share a color (e.g.
+    ``success`` mirrors ``action``) the first one wins — which is why the
+    palettes keep those pairs identical in every theme.
+    """
+    mapping: dict[str, str] = {}
+    for key, old in previous.items():
+        new = PALETTE.get(key)
+        if new is None:
+            continue
+        mapping.setdefault(old.lower(), new)
+    return mapping
+
+
+def retheme_widgets(widget: tk.Misc, previous: dict[str, str]) -> None:
+    """Re-colour classic Tk widgets after a theme switch.
+
+    ttk widgets follow their style and update themselves; a ``tk.Label`` or
+    ``tk.Canvas`` built with ``bg=PALETTE["bg_card"]`` keeps the literal color
+    it was given. Rather than ask every module to register a callback, this
+    walks the widget tree (including open Toplevels) and translates any color
+    that came from the outgoing palette into the same role's new color.
+    Anything the app set to a color of its own — the monitor's snake borders,
+    for instance — isn't in the map and is left alone.
+    """
+    mapping = _reverse_map(previous)
+    if not mapping:
+        return
+    _retheme_tree(widget, mapping)
+
+
+def _retheme_tree(widget: tk.Misc, mapping: dict[str, str]) -> None:
+    updates: dict[str, str] = {}
+    for option in _WIDGET_COLOR_OPTIONS:
+        try:
+            value = str(widget.cget(option))
+        except (tk.TclError, TypeError, AttributeError):
+            continue
+        new = mapping.get(value.lower())
+        if new is not None and new.lower() != value.lower():
+            updates[option] = new
+    if updates:
+        try:
+            widget.configure(**updates)
+        except tk.TclError:
+            pass
+    try:
+        children = widget.winfo_children()
+    except tk.TclError:
+        return
+    for child in children:
+        _retheme_tree(child, mapping)
 
 
 def paint_gradient(

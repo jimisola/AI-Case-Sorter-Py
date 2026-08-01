@@ -309,9 +309,10 @@ between them from the Run tab's template dropdown.
 
 ## 5. The UI (`sorter/ui/`)
 
-`MainWindow` (`app.py`) is the shell: gradient title bar, a `ttk.Notebook` of
-tabs (each wrapped in a `ScrollableFrame` for small displays), and a status bar
-with connection indicators + sign-in. It owns the `EventBus`, `SerialBroker`,
+`MainWindow` (`app.py`) is the shell: gradient title bar (with the theme picker
+parked at its right edge), a `ttk.Notebook` of tabs (each wrapped in a
+`ScrollableFrame` for small displays), and a status bar with connection
+indicators + sign-in. It owns the `EventBus`, `SerialBroker`,
 `Camera`, `RunController`, and `AuthManager`, auto-connects serial/camera on
 startup, and runs the bus drain loop. `run_worker(fn, on_done, on_error)` is the
 standard helper for offloading blocking work to a thread and marshaling the
@@ -344,13 +345,31 @@ image browser/reclassify/delete), `dialog_share_model` (publish to community),
 `dialog_update` (release notes → download progress → "Restart to update"; §7).
 
 ### Shared UI infrastructure
-- **`theme.py`** — `PALETTE`, `apply_theme(root)` (fonts + ttk styles, single
-  source of truth), `paint_gradient`. The chrome (window, panels, cards,
-  inputs, borders, text, focus/selection tints) is **neutral grayscale**;
-  hue is reserved for action buttons (`action*` green = primary/go,
-  `update*` blue = refresh something installed, `danger*` red =
-  stop/destructive) and status text. Keep new surfaces gray —
-  the colored buttons read as meaningful only because nothing else does.
+- **`theme.py`** — `THEMES`, the live `PALETTE`, `apply_theme(root, theme=…)`
+  (fonts + ttk styles, single source of truth), `retheme_widgets`,
+  `paint_gradient`. **Every color in the app comes from here.**
+  - **Themes.** `THEMES` maps a display name to a full palette; the user picks
+    one from the dropdown in the title bar and it's stored in the `ui.theme`
+    setting (`theme.SETTING_THEME`). Ships with Dark (the original), Light,
+    Sepia, Midnight Blue, and Gothic. **The role of each key is fixed; only
+    its color changes per theme** — a new theme is a copy of `_DARK` with new
+    values, and it must define exactly the same keys.
+  - **Switching is live**, so it must stay that way: `apply_theme` reloads the
+    ttk styles (which every ttk widget follows on its own) and
+    `retheme_widgets` walks the widget tree translating the colors baked into
+    classic Tk widgets (`tk.Label`, `tk.Canvas`, `tk.Text`) at construction.
+    That translation is by color value, which is why no two roles inside one
+    theme may share a color — except `success`/`error`, which must equal
+    `action`/`danger` (`tests/test_theme.py` enforces both rules).
+  - **`PALETTE` is mutated in place** on a switch. Read it at call time
+    (`PALETTE["bg_card"]`); never copy a color into a module-level constant.
+  - **Hue is meaning.** Dark keeps its chrome (window, panels, cards, inputs,
+    borders, text, focus/selection tints) **neutral grayscale**, reserving hue
+    for action buttons (`action*` green = primary/go, `update*` blue = refresh
+    something installed, `danger*` red = stop/destructive) and status text.
+    The tinted themes keep the same discipline internally: their surfaces are
+    one low-saturation family so the action buttons stay the most saturated
+    thing on screen. Don't add a saturated surface to any theme.
 - **`widgets.py`** — `ScrollableFrame`, `ImagePanel` (shows BGR numpy frames),
   `NumericField`, labeled-entry/button-row helpers.
 - **`monitor.py`** — detachable history window: ring buffer of recent
