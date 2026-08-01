@@ -79,6 +79,17 @@ class MainWindow:
             status_bar, textvariable=self.signin_var, command=self._on_signin_click,
         )
         self.signin_button.pack(side=tk.RIGHT, padx=12, pady=4)
+        # Update affordance — created here but not packed: it appears only once
+        # a check finds a newer release, or an update is staged and waiting for
+        # a restart. Blue "update" hue per theme.py's colour rules.
+        self._update_status_bar = status_bar
+        self._update_info: Any | None = None
+        self._pending_update: Any | None = None
+        self.update_button_var = tk.StringVar(value="Update available")
+        self.update_button = ttk.Button(
+            status_bar, textvariable=self.update_button_var,
+            style="Update.TButton", command=self.open_update_dialog,
+        )
         # Pack serial first so it ends up rightmost; camera sits to its left.
         # Each indicator is a [dot][text] pair grouped in a sub-frame so the
         # dot stays glued to its label when the bar resizes.
@@ -149,6 +160,91 @@ class MainWindow:
         # race with that probe trying to open the same device.
         # Auto-connect to the board once the UI is on screen.
         self.root.after(200, self._auto_connect_serial)
+        # Update check runs well after startup so a slow or blocked network
+        # never delays the window appearing or the board connecting.
+        self.root.after(2500, self._check_for_updates_on_startup)
+
+    # ----- software updates ---------------------------------------------------
+
+    def _check_for_updates_on_startup(self) -> None:
+        """Silent startup check. Never surfaces an error — only good news."""
+        from .. import updater
+
+        try:
+            # An already-staged update outranks a fresh check: what the user
+            # needs is the restart prompt, not another download.
+            pending = updater.pending_update()
+        except Exception:
+            pending = None
+        if pending is not None:
+            self.note_pending_update(pending)
+            return
+
+        if updater.checks_disabled() or not self._auto_check_enabled():
+            return
+        self.check_for_updates(silent=True)
+
+    def _auto_check_enabled(self) -> bool:
+        if self.db is None:
+            return True
+        try:
+            from ..repository import SettingsRepo
+            from ..updater import SETTING_CHECK_ON_STARTUP
+
+            return bool(SettingsRepo(self.db).get(SETTING_CHECK_ON_STARTUP, True))
+        except Exception:
+            return True
+
+    def check_for_updates(self, *, silent: bool = True) -> None:
+        """Look for a newer release on a worker thread.
+
+        `silent=True` (startup) only reveals the status-bar button on a hit;
+        `silent=False` (explicit request) always opens the dialog so the user
+        gets an answer either way.
+        """
+        from .. import updater
+
+        def _work() -> Any:
+            return updater.check_for_update()
+
+        def _done(info: Any) -> None:
+            self._update_info = info
+            if info is not None:
+                self._show_update_button(f"Update to {info.version}")
+            elif not silent:
+                self.open_update_dialog()
+
+        def _error(exc: Exception) -> None:
+            if not silent:
+                self.set_status(f"Update check failed: {exc}")
+
+        if not silent:
+            self.set_status("Checking for updates…")
+        self.run_worker(_work, on_done=_done, on_error=_error)
+
+    def note_pending_update(self, pending: Any) -> None:
+        """Record a staged update and switch the button to the restart prompt."""
+        self._pending_update = pending
+        self._show_update_button("Restart to update")
+
+    def _show_update_button(self, label: str) -> None:
+        self.update_button_var.set(label)
+        try:
+            # `winfo_manager()` reports the geometry manager ("" until packed).
+            # Deliberately not `winfo_ismapped()`, which is false whenever the
+            # window is withdrawn or minimised and would re-pack every call.
+            if not self.update_button.winfo_manager():
+                self.update_button.pack(side=tk.RIGHT, padx=(0, 4), pady=4)
+        except tk.TclError:
+            pass
+
+    def open_update_dialog(self) -> None:
+        from .dialog_update import UpdateDialog
+
+        UpdateDialog(
+            self.root, info=self._update_info, app=self,
+            pending=self._pending_update,
+        )
 
     # ----- status -------------------------------------------------------------
 

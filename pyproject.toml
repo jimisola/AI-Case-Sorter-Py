@@ -1,7 +1,9 @@
 [project]
 name = "ai-case-sorter-py"
-version = "0.1.0"
-description = "Cross-platform desktop app that sorts spent brass cartridge casings by headstamp using a camera, an image classifier, and a serial-connected sorting machine."
+# Single-sourced from sorter/__init__.py so the packaged version, the version
+# the in-app updater compares against, and the release tag can't drift apart.
+dynamic = ["version"]
+description ="Cross-platform desktop app that sorts spent brass cartridge casings by headstamp using a camera, an image classifier, and a serial-connected sorting machine."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "GPL-3.0-or-later" }
@@ -45,3 +47,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["sorter", "sorter.ui", "sorter.training"]
+
+[tool.setuptools.dynamic]
+version = { attr = "sorter.__version__" }

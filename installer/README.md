@@ -1,0 +1,73 @@
+# Windows installer
+
+For people who just want to run the app — no git, no Python, no terminal.
+
+## For users
+
+1. Download **`install-windows.bat`** and **`install-windows.ps1`** into the
+   same folder (or grab them from a release archive).
+2. Double-click `install-windows.bat`.
+
+It installs to `%LOCALAPPDATA%\Programs\CaseSorter` (per-user, no admin
+rights) and adds a Start Menu entry. First launch installs the Python
+dependencies and takes a few minutes; after that the app starts immediately.
+
+**Updates are handled inside the app** — the status bar shows *Update
+available* when there's a new release, and *Restart to update* once it has
+downloaded. There's no need to re-run this installer, though re-running it is
+a safe way to repair a broken install.
+
+## What it does
+
+| Step | Detail |
+|---|---|
+| Python | Uses an existing Python 3.10+ **with Tcl/Tk** if one is present. Otherwise installs one via `winget`, falling back to a silent per-user python.org install. |
+| App | Downloads the latest GitHub release ZIP over HTTPS and extracts it. **No git.** |
+| Launch | Hands off to `start.bat`, which owns the virtualenv and `pip install`. |
+
+## Where things live
+
+```
+%LOCALAPPDATA%\Programs\CaseSorter\   ← the app (replaced by updates)
+%LOCALAPPDATA%\CaseSorter\            ← your data (never touched by updates)
+    ├── config\casesorter.db
+    ├── models\<id>\...
+    └── updates\                      ← staged update, pending restart
+```
+
+Keeping data out of the app folder is what makes the in-app updater safe: it
+overwrites the app directory, and there is nothing of yours in it. An install
+that predates this layout is migrated automatically on first run.
+
+## Options
+
+```powershell
+# Install somewhere else
+powershell -ExecutionPolicy Bypass -File install-windows.ps1 -InstallDir D:\CaseSorter
+
+# Pin a specific release
+powershell -ExecutionPolicy Bypass -File install-windows.ps1 -Version v0.2.0
+
+# Install without launching
+powershell -ExecutionPolicy Bypass -File install-windows.ps1 -NoLaunch
+```
+
+## Portable installs
+
+Drop an empty file named `portable.txt` next to `main.py` and the app keeps
+its data in `<app>\data` instead of `%LOCALAPPDATA%`, for USB-stick or
+self-contained use. The updater still works — it just won't be able to rely
+on your data being outside the app folder, so it leaves `data\` alone
+explicitly.
+
+## Notes for maintainers
+
+- The installer is unsigned, so SmartScreen will warn on first run. Signing
+  (Azure Trusted Signing, or an OV/EV certificate) is the fix; until then,
+  expect a "More info → Run anyway" step.
+- `casesorter.ico` in this folder is picked up as the shortcut icon if
+  present. It isn't in the repo yet — drop one in and shortcuts will use it.
+- The updater reads `/releases/latest`, which excludes drafts and
+  pre-releases, so tagging a pre-release won't push it to stable users.
+- Bump `__version__` in `sorter/__init__.py` in the same commit you tag a
+  release — that value is what the updater compares against the tag.

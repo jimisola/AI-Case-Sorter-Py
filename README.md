@@ -86,6 +86,26 @@ The app can predict a headstamp in one of two modes:
 
 ## Install & run
 
+### Windows — just want to use it
+
+No git, no Python, no terminal. Download **`install-windows.bat`** and
+**`install-windows.ps1`** from [`installer/`](installer/) into the same folder
+and double-click the `.bat`.
+
+It installs Python if you don't have it, puts the app in
+`%LOCALAPPDATA%\Programs\CaseSorter` (per-user — no admin rights), and adds a
+Start Menu entry. First launch installs dependencies and takes a few minutes.
+
+**Updates happen inside the app.** When a new release is out, the status bar
+shows *Update available*; once it has downloaded it changes to *Restart to
+update*, and the update is applied the next time you start. You never need to
+re-run the installer. Full details in [`installer/README.md`](installer/README.md).
+
+> The installer is unsigned, so Windows SmartScreen will warn the first time.
+> Choose **More info → Run anyway**.
+
+### From source
+
 The launch scripts create a virtual environment and install dependencies on
 first run.
 
@@ -139,15 +159,42 @@ pip install ".[ml]"        # torch + torchvision
 
 ## Where your data lives
 
-Everything the app writes lives under `data/` next to `main.py` (override with
-the `CASESORTER_DATA_DIR` environment variable). Delete the folder to reset all
-state. It is **gitignored** and never committed.
+Everything the app writes — trained models, training images, settings — lives
+in one folder, **outside** the app directory:
+
+| Platform | Location |
+|---|---|
+| Windows | `%LOCALAPPDATA%\CaseSorter` |
+| Linux   | `~/.local/share/CaseSorter` (or `$XDG_DATA_HOME/CaseSorter`) |
+| macOS   | `~/Library/Application Support/CaseSorter` |
 
 ```
-data/
+<data folder>/
 ├── config/   casesorter.db (settings/models/headstamps) + msal_cache.bin (token cache)
-└── models/<id>/  images · run_images · feedback_images · reports · trainedmodel
+├── models/<id>/  images · run_images · feedback_images · reports · trainedmodel
+└── updates/  staged app update, applied on next launch
 ```
+
+Keeping it separate is what makes updating safe — the updater replaces the app
+folder, and nothing of yours is in it. Delete the folder to reset all state.
+
+**Upgrading from an older version?** If your data is still in `data/` next to
+`main.py`, it's moved to the new location automatically the first time you run
+the app. Nothing to do.
+
+**Overrides:**
+- Set `CASESORTER_DATA_DIR` to put the data anywhere you like.
+- Create an empty `portable.txt` next to `main.py` to keep data in `<app>/data`
+  instead — for USB-stick or fully self-contained installs.
+
+### Updating
+
+- **Installed on Windows via the installer:** the app tells you when an update
+  is available and installs it on the next restart.
+- **Running from a git checkout:** `git pull` as usual. The in-app updater is
+  still available, but a source checkout is normally managed with git.
+- Disable update checks entirely with `CASESORTER_UPDATE_DISABLED=1`, or the
+  checkbox in the update dialog.
 
 ---
 
