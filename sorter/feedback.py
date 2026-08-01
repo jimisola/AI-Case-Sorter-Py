@@ -19,14 +19,20 @@ deleted rather than retained. There is no durable cross-session retry queue.
 
 The effective floor is ``max(50, publisher_floor)`` and upload is a SAS
 round-trip (request ticket -> PUT blob -> complete).
+
+A prediction is captured for one of two independent reasons: its confidence
+fell below the publisher's floor (the original rule), or its label is on the
+model's **wish list** — the classifications the publisher's model is short of
+training images for, fetched once at run start. See ``set_wish_list``.
 """
 from __future__ import annotations
 
 import os
 import sys
+import threading
 import traceback
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import numpy as np
 
@@ -39,6 +45,13 @@ from .training.dataset import parse_feedback_filename, save_feedback_image
 # Floor on the publisher's floor: even if a publisher set a very low
 # threshold, anything under 50% confidence is worth moderating.
 MIN_EFFECTIVE_FLOOR = 50
+
+# Wish-list capture ignores confidence, so a wished headstamp that happens to
+# dominate a batch would otherwise upload every single case. Cap how many
+# images one run collects per classification via the wish list. The
+# below-confidence rule is unaffected — it keeps its original unbounded
+# behavior.
+MAX_WISH_LIST_CAPTURES_PER_LABEL = 40
 
 
 def _debug_enabled() -> bool:
@@ -68,17 +81,121 @@ def is_feedback_model(model: Model | None) -> bool:
 class FeedbackService:
     def __init__(self, db: Any) -> None:
         self.db = db
+        # Wish list for the run in progress: the model it belongs to, the
+        # wanted classifications (lowercased for case-insensitive matching,
+        # as the server compares them), and how many images each has already
+        # contributed this run. Written from the UI thread at run start and
+        # read/updated from the run thread, so all access is under the lock.
+        self._wish_lock = threading.Lock()
+        self._wish_model_id: int | None = None
+        self._wish_list: set[str] = set()
+        self._wish_counts: dict[str, int] = {}
+
+    # ----- wish list ----------------------------------------------------------
+
+    def set_wish_list(self, model_id: int | None, names: Iterable[str]) -> None:
+        """Install the classifications this model wants more images of.
+
+        Bound to ``model_id`` so a mid-session model switch can never apply one
+        model's list to another. Resets the per-classification counters, so
+        every run starts with a fresh quota.
+        """
+        cleaned = {n.strip().lower() for n in (names or ()) if n and n.strip()}
+        with self._wish_lock:
+            self._wish_model_id = model_id if cleaned else None
+            self._wish_list = cleaned
+            self._wish_counts = {}
+        debug_log(f"wish list for model {model_id}: {sorted(cleaned) or '(empty)'}")
+
+    def clear_wish_list(self) -> None:
+        self.set_wish_list(None, ())
+
+    def wish_list(self) -> list[str]:
+        """The wanted classifications currently installed (sorted, lowercased)."""
+        with self._wish_lock:
+            return sorted(self._wish_list)
+
+    def refresh_wish_list(self, model: Model | None, *, auth: Any) -> list[str]:
+        """Fetch ``model``'s wish list from the community API and install it.
+
+        Blocking (one HTTPS round-trip) — call it from a worker thread, never
+        from the run loop. Fails open and never raises: a model that isn't a
+        feedback-enabled community model, a signed-out user, or any network /
+        API failure installs an empty list, i.e. plain confidence-only feedback.
+
+        The ``is_feedback_model`` gate matters beyond saving a call: it keeps
+        the auth path untouched for users who have a community model but left
+        the feedback loop off.
+        """
+        names: list[str] = []
+        if not is_feedback_model(model) or auth is None:
+            debug_log(
+                "wish list: not fetching "
+                f"(feedback_model={is_feedback_model(model)}, auth={auth is not None})"
+            )
+        else:
+            try:
+                # Lazy import: the capture path carries no requests/msal dependency.
+                from .community_api import CommunityApi
+
+                names = CommunityApi(auth=auth).fetch_wish_list(model.community_model_uid)
+            except Exception:
+                debug_log("wish list fetch FAILED:\n" + traceback.format_exc())
+                names = []
+        self.set_wish_list(model.id if model is not None else None, names)
+        return names
+
+    def _claim_wish_capture(self, model: Model | None, label: str) -> bool:
+        """Consume one wish-list slot for ``label``.
+
+        True when the label is on the current model's wish list and hasn't yet
+        hit ``MAX_WISH_LIST_CAPTURES_PER_LABEL`` for this run — and in that case
+        the quota is spent, so this must only be called when the image really
+        is about to be staged.
+        """
+        key = (label or "").strip().lower()
+        if model is None or not key:
+            return False
+        with self._wish_lock:
+            if model.id != self._wish_model_id or key not in self._wish_list:
+                return False
+            used = self._wish_counts.get(key, 0)
+            if used >= MAX_WISH_LIST_CAPTURES_PER_LABEL:
+                debug_log(
+                    f"wish list: {label!r} already at the per-run cap "
+                    f"({MAX_WISH_LIST_CAPTURES_PER_LABEL}) — not capturing"
+                )
+                return False
+            self._wish_counts[key] = used + 1
+        return True
 
     # ----- policy -------------------------------------------------------------
 
     def effective_floor(self, model: Model) -> int:
         return max(MIN_EFFECTIVE_FLOOR, int(model.feedback_loop_confidence_floor))
 
-    def should_capture(self, model: Model | None, confidence: float) -> bool:
-        """Capture below-floor predictions on feedback-enabled community models.
+    def should_capture(
+        self,
+        model: Model | None,
+        confidence: float,
+        label: str = "",
+        *,
+        wish_list: bool = False,
+    ) -> bool:
+        """Capture this prediction for the feedback loop?
 
-        Confidence is a 0-100 percentage; ``-1`` (unknown — e.g. an HTTP
-        backend returned no confidence) is never captured.
+        Two independent reasons, checked in that order:
+
+        1. **Confidence** — below the publisher's effective floor. Confidence
+           is a 0-100 percentage; ``-1`` (unknown — e.g. an HTTP backend
+           returned no confidence) never satisfies this rule.
+        2. **Wish list** — ``label`` is a classification the model is short of
+           images for, regardless of confidence. Only offered during a
+           continuous run (``wish_list=True``; a Manual Feed keeps
+           confidence-only behavior) and capped per classification per run.
+
+        Checking confidence first means a below-floor prediction of a wished
+        headstamp is captured as it always was, without spending wish quota.
         """
         if not is_feedback_model(model):
             debug_log(
@@ -87,16 +204,24 @@ class FeedbackService:
                 f"community_uid={getattr(model, 'community_model_uid', None)!r})"
             )
             return False
-        if confidence is None or confidence < 0:
-            debug_log(f"should_capture=False: unknown confidence ({confidence!r})")
-            return False
         floor = self.effective_floor(model)
-        decision = float(confidence) < floor
+        if confidence is None or confidence < 0:
+            debug_log(f"unknown confidence ({confidence!r}) — confidence rule skipped")
+        elif float(confidence) < floor:
+            debug_log(
+                f"should_capture=True: confidence={confidence} < effective_floor={floor} "
+                f"(publisher_floor={model.feedback_loop_confidence_floor}, "
+                f"mode={model.feedback_loop_upload_mode})"
+            )
+            return True
+        if wish_list and self._claim_wish_capture(model, label):
+            debug_log(f"should_capture=True: {label!r} is on the model's wish list")
+            return True
         debug_log(
-            f"should_capture={decision}: confidence={confidence} vs effective_floor={floor} "
-            f"(publisher_floor={model.feedback_loop_confidence_floor}, mode={model.feedback_loop_upload_mode})"
+            f"should_capture=False: confidence={confidence} vs effective_floor={floor}, "
+            f"label={label!r} not wanted (wish_list_checked={wish_list})"
         )
-        return decision
+        return False
 
     # ----- staging folder (the queue) ----------------------------------------
 

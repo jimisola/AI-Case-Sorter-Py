@@ -53,18 +53,24 @@ class _FakeSession:
         self.get_calls: list[tuple[str, dict[str, str]]] = []
         self.post_calls: list[tuple[str, Any]] = []
         self.put_calls: list[tuple[str, dict[str, str]]] = []
+        # `verify` as passed per request — see the note in CommunityApi.__init__
+        # on why it must not live on the session.
+        self.verify_args: list = []
         self.next_responses: dict[str, _FakeResp] = {}
 
     def get(self, url: str, headers=None, timeout=None, **kw) -> _FakeResp:
         self.get_calls.append((url, headers or {}))
+        self.verify_args.append(kw.get("verify"))
         return self.next_responses.get(url, _FakeResp(404))
 
-    def post(self, url: str, headers=None, json=None, timeout=None) -> _FakeResp:
+    def post(self, url: str, headers=None, json=None, timeout=None, **kw) -> _FakeResp:
         self.post_calls.append((url, json))
+        self.verify_args.append(kw.get("verify"))
         return self.next_responses.get(url, _FakeResp(404))
 
     def put(self, url: str, data=None, headers=None, timeout=None, **kw) -> _FakeResp:
         self.put_calls.append((url, headers or {}))
+        self.verify_args.append(kw.get("verify"))
         # Drain the body the way requests would: read() a file-like (drives the
         # progress callback) or iterate a generator.
         if hasattr(data, "read"):
@@ -95,7 +101,9 @@ class _FakeAuth(AuthManager):
 
 
 def _api(session: _FakeSession) -> CommunityApi:
-    return CommunityApi(auth=_FakeAuth(), session=session)
+    # base_url pinned so these URL assertions don't depend on the developer's
+    # CASESORTER_API_BASE; the override itself is covered below.
+    return CommunityApi(auth=_FakeAuth(), session=session, base_url=API_BASE)
 
 
 def test_authorization_header_added(tmp_path: Path) -> None:
@@ -450,3 +458,68 @@ def test_share_model_raises_when_file_request_refused(tmp_path: Path) -> None:
             zip_path=zip_path, manifest_path=tmp_path / "m.json",
             model_info={},
         )
+
+
+# ----- wish list (model-balancing feedback) ----------------------------------
+
+
+def _wish_url(uid: str = "uid-1") -> str:
+    return f"{API_BASE}/Models/FetchWishList?communityModelId={uid}"
+
+
+def test_fetch_wish_list_returns_names() -> None:
+    s = _FakeSession()
+    s.next_responses[_wish_url()] = _FakeResp(json_data=["FC", "R-P", "WIN 9MM"])
+    assert _api(s).fetch_wish_list("uid-1") == ["FC", "R-P", "WIN 9MM"]
+    assert s.get_calls[0][1].get("Authorization") == "Bearer TOKEN"
+
+
+def test_fetch_wish_list_url_encodes_uid() -> None:
+    s = _FakeSession()
+    url = f"{API_BASE}/Models/FetchWishList?communityModelId=a+b"
+    s.next_responses[url] = _FakeResp(json_data=[])
+    _api(s).fetch_wish_list("a b")
+    assert s.get_calls[0][0] == url
+
+
+def test_fetch_wish_list_drops_blank_and_non_string_entries() -> None:
+    s = _FakeSession()
+    s.next_responses[_wish_url()] = _FakeResp(json_data=["  FC  ", "", None, 7, "R-P"])
+    assert _api(s).fetch_wish_list("uid-1") == ["FC", "R-P"]
+
+
+def test_fetch_wish_list_fails_open() -> None:
+    """Every failure mode answers [] — a run is never blocked on this call."""
+    class _RaisingResp(_FakeResp):
+        def json(self) -> Any:
+            raise ValueError("not json")
+
+    class _BoomSession(_FakeSession):
+        def get(self, url, headers=None, timeout=None, **kw):
+            raise requests.exceptions.ConnectionError("offline")
+
+    assert _api(_FakeSession()).fetch_wish_list("") == []           # no UID
+    assert _api(_BoomSession()).fetch_wish_list("uid-1") == []      # network error
+
+    s = _FakeSession()
+    s.next_responses[_wish_url()] = _FakeResp(status_code=500, text="boom")
+    assert _api(s).fetch_wish_list("uid-1") == []                   # non-200
+
+    s = _FakeSession()
+    s.next_responses[_wish_url()] = _RaisingResp(text="<html>")
+    assert _api(s).fetch_wish_list("uid-1") == []                   # non-JSON body
+
+    s = _FakeSession()
+    s.next_responses[_wish_url()] = _FakeResp(json_data={"nope": 1})
+    assert _api(s).fetch_wish_list("uid-1") == []                   # wrong shape
+
+
+def test_fetch_wish_list_signed_out_returns_empty() -> None:
+    class _NoAuth(_FakeAuth):
+        def acquire_token_silent(self, scopes=None):
+            return None
+
+    s = _FakeSession()
+    api = CommunityApi(auth=_NoAuth(), session=s)
+    assert api.fetch_wish_list("uid-1") == []
+    assert s.get_calls == []

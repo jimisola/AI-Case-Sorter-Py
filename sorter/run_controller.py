@@ -224,13 +224,37 @@ class RunController:
         except Exception:
             traceback.print_exc()
 
-    def _maybe_capture_feedback(self, image_bgr, label: str, confidence: float) -> None:
-        """Stage a below-threshold prediction for the community feedback loop.
+    # ----- community feedback loop -------------------------------------------
 
-        Independent of the run confidence floor — feedback uses the publisher's
-        own threshold (``model.feedback_loop_confidence_floor``). Best-effort;
-        a failure here never interrupts a run. Posts ``feedback/queued`` so the
-        Run tab (which holds the auth token) can drive the upload.
+    def refresh_wish_list(self, *, auth: Any) -> list[str]:
+        """Fetch the active model's wish list for the run about to start.
+
+        Blocking (one HTTPS round-trip) — the UI calls this from a worker
+        thread, never from the run loop, so a slow or unreachable server can't
+        delay a run. Fails open to an empty list.
+        """
+        if self._feedback is None:
+            return []
+        model_id = self.config.settings.get_active_model_id()
+        model = ModelRepo(self.db).get(model_id) if model_id is not None else None
+        return self._feedback.refresh_wish_list(model, auth=auth)
+
+    def clear_wish_list(self) -> None:
+        """Forget the current wish list (and its per-run capture quotas)."""
+        if self._feedback is not None:
+            self._feedback.clear_wish_list()
+
+    def _maybe_capture_feedback(
+        self, image_bgr, label: str, confidence: float, *, wish_list: bool = False,
+    ) -> None:
+        """Stage a prediction for the community feedback loop.
+
+        Captured when confidence falls below the publisher's own threshold
+        (``model.feedback_loop_confidence_floor``, independent of the run
+        confidence floor) or — during a continuous run only — when the label is
+        on the model's wish list. Best-effort; a failure here never interrupts
+        a run. Posts ``feedback/queued`` so the Run tab (which holds the auth
+        token) can drive the upload.
         """
         if self._feedback is None or image_bgr is None:
             debug_log(
@@ -244,7 +268,9 @@ class RunController:
         debug_log(f"run-hook: model_id={model_id} label={label!r} confidence={confidence}")
         try:
             model = ModelRepo(self.db).get(model_id)
-            if not self._feedback.should_capture(model, confidence):
+            if not self._feedback.should_capture(
+                model, confidence, label, wish_list=wish_list,
+            ):
                 return
             if self._feedback.capture(model, image_bgr, label, confidence):
                 debug_log(
@@ -382,7 +408,8 @@ class RunController:
             result["slot"] = slot
             result["halt"] = halt
             self._maybe_store_run_image(cropped, label, above_floor)
-            self._maybe_capture_feedback(cropped, label, confidence)
+            # Continuous run: wish-list capture is in play (see _loop).
+            self._maybe_capture_feedback(cropped, label, confidence, wish_list=True)
             # Track the latest classification so a follow-up Manual feed or
             # the next continuous-run prime can route the case still queued
             # at position 5 instead of defaulting back to 0.
@@ -473,6 +500,7 @@ class RunController:
             result["slot"] = slot
             result["ok"] = True
             self._maybe_store_run_image(cropped, label, above_floor)
+            # Manual feed isn't a run: confidence-only feedback, no wish list.
             self._maybe_capture_feedback(cropped, label, confidence)
             self.bus.post(
                 "run/classified",

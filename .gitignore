@@ -1,5 +1,7 @@
 .venv/
 .installed
+.env
+data/config/.env
 __pycache__/
 *.pyc
 data/config.json

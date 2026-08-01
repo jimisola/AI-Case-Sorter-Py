@@ -6,6 +6,12 @@ the `AuthManager` on each call so we always send the freshest token.
 
 Model downloads use an Azure-blob SAS URL returned by the API. We just stream
 the URL with `requests`; no `azure-storage-blob` dependency needed.
+
+The base URL and TLS trust are developer-overridable (`CASESORTER_API_BASE`,
+`CASESORTER_API_CA_BUNDLE`, `CASESORTER_API_INSECURE` — see `appenv`) so the
+app can be pointed at a local copy of the backend. Both are resolved when a
+`CommunityApi` is constructed, not at import, so a `.env` loaded during startup
+still applies.
 """
 from __future__ import annotations
 
@@ -19,11 +25,15 @@ from urllib.parse import quote_plus
 
 import requests
 
+from . import appenv
 from .auth import API_SCOPES, AuthError, AuthManager
 from .feedback import debug_log
 
 
-API_BASE = "https://www.reloadingrecipes.com/api"
+# The production default. The URL actually used is `appenv.api_base()`, which
+# applies a CASESORTER_API_BASE override; this constant is what that falls back
+# to.
+API_BASE = appenv.DEFAULT_API_BASE
 _session = requests.Session()
 
 
@@ -221,14 +231,25 @@ class CommunityApi:
         self,
         auth: AuthManager,
         *,
-        base_url: str = API_BASE,
+        base_url: str | None = None,
         session: requests.Session | None = None,
         timeout: float = 30.0,
+        verify: bool | str | None = None,
     ) -> None:
         self.auth = auth
-        self.base_url = base_url.rstrip("/")
+        self.base_url = (base_url or appenv.api_base()).rstrip("/")
         self.session = session or _session
         self.timeout = timeout
+        # Passed to every call — including the Azure-blob URLs the API hands
+        # back, since a local backend pairs with a local blob emulator whose
+        # cert needs the same trust.
+        #
+        # It has to be per request, NOT `session.verify`: requests lets
+        # REQUESTS_CA_BUNDLE / CURL_CA_BUNDLE in the environment outrank the
+        # session attribute, so behind a corporate proxy (or any box that sets
+        # those) a session-level setting is silently ignored. A per-request
+        # value wins. Leaving it True keeps the env bundle working as before.
+        self.verify = appenv.tls_verify() if verify is None else verify
 
     # ----- helpers ------------------------------------------------------------
 
@@ -243,6 +264,7 @@ class CommunityApi:
             f"{self.base_url}{path}",
             headers=self._headers(),
             timeout=self.timeout,
+            verify=self.verify,
             **kwargs,
         )
 
@@ -252,6 +274,7 @@ class CommunityApi:
             headers={**self._headers(), "Content-Type": "application/json"},
             json=json,
             timeout=self.timeout,
+            verify=self.verify,
         )
 
     # ----- user metadata ------------------------------------------------------
@@ -323,7 +346,9 @@ class CommunityApi:
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest_path.with_suffix(dest_path.suffix + ".tmp")
 
-        with self.session.get(url, stream=True, timeout=self.timeout) as resp:
+        with self.session.get(
+            url, stream=True, timeout=self.timeout, verify=self.verify,
+        ) as resp:
             resp.raise_for_status()
             total = expected_total
             if total is None:
@@ -390,6 +415,44 @@ class CommunityApi:
         debug_log(f"  ticket: accepted={ticket.feedback_accepted} container={ticket.container_uri!r} blob={ticket.blob_path!r}")
         return ticket
 
+    def fetch_wish_list(self, community_model_uid: str) -> list[str]:
+        """Classifications this community model wants more training images for.
+
+        ``GET /Models/FetchWishList?communityModelId={uid}`` answers with a JSON
+        array of classification names (the same strings the classifier returns).
+
+        The server has no error path — an unknown or malformed UID, a disabled
+        feedback loop, no configured threshold, or an unpopulated image folder
+        all answer ``200 []``, meaning "don't collect anything extra". We extend
+        that to our side too: not signed in, a non-200, or an unparseable body
+        all return ``[]`` so the feature fails open to confidence-only feedback
+        and a run is never blocked on this call.
+        """
+        if not community_model_uid:
+            return []
+        try:
+            resp = self._get(
+                f"/Models/FetchWishList?communityModelId={quote_plus(community_model_uid)}"
+            )
+        except Exception as exc:
+            debug_log(f"GET /Models/FetchWishList failed ({exc.__class__.__name__}: {exc})")
+            return []
+        debug_log(f"GET /Models/FetchWishList -> HTTP {resp.status_code}")
+        if resp.status_code != 200:
+            debug_log(f"  non-200 body: {(resp.text or '')[:200]!r}")
+            return []
+        try:
+            data = resp.json()
+        except ValueError:
+            debug_log(f"  non-JSON body: {(resp.text or '')[:200]!r}")
+            return []
+        if not isinstance(data, list):
+            debug_log(f"  unexpected JSON shape: {type(data).__name__}")
+            return []
+        names = [item.strip() for item in data if isinstance(item, str) and item.strip()]
+        debug_log(f"  wish list ({len(names)}): {names}")
+        return names
+
     def upload_feedback_blob(
         self,
         file_path: Path | str,
@@ -409,7 +472,9 @@ class CommunityApi:
             "Content-Type": "image/jpeg",
         }
         with open(file_path, "rb") as f:
-            resp = self.session.put(url, data=f, headers=headers, timeout=self.timeout)
+            resp = self.session.put(
+                url, data=f, headers=headers, timeout=self.timeout, verify=self.verify,
+            )
         debug_log(f"PUT blob -> HTTP {resp.status_code}")
         resp.raise_for_status()
 
@@ -483,7 +548,9 @@ class CommunityApi:
         for attempt in range(max(1, retries)):
             reader = _ProgressReader(file_path, total, progress)
             try:
-                resp = self.session.put(url, data=reader, headers=headers, timeout=None)
+                resp = self.session.put(
+                    url, data=reader, headers=headers, timeout=None, verify=self.verify,
+                )
                 debug_log(f"PUT blob ({total} bytes) -> HTTP {resp.status_code}")
                 resp.raise_for_status()
                 return
