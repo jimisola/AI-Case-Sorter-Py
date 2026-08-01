@@ -362,6 +362,51 @@ def _unique_model_name(base: str, repo: ModelRepo) -> str:
     return f"{base} ({n})"
 
 
+def find_update_target(zip_path: Path | str, *, db: Any) -> Model | None:
+    """Return the installed model this archive would update in place.
+
+    ``None`` when the archive isn't a community model, or is one that isn't
+    installed yet — i.e. when importing it would create a new model.
+    """
+    info = read_manifest(zip_path).get("ModelInfo") or {}
+    uid = _g(info, "community_model_uid", "CommunityModelUID")
+    if not uid:
+        return None
+    return ModelRepo(db).find_by_community_uid(str(uid))
+
+
+def _merge_onto_installed(incoming: Model, existing: Model, *, name: str) -> Model:
+    """Fold an archive's metadata onto the row that's already installed.
+
+    The archive wins for everything that describes the model itself —
+    version, mode, preprocessing, training metadata — because after an
+    update the model has to behave like a fresh download of the same file.
+    The install wins for what belongs to this machine: the name the user
+    gave it, their feedback-loop choice, and any locally-configured API
+    credentials (the archive's are stripped on export, so taking them would
+    wipe the user's). `cartridge_id` is resolved by the caller.
+
+    Everything keyed off the model **id** — its ``images/``,
+    ``trainedmodel/``, headstamp rows and their slots, and its sorting
+    templates — survives simply because the row keeps its id.
+    """
+    incoming.id = existing.id
+    incoming.name = name
+    incoming.ai_model_config = existing.ai_model_config
+    # Overwritten during extraction if the archive ships a checkpoint; keep
+    # the installed one so an images-only archive doesn't orphan the model.
+    incoming.model_path = existing.model_path
+    # The publisher offers the feedback loop, the user opts in — an update
+    # can't opt them back in, and can't keep it on if the publisher stopped
+    # offering it.
+    incoming.feedback_loop_enabled = bool(
+        existing.feedback_loop_enabled and incoming.feedback_loop_enabled
+    )
+    if incoming.feedback_loop_enabled:
+        incoming.feedback_loop_upload_mode = existing.feedback_loop_upload_mode
+    return incoming
+
+
 def import_model(
     zip_path: Path | str,
     *,
@@ -370,15 +415,24 @@ def import_model(
     model_name_override: str | None = None,
     images_target_dir: Path | str | None = None,
     models_target_dir: Path | str | None = None,
+    update_existing: bool = True,
     progress: Callable[[int, int], None] | None = None,
 ) -> tuple[int, int]:
     """Import a model archive.
 
     Returns (cartridge_id, model_id).
 
+    An archive that carries a community UID already installed locally is an
+    **update of that model**, not a new one: with ``update_existing`` (the
+    default) the installed row is refreshed in place, so the library doesn't
+    grow a duplicate and the user keeps their slot assignments and sorting
+    templates. Pass ``update_existing=False`` to force a separate copy.
+    Use `find_update_target` to know which path an archive will take before
+    committing to it.
+
     `images_target_dir` and `models_target_dir` are optional overrides; by
     default they resolve to ``paths.model_images_dir(id)`` and
-    ``paths.model_trained_dir(id)`` for the newly-created model.
+    ``paths.model_trained_dir(id)`` for the imported model.
     """
     cart_repo = CartridgeRepo(db)
     model_repo = ModelRepo(db)
@@ -432,16 +486,28 @@ def import_model(
             raise ValueError(f"{zip_path}: missing manifest.json")
         manifest = json.loads(zf.read(manifest_entry).decode("utf-8"))
 
-        cart_name = cartridge_name_override or manifest.get("CartridgeName") or "Imported"
-        cart = cart_repo.get_or_create(cart_name)
-
         model = model_from_export_dict(manifest.get("ModelInfo") or {})
-        model.cartridge_id = cart.id
         if model.model_mode not in SUPPORTED_MODEL_MODES:
             model.model_mode = "convnext_tiny"
 
-        desired_name = model_name_override or model.name or "Imported"
-        model.name = _unique_model_name(desired_name, model_repo)
+        # Is this archive an update of something already installed?
+        existing = (
+            model_repo.find_by_community_uid(model.community_model_uid)
+            if update_existing and model.community_model_uid
+            else None
+        )
+
+        # Resolve the cartridge. An in-place update stays where the user
+        # filed it, so we don't move the model in the library — and don't
+        # strand a new empty cartridge either — unless the caller asked for
+        # a specific one.
+        if existing is not None and not cartridge_name_override:
+            cart_id = existing.cartridge_id
+        else:
+            cart_name = cartridge_name_override or manifest.get("CartridgeName") or "Imported"
+            cart_id = cart_repo.get_or_create(cart_name).id
+        model.cartridge_id = cart_id
+
         # Reset training metadata unless we're replacing a community model.
         if not model.community_model_uid:
             model.last_training_date = None
@@ -449,7 +515,15 @@ def import_model(
             model.trained_image_count = 0
             model.training_confusion_table = None
 
-        saved = model_repo.create(model)
+        if existing is not None:
+            saved = _merge_onto_installed(
+                model, existing, name=model_name_override or existing.name,
+            )
+            model_repo.update(saved)
+        else:
+            desired_name = model_name_override or model.name or "Imported"
+            model.name = _unique_model_name(desired_name, model_repo)
+            saved = model_repo.create(model)
 
         # Decide target directories (per-model `<id>/images` and
         # `<id>/trainedmodel` under `data/models/`).
@@ -491,7 +565,7 @@ def import_model(
             if progress:
                 progress(i, progress_total)
 
-        return cart.id, saved.id
+        return saved.cartridge_id, saved.id
 
 
 def _extract_to(zf: zipfile.ZipFile, entry: zipfile.ZipInfo, dest: Path) -> None:

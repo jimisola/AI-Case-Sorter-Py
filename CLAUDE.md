@@ -257,6 +257,12 @@ between them from the Run tab's template dropdown.
   format (`manifest.json` + `model/<id>.pth` + `images/*`). Accepts both
   snake_case and WinForms PascalCase manifest keys. Import **rejects `..`
   traversal entries** and only uses entry basenames; export strips paths/secrets.
+  An archive whose `community_model_uid` is already installed is an **update**:
+  `import_model` refreshes that row in place (same model id → same directories,
+  headstamp slots, and sorting templates) instead of creating a duplicate, and
+  keeps the local name / feedback-loop opt-in / AI config. `find_update_target`
+  tells a caller which path an archive will take; `update_existing=False`
+  forces a separate copy.
 
 ### Community / cloud
 - **`auth.py`** — `AuthManager`: MSAL `PublicClientApplication` against Azure AD

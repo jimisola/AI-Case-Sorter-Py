@@ -358,12 +358,18 @@ class CommunityTab(ttk.Frame):
 
     def _download(self, info: ModelInfo) -> None:
         name = info.model_name or info.model_uid or "model"
+        # An update refreshes the installed model in place (import_model
+        # matches on the community UID), so the library doesn't gain a
+        # second copy and the user's slot assignments and sorting templates
+        # carry over. Remembered here, on the UI thread, for the messaging.
+        is_update = self._installed_state(info) == "update"
         if not messagebox.askyesno(
             "Download model — security notice",
             f"\"{name}\" is a community-published model. Models are loaded with "
             "PyTorch and can execute code embedded in the file, so only download "
             "models from authors you trust.\n\n"
-            "Download and import this model?",
+            + ("Download and install this update?" if is_update
+               else "Download and import this model?"),
             icon="warning",
             default="no",
             parent=self,
@@ -424,14 +430,19 @@ class CommunityTab(ttk.Frame):
                             f"Importing {name}: {pct}% ({step} / {total} files)"
                         )
 
-                return import_model(
+                result = import_model(
                     zip_path, db=self.db, progress=_import_progress,
                 )
+                self._record_installed_version(result[1], info)
+                return result
 
         def _ok(result):
             _cart_id, mid = result
-            self._post_progress(f"Imported {name}.")
-            self._notify_import(mid)
+            self._post_progress(
+                f"Updated {name} to v{info.model_version}." if is_update
+                else f"Imported {name}."
+            )
+            self._notify_import(mid, updated=is_update)
             models_tab = getattr(self.app, "models_tab", None)
             if models_tab is not None:
                 models_tab.refresh()
@@ -443,10 +454,38 @@ class CommunityTab(ttk.Frame):
 
         self.app.run_worker(_work, on_done=_ok, on_error=_fail)
 
-    def _notify_import(self, model_id: int) -> None:
+    def _record_installed_version(self, model_id: int, info: ModelInfo) -> None:
+        """Stamp the server's version onto the freshly-installed model.
+
+        The card's Download / Update / Already Installed state compares the
+        server's `model_version` against the local row. The archive's own
+        manifest is what import writes, and it can lag what the catalogue
+        advertises — which would leave a just-installed model still showing
+        "Update Model". The bytes came from this catalogue entry, so its
+        version is the authoritative one to record.
+
+        Runs on the download worker thread; DB access is serialized by the
+        Database lock.
+        """
+        repo = ModelRepo(self.db)
+        model = repo.get(model_id)
+        if model is None or int(info.model_version) <= int(model.model_version):
+            return
+        model.model_version = int(info.model_version)
+        repo.update(model)
+
+    def _notify_import(self, model_id: int, *, updated: bool = False) -> None:
         """Post-import dialog. Community models with the feedback loop enabled
         get the parity notice (threshold + how to opt out); others get the
         plain confirmation."""
+        if updated:
+            messagebox.showinfo(
+                "Update complete",
+                "The installed model was updated in place — your slot "
+                "assignments and sorting templates were kept.",
+                parent=self,
+            )
+            return
         model = ModelRepo(self.db).get(model_id)
         if model is not None and model.feedback_loop_enabled and model.community_model_uid:
             messagebox.showinfo(

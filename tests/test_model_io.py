@@ -11,6 +11,7 @@ from sorter.db import Database
 from sorter.model_io import (
     ExportMode,
     export_model,
+    find_update_target,
     import_model,
     model_from_export_dict,
     read_manifest,
@@ -442,3 +443,161 @@ def test_import_rejects_arbitrary_model_zip(tmp_path: Path) -> None:
             images_target_dir=tmp_path / "imgs",
             models_target_dir=tmp_path / "mods",
         )
+
+
+# ----- community model updates -------------------------------------------------
+
+
+def _community_zip(
+    path: Path,
+    *,
+    uid: str = "comm-uid-1",
+    version: int = 1,
+    name: str = "Community 9mm",
+    headstamps: tuple[str, ...] = ("FC", "WIN"),
+    checkpoint: bytes = b"CHECKPOINT-V1",
+) -> Path:
+    """A community-published archive: the shape `import_model` sees on update."""
+    manifest = {
+        "ModelName": name,
+        "CartridgeName": "9mm",
+        "Headstamps": list(headstamps),
+        "ExportMode": "ModelOnly",
+        "ModelInfo": {
+            "name": name,
+            "model_mode": "convnext_tiny",
+            "community_model_uid": uid,
+            "model_version": version,
+            "trained_image_count": 100 * version,
+            "feedback_loop_enabled": True,
+            "feedback_loop_upload_mode": "Instant",
+        },
+    }
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(manifest))
+        zf.writestr("model/trainedmodel.zip", checkpoint)
+    return path
+
+
+def test_community_update_replaces_model_in_place(tmp_path: Path) -> None:
+    """A newer archive of an installed community model must refresh that model,
+    not add a second copy to the library — which is what leaves the Community
+    tab still offering the update after it has been installed."""
+    db = _seed_db(tmp_path)
+    mods = tmp_path / "mods"
+    before = len(ModelRepo(db).list())
+
+    _, first_id = import_model(
+        _community_zip(tmp_path / "v1.zip"),
+        db=db, images_target_dir=tmp_path / "imgs", models_target_dir=mods,
+    )
+    _, second_id = import_model(
+        _community_zip(
+            tmp_path / "v2.zip", version=2,
+            headstamps=("FC", "WIN", "RP"), checkpoint=b"CHECKPOINT-V2",
+        ),
+        db=db, images_target_dir=tmp_path / "imgs", models_target_dir=mods,
+    )
+
+    assert second_id == first_id
+    assert len(ModelRepo(db).list()) == before + 1
+
+    updated = ModelRepo(db).get(first_id)
+    assert updated.model_version == 2
+    assert updated.trained_image_count == 200
+    # The checkpoint on disk is the new one, at the same path.
+    assert (mods / f"{first_id}.pth").read_bytes() == b"CHECKPOINT-V2"
+    assert updated.model_path == str(mods / f"{first_id}.pth")
+    # New classifications from the update land alongside the existing ones.
+    assert sorted(h.name for h in HeadstampRepo(db).list_for_model(first_id)) == [
+        "FC", "RP", "WIN",
+    ]
+
+
+def test_community_update_keeps_slots_and_templates(tmp_path: Path) -> None:
+    """Slot assignments and sorting templates belong to the user, not the
+    publisher: an in-place update must leave both untouched."""
+    from sorter.config import Config
+
+    db = _seed_db(tmp_path)
+    _, model_id = import_model(
+        _community_zip(tmp_path / "v1.zip"),
+        db=db, images_target_dir=tmp_path / "imgs", models_target_dir=tmp_path / "mods",
+    )
+
+    SettingsRepo(db).set_active_model_id(model_id)
+    config = Config(db).load()
+    config.set_headstamp_slot("FC", 3)
+    config.set_headstamp_slot("WIN", 5)
+    config.create_slot_template("Range brass")
+    template_names = [t.name for t in config.list_slot_templates()]
+
+    import_model(
+        _community_zip(tmp_path / "v2.zip", version=2, headstamps=("FC", "WIN", "RP")),
+        db=db, images_target_dir=tmp_path / "imgs", models_target_dir=tmp_path / "mods",
+    )
+
+    assert SettingsRepo(db).get_active_model_id() == model_id
+    fresh = Config(db).load()
+    assert fresh.slot_for_headstamp("FC") == 3
+    assert fresh.slot_for_headstamp("WIN") == 5
+    assert fresh.slot_for_headstamp("RP") == 0        # new class: catch-all
+    assert [t.name for t in fresh.list_slot_templates()] == template_names
+    assert fresh.active_slot_template().name == "Range brass"
+
+
+def test_community_update_keeps_local_name_and_feedback_optout(tmp_path: Path) -> None:
+    db = _seed_db(tmp_path)
+    _, model_id = import_model(
+        _community_zip(tmp_path / "v1.zip"),
+        db=db, images_target_dir=tmp_path / "i", models_target_dir=tmp_path / "m",
+    )
+    repo = ModelRepo(db)
+    local = repo.get(model_id)
+    assert local.feedback_loop_enabled is True   # the publisher offers the loop
+    local.name = "My Range Model"                # …and the user renames it…
+    local.feedback_loop_enabled = False          # …and opts out
+    repo.update(local)
+
+    import_model(
+        _community_zip(tmp_path / "v2.zip", version=2, name="Community 9mm v2"),
+        db=db, images_target_dir=tmp_path / "i", models_target_dir=tmp_path / "m",
+    )
+
+    # An update re-offers the loop; it must not silently opt the user back in.
+    after = repo.get(model_id)
+    assert after.name == "My Range Model"
+    assert after.feedback_loop_enabled is False
+
+
+def test_import_can_force_a_separate_copy(tmp_path: Path) -> None:
+    db = _seed_db(tmp_path)
+    zip_path = _community_zip(tmp_path / "v1.zip")
+    _, first_id = import_model(
+        zip_path, db=db,
+        images_target_dir=tmp_path / "i", models_target_dir=tmp_path / "m",
+    )
+    _, second_id = import_model(
+        zip_path, db=db, update_existing=False,
+        images_target_dir=tmp_path / "i", models_target_dir=tmp_path / "m",
+    )
+    assert second_id != first_id
+    assert ModelRepo(db).get(second_id).name == "Community 9mm (2)"
+
+
+def test_find_update_target(tmp_path: Path) -> None:
+    db = _seed_db(tmp_path)
+    community = _community_zip(tmp_path / "v1.zip")
+    plain = tmp_path / "plain.zip"
+    with zipfile.ZipFile(plain, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(_import_manifest()))
+
+    assert find_update_target(community, db=db) is None      # not installed yet
+    assert find_update_target(plain, db=db) is None          # not a community model
+
+    _, model_id = import_model(
+        community, db=db,
+        images_target_dir=tmp_path / "i", models_target_dir=tmp_path / "m",
+    )
+    target = find_update_target(community, db=db)
+    assert target is not None and target.id == model_id

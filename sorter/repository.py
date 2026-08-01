@@ -99,8 +99,24 @@ class ModelRepo:
         return Model.from_row(row) if row else None
 
     def find_by_community_uid(self, uid: str) -> Model | None:
+        """The installed copy of a community model.
+
+        A library can hold more than one row for a UID — earlier versions of
+        the app imported every community update as a new model instead of
+        updating the installed one. Resolve that deterministically: the
+        active model wins (it's the one being sorted with), otherwise the
+        oldest, so an update and the Community tab's installed/update badge
+        always agree on which row they mean.
+        """
         row = self.db.conn.execute(
-            "SELECT * FROM models WHERE community_model_uid = ?", (uid,)
+            """
+            SELECT m.* FROM models m
+            LEFT JOIN settings s ON s.key = 'default_model_id'
+            WHERE m.community_model_uid = ?
+            ORDER BY (CAST(s.value AS INTEGER) = m.id) DESC, m.id ASC
+            LIMIT 1
+            """,
+            (uid,),
         ).fetchone()
         return Model.from_row(row) if row else None
 
