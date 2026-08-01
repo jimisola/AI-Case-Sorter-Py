@@ -124,3 +124,28 @@ def test_headstamps_cascade_on_model_delete(tmp_path: Path) -> None:
     HeadstampRepo(db).add(model.id, "Y")
     ModelRepo(db).delete(model.id)  # sibling keeps cartridge non-empty
     assert HeadstampRepo(db).list_for_model(model.id) == []
+
+
+def test_find_by_community_uid_prefers_the_active_duplicate(tmp_path: Path) -> None:
+    """Libraries built by older versions can hold several rows for one UID
+    (every update was imported as a new model). The lookup has to pick one
+    row deterministically — the active model, else the oldest."""
+    db = _new_db(tmp_path)
+    cart = CartridgeRepo(db).get_or_create("9mm")
+    repo = ModelRepo(db)
+    first = repo.create(Model(name="Comm", cartridge_id=cart.id,
+                              community_model_uid="uid-dup"))
+    second = repo.create(Model(name="Comm (2)", cartridge_id=cart.id,
+                               community_model_uid="uid-dup"))
+
+    # No active model: oldest wins.
+    assert repo.find_by_community_uid("uid-dup").id == first.id
+
+    # Active model wins, whichever duplicate it is.
+    settings = SettingsRepo(db)
+    settings.set_active_model_id(second.id)
+    assert repo.find_by_community_uid("uid-dup").id == second.id
+    settings.set_active_model_id(first.id)
+    assert repo.find_by_community_uid("uid-dup").id == first.id
+
+    assert repo.find_by_community_uid("nope") is None

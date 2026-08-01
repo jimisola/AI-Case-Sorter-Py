@@ -26,7 +26,7 @@ from .. import paths
 from ..config import Config
 from ..db import Database
 from ..events import EventBus
-from ..model_io import ExportMode, export_model, import_model
+from ..model_io import ExportMode, export_model, find_update_target, import_model
 from ..models import Headstamp, HeadstampParent, Model
 from ..repository import (
     CartridgeRepo,
@@ -486,12 +486,32 @@ class ModelsTab(ttk.Frame):
             parent=self,
         ):
             return
+        # An archive of a community model that's already installed updates it
+        # in place rather than adding a duplicate. Say so before we do it —
+        # it overwrites the installed checkpoint.
+        try:
+            target = find_update_target(zip_path, db=self.db)
+        except Exception:
+            target = None
+        if target is not None and not messagebox.askyesno(
+            "Update installed model?",
+            f"This archive is a copy of \"{target.name}\", which is already "
+            "installed.\n\nIt will be updated in place: its trained model is "
+            "replaced, and its slot assignments and sorting templates are kept.",
+            parent=self,
+        ):
+            return
         try:
             _cart_id, model_id = import_model(zip_path, db=self.db)
         except Exception as exc:
             messagebox.showerror("Import failed", str(exc), parent=self)
             return
-        messagebox.showinfo("Import complete", f"Imported model #{model_id}.", parent=self)
+        messagebox.showinfo(
+            "Import complete",
+            f"Updated \"{target.name}\"." if target is not None
+            else f"Imported model #{model_id}.",
+            parent=self,
+        )
         self.refresh()
 
     def _export(self, model_id: int) -> None:

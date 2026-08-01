@@ -2,8 +2,8 @@
 
 Layout:
   +-----------------------------------+-----------------+
-  | left panel (66%)                  | right panel     |
-  | +-------------------------------+ | (34%)           |
+  | left panel (takes all slack)      | right panel     |
+  | +-------------------------------+ | (300px fixed)   |
   | | SlotGrid                      | | run controls   |
   | | (flow layout)                 | | Start / Stop   |
   | |                               | | Manual feed    |
@@ -15,7 +15,9 @@ Layout:
   +-----------------------------------+-----------------+
 
 Outer split is horizontal (resizable); left side is itself a vertical
-PanedWindow so the slot-details panel can be resized.
+PanedWindow so the slot-details panel can be resized. The right panel opens
+at a fixed pixel width (RIGHT_PANEL_WIDTH) and keeps it when the window is
+resized — the left side absorbs the slack — but the sash is still draggable.
 
 Each slot card is clickable; clicking it shows that slot's details below.
 Slot 0 is the catch-all and cannot be configured — anything classified into
@@ -38,6 +40,11 @@ from .widgets import ImagePanel
 CARD_WIDTH = 240
 CARD_MIN_HEIGHT = 110
 HEADSTAMP_CELL_WIDTH = 200
+
+# Right-hand run-controls panel: opened at a fixed pixel width instead of a
+# share of the window, so the slot grid gets every extra pixel on a wide
+# screen. The sash still drags freely from there.
+RIGHT_PANEL_WIDTH = 300
 
 # Store-images dropdown: display label <-> persisted mode (see Config).
 _STORE_IMAGES_LABELS = {
@@ -734,17 +741,18 @@ class RunTab(ttk.Frame):
         self._feedback_declined_models: set[int] = set()
 
         # Outer horizontal split: left = slot grid + slot details (vertical),
-        # right = run controls. Initial sash is placed at 66% once the tab
-        # has been laid out (PanedWindow sizes itself from child requests
-        # otherwise, which doesn't honour the ratio).
+        # right = run controls. The right pane opens at RIGHT_PANEL_WIDTH
+        # pixels (placed once the tab knows its own width) and weight=0 keeps
+        # it there while the window resizes — all slack goes to the left.
         h_split = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         h_split.pack(fill=tk.BOTH, expand=True)
 
         left_pane = ttk.Frame(h_split)
         right_pane = ttk.Frame(h_split)
-        h_split.add(left_pane, weight=66)
-        h_split.add(right_pane, weight=34)
+        h_split.add(left_pane, weight=1)
+        h_split.add(right_pane, weight=0)
         self._h_split = h_split
+        self._right_pane = right_pane
         self._h_split_initialised = False
         h_split.bind("<Configure>", self._apply_initial_h_sash)
 
@@ -936,10 +944,14 @@ class RunTab(ttk.Frame):
 
         ttk.Label(controls, text="Last cropped", style="Muted.TLabel")\
             .pack(padx=12, anchor=tk.W, pady=(4, 2))
-        # Cropped panel: 50% larger than the original 180x180. Caps at 270
-        # so it never fills the whole right pane — there's always a visible
-        # margin on either side. Shrinks if the right pane is too narrow.
-        self.cropped_panel = ImagePanel(controls, width=270, height=270)
+        # Cropped panel: square, sized to the run panel's width less a margin
+        # on either side (see _on_cropped_configure). Starts at the size the
+        # default RIGHT_PANEL_WIDTH gives it so the first paint isn't clipped;
+        # it grows and shrinks with the sash from there.
+        _cropped_size = max(80, RIGHT_PANEL_WIDTH - 48)
+        self.cropped_panel = ImagePanel(
+            controls, width=_cropped_size, height=_cropped_size,
+        )
         self.cropped_panel.pack(pady=2)
         controls.bind("<Configure>", self._on_cropped_configure)
 
@@ -1005,17 +1017,34 @@ class RunTab(ttk.Frame):
     # ----- layout -------------------------------------------------------------
 
     def _apply_initial_h_sash(self, event: tk.Event) -> None:
-        """Snap the horizontal sash to 66/34 the first time we know our width."""
+        """Give the right pane RIGHT_PANEL_WIDTH px the first time we know our width."""
         if self._h_split_initialised:
             return
         width = event.width
         if width <= 1:
             return
+        # Never let the fixed panel eat the whole tab on a very narrow window.
+        pos = max(1, width - RIGHT_PANEL_WIDTH)
         try:
-            self._h_split.sashpos(0, int(width * 0.66))
+            self._h_split.sashpos(0, pos)
         except tk.TclError:
             return
         self._h_split_initialised = True
+        # The sash itself sits inside the split, so the pane ends up a few
+        # pixels narrower than the offset we asked for. Measure once Tk has
+        # laid out and take the difference back out of the sash position.
+        self.after_idle(self._trim_h_sash)
+
+    def _trim_h_sash(self) -> None:
+        """Correct the sash for the sash's own thickness, once, after layout."""
+        try:
+            actual = self._right_pane.winfo_width()
+            if actual <= 1 or actual == RIGHT_PANEL_WIDTH:
+                return
+            pos = self._h_split.sashpos(0) - (RIGHT_PANEL_WIDTH - actual)
+            self._h_split.sashpos(0, max(1, pos))
+        except tk.TclError:
+            pass
 
     def _schedule_v_sash_adjust(self, _event=None) -> None:
         """Coalesce repeated <Configure> events into a single sash update."""

@@ -257,6 +257,12 @@ between them from the Run tab's template dropdown.
   format (`manifest.json` + `model/<id>.pth` + `images/*`). Accepts both
   snake_case and WinForms PascalCase manifest keys. Import **rejects `..`
   traversal entries** and only uses entry basenames; export strips paths/secrets.
+  An archive whose `community_model_uid` is already installed is an **update**:
+  `import_model` refreshes that row in place (same model id → same directories,
+  headstamp slots, and sorting templates) instead of creating a duplicate, and
+  keeps the local name / feedback-loop opt-in / AI config. `find_update_target`
+  tells a caller which path an archive will take; `update_existing=False`
+  forces a separate copy.
 
 ### Community / cloud
 - **`auth.py`** — `AuthManager`: MSAL `PublicClientApplication` against Azure AD
@@ -327,8 +333,13 @@ image browser/reclassify/delete), `dialog_share_model` (publish to community),
 `dialog_slot_template` (new / rename / delete a sorting template).
 
 ### Shared UI infrastructure
-- **`theme.py`** — `PALETTE` (dark slate theme), `apply_theme(root)` (fonts +
-  ttk styles, single source of truth), `paint_gradient`.
+- **`theme.py`** — `PALETTE`, `apply_theme(root)` (fonts + ttk styles, single
+  source of truth), `paint_gradient`. The chrome (window, panels, cards,
+  inputs, borders, text, focus/selection tints) is **neutral grayscale**;
+  hue is reserved for action buttons (`action*` green = primary/go,
+  `update*` blue = refresh something installed, `danger*` red =
+  stop/destructive) and status text. Keep new surfaces gray —
+  the colored buttons read as meaningful only because nothing else does.
 - **`widgets.py`** — `ScrollableFrame`, `ImagePanel` (shows BGR numpy frames),
   `NumericField`, labeled-entry/button-row helpers.
 - **`monitor.py`** — detachable history window: ring buffer of recent
