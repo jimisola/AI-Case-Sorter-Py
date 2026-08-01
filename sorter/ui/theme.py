@@ -62,10 +62,15 @@ PALETTE = {
     "accent_press":  "#c2c2c2",
     "accent_dim":    "#2e2e2e",   # subtle button rest state
 
-    # Action colors — buttons only. Green = primary/go, red = stop/destructive.
+    # Action colors — buttons only. Green = primary/go, blue = update an
+    # existing thing, red = stop/destructive. Picked at similar brightness so
+    # they read as one family and carry dark text.
     "action":        "#22c55e",
     "action_hover":  "#4ade80",
     "action_press":  "#16a34a",
+    "update":        "#60a5fa",
+    "update_hover":  "#93c5fd",
+    "update_press":  "#3b82f6",
     "danger":        "#ef4444",
     "danger_hover":  "#f87171",
     "danger_press":  "#dc2626",
@@ -447,6 +452,15 @@ def apply_theme(root: tk.Tk) -> dict[str, tuple]:
         rest=PALETTE["action"],
         hover=PALETTE["action_hover"],
         press=PALETTE["action_press"],
+    )
+
+    # Update button — refreshing something already installed, as opposed to
+    # the green "get me a new one" of a first download.
+    _colored_button(
+        style, "Update.TButton", fonts,
+        rest=PALETTE["update"],
+        hover=PALETTE["update_hover"],
+        press=PALETTE["update_press"],
     )
 
     # Stop / destructive button — used while a run is active, and for Delete.

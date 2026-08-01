@@ -337,7 +337,8 @@ image browser/reclassify/delete), `dialog_share_model` (publish to community),
   source of truth), `paint_gradient`. The chrome (window, panels, cards,
   inputs, borders, text, focus/selection tints) is **neutral grayscale**;
   hue is reserved for action buttons (`action*` green = primary/go,
-  `danger*` red = stop/destructive) and status text. Keep new surfaces gray —
+  `update*` blue = refresh something installed, `danger*` red =
+  stop/destructive) and status text. Keep new surfaces gray —
   the colored buttons read as meaningful only because nothing else does.
 - **`widgets.py`** — `ScrollableFrame`, `ImagePanel` (shows BGR numpy frames),
   `NumericField`, labeled-entry/button-row helpers.

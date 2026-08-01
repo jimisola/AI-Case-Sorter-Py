@@ -112,8 +112,10 @@ class CommunityModelCard(ttk.Frame):
             btn = ttk.Button(action_row, text="Already Installed",
                              state=tk.DISABLED)
         elif installed_state == "update":
+            # Blue, not the download green: this replaces a model already in
+            # the library rather than adding one.
             btn = ttk.Button(action_row, text="Update Model",
-                             style="Accent.TButton",
+                             style="Update.TButton",
                              command=lambda: self.on_action(self.info))
         else:
             btn = ttk.Button(action_row, text="Download Model",
