@@ -117,23 +117,25 @@ sanctioned way for worker threads to update the UI.
 - **`db.py`** — `Database`: owns one `sqlite3.Connection` (WAL, foreign keys on,
   `check_same_thread=False` with an `RLock` serializing multi-statement
   transactions / SAVEPOINTs). Schema is `PRAGMA user_version`-versioned
-  (`SCHEMA_VERSION = 3`) with idempotent DDL + `_apply_column_migrations`.
+  (`SCHEMA_VERSION = 4`) with idempotent DDL + `_apply_column_migrations`.
   `ensure_initialized()` creates the DB, runs a one-shot import from legacy
   `data/config.json` (renaming it `.bak`), or seeds a default cartridge+model.
-  Tables: `cartridges`, `models`, `headstamp_parents`, `headstamps`, `settings`.
+  Tables: `cartridges`, `models`, `headstamp_parents`, `headstamps`,
+  `slot_templates`, `settings`.
 - **`repository.py`** — `CartridgeRepo`, `ModelRepo`, `HeadstampRepo`,
-  `HeadstampParentRepo`, `SettingsRepo`. All SQL is **parameterized**. `SettingsRepo`
-  is a typed key/value store (JSON-encoded values) and holds `default_model_id`
-  (the "active model").
+  `HeadstampParentRepo`, `SlotTemplateRepo`, `SettingsRepo`. All SQL is
+  **parameterized**. `SettingsRepo` is a typed key/value store (JSON-encoded
+  values) and holds `default_model_id` (the "active model").
 - **`config.py`** — `Config`: in-memory mirror of the `settings` sections (`api`,
   `serial`, `image_proc`, `camera`) plus the canonical `DEFAULTS`. Headstamps are
   **not cached** — they're read fresh from the DB on every access (scoped to the
   active model; AI Config mode stashes them in a settings key). Also the home of
   routing logic: `slot_for_headstamp`, package-mode slot maps, parent
-  classifications, auto-select, run options (confidence floor, store-images mode).
-- **`models.py`** — dataclasses: `Model`, `Headstamp`, `Cartridge`,
+  classifications, auto-select, run options (confidence floor, store-images mode),
+  and the sorting-template API (see below).
+- **`models.py`** — dataclasses: `Model`, `Headstamp`, `Cartridge`, `SlotTemplate`,
   `TrainingConfig`, `AIModelConfig`, `ImageProcessingConfig`, plus normalizers
-  (`normalize_upload_mode`, `SUPPORTED_MODEL_MODES`).
+  (`normalize_upload_mode`, `SUPPORTED_MODEL_MODES`, `SLOT_TEMPLATE_MODES`).
 - **`paths.py`** — single source of truth for the on-disk layout (see §6).
   `CASESORTER_DATA_DIR` overrides the data root.
 
@@ -143,6 +145,31 @@ sanctioned way for worker threads to update the UI.
 When **set**, that local model is active (Train tab visible, local inference
 used, headstamps in the `headstamps` table). Activating a model posts
 `mode/changed`, which toggles tab visibility.
+
+### Sorting templates
+A **sorting template** is a named snapshot of the Run tab's slot assignments, so
+one model can carry several bin layouts ("Range brass", "Match prep") and switch
+between them from the Run tab's template dropdown.
+
+- **Scope:** per model (`model_id NULL` = AI Config mode) **and** per run mode.
+  Standard and package mode keep separate lists — package assignments are
+  many-to-many (one headstamp in several slots), so a layout from one mode is
+  meaningless in the other. `config.slot_template_mode()` picks the list.
+- **Storage:** rows in `slot_templates`; `assignments_json` is name-keyed
+  (`{"headstamps": {name: slot}, "parents": {name: slot}}`, or
+  `{"slots": {slot: [names]}}` for package mode) so a template survives a
+  headstamp being deleted and re-added. Unknown names are ignored on apply.
+- **The live assignments stay authoritative.** A run still reads
+  `headstamps.slot` / `headstamp_parents.slot` / the package slot map — templates
+  never sit in the hot path. The *active* template (settings key
+  `active_slot_template:<model id|ai>:<mode>`) is kept in lock-step with them by
+  `Config.sync_active_slot_template()`, called from every slot mutation, so
+  there is no explicit "save template" step. Switching is therefore a straight
+  save-current / load-next swap (`activate_slot_template`), and applying a
+  template **clears** any slot it doesn't mention.
+- **Seeding/upgrade:** the first read of a scope with no rows creates "Default"
+  holding whatever is currently assigned, so existing installs keep their layout.
+  The last template in a scope can't be deleted.
 
 ### Hardware control
 - **`serial_broker.py`** — `SerialBroker`: ASCII command protocol over UART
@@ -260,7 +287,7 @@ Config shows in AI Config mode; Community is mounted only while signed in. The
 ### Tabs (`tab_*.py`)
 | Tab | File | Purpose |
 |-----|------|---------|
-| **Run** | `tab_run.py` | Production sorting. Flow-grid of slot cards + per-slot headstamp checkboxes with live counts; Start/Stop/Manual-feed; package-mode counters. The largest UI module. |
+| **Run** | `tab_run.py` | Production sorting. Sorting-template bar; flow-grid of slot cards + per-slot headstamp checkboxes with live counts; Start/Stop/Manual-feed; package-mode counters. The largest UI module. |
 | **Models** | `tab_models.py` | Model library: browse/filter, create, edit, **activate**, import/export, delete. Synthetic "Use AI Config" row. |
 | **Train** | `tab_train.py` | Feed→capture→classify→label→save loop; "Sort While Training"; launches training (Install-PyTorch dialog if needed → progress dialog). |
 | **AI Config** | `tab_ai.py` | HTTP server config (endpoint/key/model/prompt/encoding), headstamp manager, single-shot test. Visible only in AI Config mode. |
@@ -275,7 +302,8 @@ Config shows in AI Config mode; Community is mounted only while signed in. The
 opt-in), `dialog_install_torch` (pip-installs torch/torchvision into the venv),
 `dialog_login` (MSAL interactive sign-in), `dialog_model_evaluator` (run eval +
 HTML report + history), `dialog_model_images` + `dialog_image_preview` (training
-image browser/reclassify/delete), `dialog_share_model` (publish to community).
+image browser/reclassify/delete), `dialog_share_model` (publish to community),
+`dialog_slot_template` (new / rename / delete a sorting template).
 
 ### Shared UI infrastructure
 - **`theme.py`** — `PALETTE` (dark slate theme), `apply_theme(root)` (fonts +

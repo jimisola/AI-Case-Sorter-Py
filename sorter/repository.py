@@ -17,7 +17,9 @@ from .models import (
     HeadstampParent,
     ImageProcessingConfig,
     Model,
+    SLOT_TEMPLATE_MODES,
     SUPPORTED_MODEL_MODES,
+    SlotTemplate,
     TrainingConfig,
 )
 
@@ -348,6 +350,84 @@ class HeadstampParentRepo:
         self.db.conn.execute(
             "DELETE FROM headstamp_parents WHERE id = ?", (parent_id,)
         )
+
+
+class SlotTemplateRepo:
+    """CRUD for named slot-assignment layouts (see ``models.SlotTemplate``).
+
+    Every method is scoped by ``(model_id, mode)`` — ``model_id=None`` is AI
+    Config mode, and 'standard'/'package' never share a list.
+    """
+
+    def __init__(self, db: Database) -> None:
+        self.db = db
+
+    def list_for_scope(self, model_id: int | None, mode: str) -> list[SlotTemplate]:
+        rows = self.db.conn.execute(
+            "SELECT * FROM slot_templates "
+            "WHERE model_id IS ? AND mode = ? ORDER BY name COLLATE NOCASE",
+            (model_id, mode),
+        ).fetchall()
+        return [SlotTemplate.from_row(r) for r in rows]
+
+    def get(self, template_id: int) -> SlotTemplate | None:
+        row = self.db.conn.execute(
+            "SELECT * FROM slot_templates WHERE id = ?", (template_id,)
+        ).fetchone()
+        return SlotTemplate.from_row(row) if row else None
+
+    def find_by_name(
+        self, model_id: int | None, mode: str, name: str
+    ) -> SlotTemplate | None:
+        row = self.db.conn.execute(
+            "SELECT * FROM slot_templates "
+            "WHERE model_id IS ? AND mode = ? AND name = ? COLLATE NOCASE",
+            (model_id, mode, name),
+        ).fetchone()
+        return SlotTemplate.from_row(row) if row else None
+
+    def count_for_scope(self, model_id: int | None, mode: str) -> int:
+        return self.db.conn.execute(
+            "SELECT COUNT(*) FROM slot_templates WHERE model_id IS ? AND mode = ?",
+            (model_id, mode),
+        ).fetchone()[0]
+
+    def create(
+        self,
+        model_id: int | None,
+        mode: str,
+        name: str,
+        assignments: dict[str, Any] | None = None,
+    ) -> SlotTemplate:
+        if mode not in SLOT_TEMPLATE_MODES:
+            raise ValueError(f"Unsupported slot-template mode: {mode!r}")
+        payload = assignments or {}
+        cur = self.db.conn.execute(
+            "INSERT INTO slot_templates(model_id, mode, name, assignments_json) "
+            "VALUES (?, ?, ?, ?)",
+            (model_id, mode, name, json.dumps(payload)),
+        )
+        return SlotTemplate(
+            id=cur.lastrowid, model_id=model_id, mode=mode,
+            name=name, assignments=payload,
+        )
+
+    def rename(self, template_id: int, new_name: str) -> None:
+        self.db.conn.execute(
+            "UPDATE slot_templates SET name = ?, updated_at = datetime('now') "
+            "WHERE id = ?",
+            (new_name, template_id),
+        )
+
+    def update_assignments(self, template_id: int, assignments: dict[str, Any]) -> None:
+        self.db.conn.execute(
+            "UPDATE slot_templates SET assignments_json = ?, "
+            "updated_at = datetime('now') WHERE id = ?",
+            (json.dumps(assignments or {}), template_id),
+        )
+
+    def delete(self, template_id: int) -> None:
+        self.db.conn.execute("DELETE FROM slot_templates WHERE id = ?", (template_id,))
 
 
 class SettingsRepo:

@@ -15,7 +15,13 @@ import copy
 from typing import Any
 
 from .db import Database
-from .repository import HeadstampParentRepo, HeadstampRepo, SettingsRepo
+from .models import SLOT_TEMPLATE_MODES, SlotTemplate
+from .repository import (
+    HeadstampParentRepo,
+    HeadstampRepo,
+    SettingsRepo,
+    SlotTemplateRepo,
+)
 
 
 DEFAULT_INIT_SETTINGS: dict[str, int | str] = {
@@ -120,6 +126,17 @@ DEFAULT_PACKAGE_SIZE = 50
 # any slot is auto-routed to the first empty slot.
 _RUN_AUTO_SELECT_KEY = "run_auto_select_trays"
 
+# Sorting templates: named layouts of the Run tab's slot assignments, so one
+# model can carry several bin arrangements. The live assignments (the
+# `headstamps`/`headstamp_parents` slot columns and the package slot map) stay
+# the single source of truth a run reads; the *active* template is kept in
+# lock-step with them (see `sync_active_slot_template`) so switching templates
+# is a straight save-current / load-next swap. Templates are per model AND per
+# run mode — package mode's many-to-many assignments are a different shape.
+# Key: `active_slot_template:<model id|ai>:<mode>` -> template row id.
+_ACTIVE_TEMPLATE_KEY = "active_slot_template"
+DEFAULT_SLOT_TEMPLATE_NAME = "Default"
+
 # Sort While Training: send xf:<slot> for a labelled case instead of xf:0
 # during training.
 _SORT_WHILE_TRAINING_KEY = "sort_while_training"
@@ -154,6 +171,7 @@ class Config:
         self.settings = SettingsRepo(db)
         self.headstamps_repo = HeadstampRepo(db)
         self.parents_repo = HeadstampParentRepo(db)
+        self.templates_repo = SlotTemplateRepo(db)
         self.data: dict[str, Any] = copy.deepcopy(DEFAULTS)
 
     def load(self) -> "Config":
@@ -231,6 +249,8 @@ class Config:
                 return False
             current.append({"name": name, "slot": int(slot)})
             self._write_ai_headstamps(current)
+            if int(slot) > 0:
+                self.sync_active_slot_template("standard")
             return True
         existing = {h.name for h in self.headstamps_repo.list_for_model(active_id)}
         if name in existing:
@@ -239,6 +259,8 @@ class Config:
             self.headstamps_repo.add(active_id, name, slot)
         except Exception:
             return False
+        if int(slot) > 0:
+            self.sync_active_slot_template("standard")
         return True
 
     def remove_headstamp(self, name: str) -> bool:
@@ -289,11 +311,13 @@ class Config:
                 if entry["name"] == name:
                     entry["slot"] = int(slot)
                     self._write_ai_headstamps(current)
+                    self.sync_active_slot_template("standard")
                     return True
             return False
         for h in self.headstamps_repo.list_for_model(active_id):
             if h.name == name:
                 self.headstamps_repo.update_slot(h.id, int(slot))
+                self.sync_active_slot_template("standard")
                 return True
         return False
 
@@ -393,6 +417,7 @@ class Config:
         if mid is None:
             return False
         self.parents_repo.update_slot(int(parent_id), int(slot))
+        self.sync_active_slot_template("standard")
         return True
 
     def parent_for_headstamp(self, name: str) -> str | None:
@@ -516,6 +541,263 @@ class Config:
             names = [n for n in names if n != name]
         raw[key] = names
         self.settings.set(self._package_slots_key(), raw)
+        self.sync_active_slot_template("package")
+
+    # ----- sorting templates --------------------------------------------------
+
+    def slot_template_mode(self) -> str:
+        """Which template list applies right now: 'package' or 'standard'."""
+        return "package" if self.run_package_mode else "standard"
+
+    @staticmethod
+    def _template_key_for(model_id: int | None, mode: str) -> str:
+        return f"{_ACTIVE_TEMPLATE_KEY}:{model_id if model_id is not None else 'ai'}:{mode}"
+
+    def _active_template_key(self, mode: str) -> str:
+        return self._template_key_for(self.settings.get_active_model_id(), mode)
+
+    def _resolve_template_mode(self, mode: str | None) -> str:
+        if mode is None:
+            return self.slot_template_mode()
+        if mode not in SLOT_TEMPLATE_MODES:
+            raise ValueError(f"Unsupported slot-template mode: {mode!r}")
+        return mode
+
+    def capture_slot_assignments(self, mode: str | None = None) -> dict[str, Any]:
+        """Snapshot the live slot assignments for `mode` into a template payload.
+
+        Only non-catch-all assignments are stored; anything not mentioned is
+        restored to slot 0 (unassigned) when the payload is applied.
+        """
+        mode = self._resolve_template_mode(mode)
+        if mode == "package":
+            return {
+                "slots": {
+                    str(int(slot)): list(names)
+                    for slot, names in sorted(self.package_slot_map().items())
+                    if int(slot) > 0 and names
+                }
+            }
+        return {
+            "headstamps": {
+                str(e["name"]): int(e.get("slot", 0))
+                for e in self.headstamps
+                if int(e.get("slot", 0)) > 0
+            },
+            "parents": {
+                str(p["name"]): int(p["slot"])
+                for p in self.parents_with_slots()
+                if int(p["slot"]) > 0
+            },
+        }
+
+    def apply_slot_assignments(
+        self, assignments: dict[str, Any] | None, mode: str | None = None,
+    ) -> None:
+        """Write a template payload back onto the live assignments.
+
+        Names the payload doesn't mention are cleared to slot 0, so applying a
+        template fully replaces the layout rather than merging into it. Unknown
+        names (a headstamp deleted since the template was saved) are ignored.
+        """
+        mode = self._resolve_template_mode(mode)
+        data = assignments if isinstance(assignments, dict) else {}
+
+        if mode == "package":
+            raw = data.get("slots")
+            cleaned: dict[str, list[str]] = {}
+            if isinstance(raw, dict):
+                for key, names in raw.items():
+                    try:
+                        slot = int(key)
+                    except (TypeError, ValueError):
+                        continue
+                    if slot <= 0:
+                        continue
+                    cleaned[str(slot)] = [str(n) for n in (names or []) if n]
+            self.settings.set(self._package_slots_key(), cleaned)
+            return
+
+        hs_slots = data.get("headstamps") if isinstance(data.get("headstamps"), dict) else {}
+        parent_slots = data.get("parents") if isinstance(data.get("parents"), dict) else {}
+
+        def _slot_of(table: dict[str, Any], name: str) -> int:
+            try:
+                return max(0, int(table.get(name, 0)))
+            except (TypeError, ValueError):
+                return 0
+
+        mid = self.settings.get_active_model_id()
+        with self.db.transaction() as _:
+            if mid is None:
+                entries = self._read_ai_headstamps()
+                for entry in entries:
+                    entry["slot"] = _slot_of(hs_slots, entry["name"])
+                self._write_ai_headstamps(entries)
+                return
+            for h in self.headstamps_repo.list_for_model(mid):
+                desired = _slot_of(hs_slots, h.name)
+                if int(h.slot) != desired:
+                    self.headstamps_repo.update_slot(h.id, desired)
+            for p in self.parents_repo.list_for_model(mid):
+                desired = _slot_of(parent_slots, p.name)
+                if int(p.slot) != desired:
+                    self.parents_repo.update_slot(p.id, desired)
+
+    def list_slot_templates(self, mode: str | None = None) -> list[SlotTemplate]:
+        """Templates for the active model + `mode`, newest scope seeded lazily.
+
+        The first read of a scope with no templates creates "Default" holding
+        whatever is currently assigned, so upgrading users keep their layout
+        and land on a named template without doing anything.
+        """
+        mode = self._resolve_template_mode(mode)
+        mid = self.settings.get_active_model_id()
+        rows = self.templates_repo.list_for_scope(mid, mode)
+        if rows:
+            return rows
+        with self.db.transaction() as _:
+            template = self.templates_repo.create(
+                mid, mode, DEFAULT_SLOT_TEMPLATE_NAME,
+                self.capture_slot_assignments(mode),
+            )
+            self.settings.set(self._active_template_key(mode), template.id)
+        return [template]
+
+    def active_slot_template(self, mode: str | None = None) -> SlotTemplate:
+        """The template currently driving the live assignments for `mode`."""
+        mode = self._resolve_template_mode(mode)
+        rows = self.list_slot_templates(mode)
+        stored = self.settings.get(self._active_template_key(mode))
+        for row in rows:
+            if row.id == stored:
+                return row
+        # Pointer missing or stale (template deleted elsewhere): adopt the first
+        # one without applying it — the live assignments are what the user last
+        # worked on and the next sync writes them into it.
+        self.settings.set(self._active_template_key(mode), rows[0].id)
+        return rows[0]
+
+    def sync_active_slot_template(self, mode: str | None = None) -> None:
+        """Persist the live assignments into the active template.
+
+        Called after every slot-assignment mutation so the active template
+        never drifts from what the Run tab shows — there is no explicit "save
+        template" step.
+        """
+        mode = self._resolve_template_mode(mode)
+        template = self.active_slot_template(mode)
+        self.templates_repo.update_assignments(
+            template.id, self.capture_slot_assignments(mode),
+        )
+
+    def activate_slot_template(
+        self, template_id: int, mode: str | None = None,
+    ) -> SlotTemplate | None:
+        """Switch to another template: save the outgoing one, load the incoming.
+
+        Returns the newly active template, or None when `template_id` doesn't
+        belong to the active model + mode.
+        """
+        mode = self._resolve_template_mode(mode)
+        mid = self.settings.get_active_model_id()
+        target = self.templates_repo.get(int(template_id))
+        if target is None or target.mode != mode or target.model_id != mid:
+            return None
+        current = self.active_slot_template(mode)
+        if current.id == target.id:
+            return current
+        with self.db.transaction() as _:
+            self.templates_repo.update_assignments(
+                current.id, self.capture_slot_assignments(mode),
+            )
+            self.apply_slot_assignments(target.assignments, mode)
+            self.settings.set(self._active_template_key(mode), target.id)
+        return target
+
+    def create_slot_template(
+        self,
+        name: str,
+        *,
+        copy_current: bool = True,
+        mode: str | None = None,
+    ) -> SlotTemplate:
+        """Create a template and make it active.
+
+        With `copy_current` the new template starts as a copy of the live
+        assignments (the outgoing template keeps its own copy); without it the
+        slots are cleared so the user starts from a blank layout.
+
+        Raises ValueError on an empty or duplicate name.
+        """
+        mode = self._resolve_template_mode(mode)
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("Enter a name for the template.")
+        mid = self.settings.get_active_model_id()
+        if self.templates_repo.find_by_name(mid, mode, name) is not None:
+            raise ValueError(f"A template named “{name}” already exists.")
+        current = self.active_slot_template(mode)
+        payload = (
+            self.capture_slot_assignments(mode) if copy_current
+            else ({"slots": {}} if mode == "package" else {"headstamps": {}, "parents": {}})
+        )
+        with self.db.transaction() as _:
+            # Flush the outgoing template first so nothing unsaved is lost.
+            self.templates_repo.update_assignments(
+                current.id, self.capture_slot_assignments(mode),
+            )
+            template = self.templates_repo.create(mid, mode, name, payload)
+            self.apply_slot_assignments(payload, mode)
+            self.settings.set(self._active_template_key(mode), template.id)
+        return template
+
+    def rename_slot_template(self, template_id: int, name: str) -> SlotTemplate | None:
+        """Rename a template. Raises ValueError on an empty or duplicate name."""
+        template = self.templates_repo.get(int(template_id))
+        if template is None:
+            return None
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("Enter a name for the template.")
+        if name == template.name:
+            return template
+        clash = self.templates_repo.find_by_name(template.model_id, template.mode, name)
+        if clash is not None and clash.id != template.id:
+            raise ValueError(f"A template named “{name}” already exists.")
+        self.templates_repo.rename(template.id, name)
+        template.name = name
+        return template
+
+    def delete_slot_template(self, template_id: int) -> SlotTemplate | None:
+        """Delete a template and return whichever one is active afterwards.
+
+        Deleting the active template loads the next remaining one. The last
+        template in a scope can't be deleted — there is always somewhere for
+        the current assignments to live.
+        """
+        template = self.templates_repo.get(int(template_id))
+        if template is None:
+            return None
+        mode = template.mode
+        remaining = [
+            t for t in self.templates_repo.list_for_scope(template.model_id, mode)
+            if t.id != template.id
+        ]
+        if not remaining:
+            raise ValueError("A model needs at least one sorting template.")
+        key = self._template_key_for(template.model_id, mode)
+        was_active = self.settings.get(key) == template.id
+        # Only touch the live assignments when the template being deleted is
+        # the one currently loaded for the active model.
+        loaded = was_active and template.model_id == self.settings.get_active_model_id()
+        with self.db.transaction() as _:
+            self.templates_repo.delete(template.id)
+            if was_active:
+                if loaded:
+                    self.apply_slot_assignments(remaining[0].assignments, mode)
+                self.settings.set(key, remaining[0].id)
+        return remaining[0] if was_active else self.active_slot_template(mode)
 
     # ----- auto-select / sort-while-training toggles -------------------------
 
