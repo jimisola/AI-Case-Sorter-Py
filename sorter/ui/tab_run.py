@@ -3,7 +3,7 @@
 Layout:
   +-----------------------------------+-----------------+
   | left panel (takes all slack)      | right panel     |
-  | +-------------------------------+ | (200px fixed)   |
+  | +-------------------------------+ | (300px fixed)   |
   | | SlotGrid                      | | run controls   |
   | | (flow layout)                 | | Start / Stop   |
   | |                               | | Manual feed    |
@@ -44,7 +44,7 @@ HEADSTAMP_CELL_WIDTH = 200
 # Right-hand run-controls panel: opened at a fixed pixel width instead of a
 # share of the window, so the slot grid gets every extra pixel on a wide
 # screen. The sash still drags freely from there.
-RIGHT_PANEL_WIDTH = 200
+RIGHT_PANEL_WIDTH = 300
 
 # Store-images dropdown: display label <-> persisted mode (see Config).
 _STORE_IMAGES_LABELS = {
