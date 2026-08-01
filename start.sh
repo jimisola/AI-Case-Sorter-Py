@@ -190,6 +190,14 @@ fi
 source .venv/bin/activate
 
 # ---------------------------------------------------------------------------
+# 4b. Apply a staged in-app update BEFORE the dependency check below, so an
+#     update that changes requirements.txt gets its new dependencies installed
+#     on this same launch. Stdlib-only and always exits 0 — a broken updater
+#     must never stop the app from starting.
+# ---------------------------------------------------------------------------
+python main.py --apply-update || true
+
+# ---------------------------------------------------------------------------
 # 5. Install pip deps. Use a hash of requirements.txt as the install marker so
 #    edits to requirements.txt trigger a refresh instead of being silently
 #    ignored.

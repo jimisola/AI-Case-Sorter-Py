@@ -59,16 +59,18 @@ torch, torchvision.
 
 ```
 AI-Case-Sorter-Py/
-├── main.py                  # entry point
-├── start.sh / start.bat     # bootstrap launchers (venv + system deps)
+├── main.py                  # entry point (+ `--apply-update` pre-launch hook)
+├── start.sh / start.bat     # bootstrap launchers (venv + system deps + update)
 ├── pyproject.toml           # package metadata; [ml] extra = torch/torchvision
 ├── requirements.txt
 ├── sorter/                  # all application code
 │   ├── ui/                  # Tkinter UI (tabs + dialogs + theme)
 │   └── training/            # out-of-process ConvNeXt trainer
-├── tests/                   # pytest suite (logic, not UI)
-└── data/                    # created at runtime; gitignored (see §6)
+├── installer/               # Windows bootstrapper (see §7)
+└── tests/                   # pytest suite
 ```
+
+The data root lives **outside** the repo by default — see §6.
 
 ---
 
@@ -136,8 +138,10 @@ sanctioned way for worker threads to update the UI.
 - **`models.py`** — dataclasses: `Model`, `Headstamp`, `Cartridge`, `SlotTemplate`,
   `TrainingConfig`, `AIModelConfig`, `ImageProcessingConfig`, plus normalizers
   (`normalize_upload_mode`, `SUPPORTED_MODEL_MODES`, `SLOT_TEMPLATE_MODES`).
-- **`paths.py`** — single source of truth for the on-disk layout (see §6).
-  `CASESORTER_DATA_DIR` overrides the data root.
+- **`paths.py`** — single source of truth for the on-disk layout (see §6) and
+  the legacy-data migration. `CASESORTER_DATA_DIR` overrides the data root.
+  **Stdlib-only and import-light on purpose:** the pre-launch update step
+  imports it before the venv has any third-party packages.
 - **`appenv.py`** — developer overrides for the community backend, read from the
   environment with an optional `.env` (real env vars always win; see
   `.env.example`). `api_base()` applies `CASESORTER_API_BASE` over the
@@ -264,6 +268,12 @@ between them from the Run tab's template dropdown.
   tells a caller which path an archive will take; `update_existing=False`
   forces a separate copy.
 
+### Self-update (see §7 for the full flow)
+- **`updater.py`** — GitHub Releases check, version comparison, and download →
+  verify → stage. Needs `requests`. Never writes to the app folder.
+- **`apply_update.py`** — the pre-launch half: copies a staged tree over the app
+  folder, with backup/rollback. **Stdlib-only** — it runs before `pip install`.
+
 ### Community / cloud
 - **`auth.py`** — `AuthManager`: MSAL `PublicClientApplication` against Azure AD
   B2C (hardcoded tenant/client/authority/redirect, mirroring WinForms). Token
@@ -330,7 +340,8 @@ opt-in), `dialog_install_torch` (pip-installs torch/torchvision into the venv),
 `dialog_login` (MSAL interactive sign-in), `dialog_model_evaluator` (run eval +
 HTML report + history), `dialog_model_images` + `dialog_image_preview` (training
 image browser/reclassify/delete), `dialog_share_model` (publish to community),
-`dialog_slot_template` (new / rename / delete a sorting template).
+`dialog_slot_template` (new / rename / delete a sorting template),
+`dialog_update` (release notes → download progress → "Restart to update"; §7).
 
 ### Shared UI infrastructure
 - **`theme.py`** — `PALETTE`, `apply_theme(root)` (fonts + ttk styles, single
@@ -350,22 +361,38 @@ image browser/reclassify/delete), `dialog_share_model` (publish to community),
 
 ## 6. Data & on-disk layout
 
-Everything the app writes lives under `data/` next to `main.py` (override with
-`CASESORTER_DATA_DIR`). Delete the folder, delete all state. **`data/` is
-gitignored** and must never be committed.
+Everything the app writes lives under a single **data root**, resolved once by
+`paths.app_data_dir()`:
+
+1. `CASESORTER_DATA_DIR` — explicit override, wins over everything.
+2. A `portable.txt` marker next to `main.py` → `<app>/data` (USB-stick installs).
+3. Otherwise the per-user OS location: `%LOCALAPPDATA%\CaseSorter` on Windows,
+   `$XDG_DATA_HOME/CaseSorter` (default `~/.local/share/CaseSorter`) elsewhere.
+
+**The data root is outside the app folder by default, and that is load-bearing:**
+the in-app updater replaces the app folder wholesale (§7). Keeping user data out
+of it makes the updater safe by construction rather than by maintaining an
+exclusion list. `paths.migrate_legacy_data_dir()` moves a pre-0.2 `<app>/data`
+up on first run, so upgrades are invisible. `<app>/data` is still **gitignored**
+and must never be committed.
 
 ```
-data/
+<data root>/
 ├── config/
 │   ├── casesorter.db      # SQLite (all settings, models, headstamps)
 │   └── msal_cache.bin     # MSAL token cache (chmod 0600 on POSIX)
-└── models/
-    └── <model_id>/
-        ├── images/          # raw training images   {label}__{ticks}.jpg
-        ├── run_images/      # opt-in run captures
-        ├── feedback_images/ # below-threshold feedback queue (folder == queue)
-        ├── reports/         # evaluator HTML reports
-        └── trainedmodel/    # <model_id>.pth checkpoint
+├── models/
+│   └── <model_id>/
+│       ├── images/          # raw training images   {label}__{ticks}.jpg
+│       ├── run_images/      # opt-in run captures
+│       ├── feedback_images/ # below-threshold feedback queue (folder == queue)
+│       ├── reports/         # evaluator HTML reports
+│       └── trainedmodel/    # <model_id>.pth checkpoint
+└── updates/               # staged app updates (§7)
+    ├── pending/             # extracted tree awaiting the next launch
+    ├── pending.json         # its metadata — a SIBLING, never inside pending/
+    ├── backup/              # previous version, kept for rollback
+    └── last_applied.json
 ```
 
 **Filename convention** (WinForms-compatible): training images are
@@ -374,11 +401,68 @@ where `ticks` is the .NET `DateTime.Ticks` value.
 
 ---
 
-## 7. Conventions & gotchas
+## 7. Updates & Windows install
+
+Non-developers get the app without git, and keep it current from inside the app.
+There is no git dependency anywhere in this path: a release ZIP over HTTPS has
+the same trust anchor as `git pull` over HTTPS, and the source tree is ~1 MB, so
+delta transfer buys nothing.
+
+**Version:** `sorter/__init__.py.__version__` is the single source.
+`pyproject.toml` reads it via `[tool.setuptools.dynamic]`, and the updater
+compares it against the latest release tag. **Bump it in the same commit you tag
+a release** — otherwise the updater re-offers a release users already have.
+
+**The flow is stage now, apply at next launch:**
+
+```
+updater.check_for_update()   GET /releases/latest, compare tags   [needs requests]
+        ↓
+updater.stage_update()       download → verify → <data>/updates/pending/
+        ↓                    (the app folder is NOT touched)
+     [restart]
+        ↓
+main.py --apply-update       run by start.bat/start.sh BEFORE pip  [stdlib ONLY]
+        ↓
+sorter.apply_update          backup → copy over app dir → prune → clear pending
+```
+
+- **`updater.py`** — check/download/stage. Traversal-safe extraction (same
+  rejections as `model_io`), strips GitHub's `<repo>-<tag>/` wrapper, requires
+  `main.py` + `sorter/__init__.py` to be present before trusting an archive, and
+  caps the archive size. Staging is atomic: `pending/` only ever exists complete.
+- **`apply_update.py`** — **must stay stdlib-only.** It runs against a venv that
+  may hold nothing but pip; importing `requests` here would break the very launch
+  it exists to fix. Backs up everything it will overwrite, rolls back on failure,
+  and **always exits 0** so a broken updater can never stop the app starting.
+  Pruning stale files is confined to `sorter/`; `PROTECTED_TOP_LEVEL` (`.git`,
+  `.venv`, `data`, `.env`, `.installed`, `portable.txt`) is never touched.
+- **Why a pre-launch step at all:** on Windows the venv's `.pyd`/`.dll` files
+  (opencv, numpy) are locked while the app runs, so in-place replacement is
+  unreliable. Applying before Python loads anything sidesteps locking — and puts
+  a new `requirements.txt` in place *before* the launcher's hash check, so
+  dependency changes install on the same restart.
+- **UI** — `dialog_update.py` (notes → progress → "Restart to update") reached
+  from a status-bar button in `app.py` that appears only when there's something
+  to do. A silent check runs 2.5 s after startup; opt out via the dialog's
+  checkbox (`updates.check_on_startup`) or `CASESORTER_UPDATE_DISABLED=1`.
+- **`installer/`** — `install-windows.ps1` (+ `.bat` wrapper) provisions Python
+  via winget or a silent python.org install, lays the app down in
+  `%LOCALAPPDATA%\Programs\CaseSorter`, and hands off to `start.bat`. Per-user,
+  no admin. See `installer/README.md`.
+
+---
+
+## 8. Conventions & gotchas
 
 - **Threading rule:** never touch Tk widgets off the main thread. Do blocking
   work in `run_worker`/daemon threads and `bus.post(...)`; the drain loop
-  delivers handlers on the main thread.
+  delivers handlers on the main thread. **`widget.after()` is not an escape
+  hatch** — it registers a Tcl command and is itself unsafe off the main
+  thread. A worker must hand results to a `Queue` (the bus, or a dialog-local
+  one as in `dialog_update.py`) that a main-thread poller drains.
+  `dialog_install_torch.py` predates this note and still calls `after()` from
+  its pip-pump thread; don't copy that pattern.
 - **Legacy-app interop is intentional.** Many odd choices (PascalCase manifest
   keys, .NET ticks filenames, ConvNeXt-mode integer mapping, the exact serial
   command strings, the verbatim HTML report) exist so this app round-trips with
@@ -396,6 +480,12 @@ where `ticks` is the .NET `DateTime.Ticks` value.
   local copy of the backend; the **Azure B2C tenant/client/scopes in `auth.py`
   are still hardcoded**, so a fork pointing at its own identity provider has to
   edit that file. The backend itself is a separate service, not in this repo.
-- **No CI yet.** Run `pytest` before pushing; UI is not covered by tests.
+- **Releases drive the updater.** Bump `sorter/__init__.py.__version__` in the
+  same commit you tag a release, and keep the tag and that value in step.
+  `/releases/latest` excludes pre-releases, so tagging an rc won't reach
+  stable users.
+- **No CI yet.** Run `pytest` before pushing. Most UI modules need a display —
+  `xvfb-run -a python -m pytest` covers them on a headless box; without
+  tkinter installed those modules skip rather than fail.
 - See **`OPEN_SOURCE_READINESS.md`** for the open-source readiness assessment and
   **`CONTRIBUTING.md`** for how to set up and contribute.

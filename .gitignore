@@ -1,11 +1,15 @@
 .venv/
 .installed
 .env
-data/config/.env
 __pycache__/
 *.pyc
-data/config.json
-data/log_*.txt
-data/tmp/
 .pytest_cache/
 *.egg-info/
+build/
+dist/
+
+# Runtime state. The data root normally lives outside the repo (see README);
+# `data/` only appears here for portable installs and legacy checkouts.
+data/
+# Marker that pins the data root to <app>/data — a local choice, never committed.
+portable.txt

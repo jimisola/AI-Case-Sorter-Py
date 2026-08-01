@@ -24,6 +24,12 @@ if not exist "%ROOT%.venv" (
 
 call "%ROOT%.venv\Scripts\activate.bat"
 
+REM Apply a staged in-app update BEFORE the dependency check below, so an
+REM update that changes requirements.txt gets its new dependencies installed
+REM on this same launch. Stdlib-only and always exits 0 — a broken updater
+REM must never stop the app from starting.
+python "%ROOT%main.py" --apply-update
+
 REM Compute a SHA-256 of requirements.txt and store it in .installed so any
 REM edit to requirements.txt triggers a refresh on the next launch. Matches
 REM the hash-based marker used by start.sh.

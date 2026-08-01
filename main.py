@@ -1,19 +1,42 @@
-"""Entry point — initialize SQLite, load config, launch the Tk main window."""
+"""Entry point — initialize SQLite, load config, launch the Tk main window.
+
+Also hosts the ``--apply-update`` pre-launch hook: ``start.bat`` / ``start.sh``
+invoke it before installing dependencies so a staged update's own
+``requirements.txt`` is the one that gets installed. That path is stdlib-only
+and must stay that way — it runs against a virtualenv that may not have any
+third-party packages in it yet.
+"""
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+
     here = Path(__file__).resolve().parent
     if str(here) not in sys.path:
         sys.path.insert(0, str(here))
+
+    # Pre-launch update hook. Deliberately ahead of every other import so it
+    # cannot pull in a dependency the venv doesn't have yet.
+    if "--apply-update" in args:
+        from sorter.apply_update import main as apply_main
+
+        return apply_main()
 
     from sorter import appenv, paths
     from sorter.config import Config
     from sorter.db import Database
     from sorter.ui.app import MainWindow
+
+    # One-time move of a pre-0.2 `<app>/data` folder to the per-user location.
+    # No-op for portable installs, an explicit CASESORTER_DATA_DIR, or once
+    # it has already run.
+    moved = paths.migrate_legacy_data_dir()
+    if moved is not None:
+        print(f"[casesorter] moved data folder to {moved}")
 
     # Developer overrides (community API base URL / TLS trust). Silent unless
     # something is actually configured — see sorter/appenv.py and .env.example.
@@ -21,7 +44,7 @@ def main() -> int:
         print(f"[casesorter] {line}")
 
     paths.ensure_directories()
-    legacy_json = here / "data" / "config.json"
+    legacy_json = paths.app_data_dir() / "config.json"
 
     db = Database()
     db.ensure_initialized(legacy_config_json=legacy_json if legacy_json.exists() else None)
