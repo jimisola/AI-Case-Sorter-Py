@@ -19,7 +19,7 @@ from typing import Any, Iterator
 from . import paths
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA_DDL = """
 PRAGMA foreign_keys = ON;
@@ -80,6 +80,24 @@ CREATE TABLE IF NOT EXISTS headstamps (
   UNIQUE(model_id, name)
 );
 CREATE INDEX IF NOT EXISTS idx_headstamps_model ON headstamps(model_id);
+
+-- Named slot-assignment layouts for the Run tab. Scoped to a model
+-- (model_id NULL = AI Config mode) and to a run mode ('standard'/'package'),
+-- which keep separate lists because their assignment rules differ.
+CREATE TABLE IF NOT EXISTS slot_templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  model_id INTEGER REFERENCES models(id) ON DELETE CASCADE,
+  mode TEXT NOT NULL CHECK(mode IN ('standard','package')),
+  name TEXT NOT NULL,
+  assignments_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+-- IFNULL() because UNIQUE treats every NULL model_id (AI Config mode) as
+-- distinct, which would let duplicate AI-mode template names through.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_slot_templates_name
+  ON slot_templates(IFNULL(model_id, -1), mode, name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_slot_templates_scope ON slot_templates(model_id, mode);
 
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,

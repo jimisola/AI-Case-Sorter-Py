@@ -23,6 +23,10 @@ SUPPORTED_MODEL_MODES = (
 MODEL_TYPES = ("Standard", "ReadOnly", "CommunityManaged")
 FEEDBACK_UPLOAD_MODES = ("Instant", "OnRunComplete", "Manual")
 
+# Slot templates are stored per run mode: package mode has its own set because
+# it allows a headstamp in several slots (see SlotTemplate).
+SLOT_TEMPLATE_MODES = ("standard", "package")
+
 
 def normalize_upload_mode(raw: Any, *, feedback_enabled: bool) -> str:
     """Coerce a feedback upload-mode value to a canonical name string.
@@ -105,6 +109,50 @@ class HeadstampParent:
             name=row["name"],
             model_id=row["model_id"],
             slot=row["slot"] if "slot" in keys else 0,
+        )
+
+
+@dataclass
+class SlotTemplate:
+    """A named snapshot of the Run tab's slot assignments.
+
+    Templates let one model carry several bin layouts (e.g. "Range brass" vs
+    "Match prep") and switch between them without re-ticking every headstamp.
+
+    Scoping: templates belong to a model (``model_id is None`` = AI Config
+    mode) *and* to a ``mode``. Standard and package mode keep separate template
+    lists because their assignment rules differ — standard mode routes a
+    headstamp to exactly one slot, package mode allows the same headstamp in
+    several slots at once, so a layout from one is meaningless in the other.
+
+    ``assignments`` is the persisted payload, shaped per mode:
+      standard: ``{"headstamps": {name: slot}, "parents": {name: slot}}``
+      package:  ``{"slots": {"<slot>": [name, ...]}}``
+    Names, not row ids, so a template survives a headstamp being deleted and
+    re-added (e.g. a re-import). Unknown names are ignored when applied.
+    """
+    id: int | None = None
+    model_id: int | None = None
+    mode: str = "standard"
+    name: str = ""
+    assignments: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_row(cls, row: Any) -> "SlotTemplate":
+        import json
+
+        try:
+            assignments = json.loads(row["assignments_json"] or "{}")
+        except (TypeError, ValueError):
+            assignments = {}
+        if not isinstance(assignments, dict):
+            assignments = {}
+        return cls(
+            id=row["id"],
+            model_id=row["model_id"],
+            mode=row["mode"],
+            name=row["name"],
+            assignments=assignments,
         )
 
 

@@ -766,6 +766,33 @@ class RunTab(ttk.Frame):
         grid_box = ttk.LabelFrame(top_pane, text="Slots")
         grid_box.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
 
+        # Sorting-template bar: the slot layout below is whatever the selected
+        # template holds. Package mode has its own template list (its
+        # assignments are many-to-many), so this bar re-populates on mode change.
+        self._templates: list = []
+        template_bar = ttk.Frame(grid_box)
+        template_bar.pack(fill=tk.X, padx=8, pady=(8, 0))
+        ttk.Label(template_bar, text="Sorting template", style="Muted.TLabel")\
+            .pack(side=tk.LEFT, padx=(0, 8))
+        self._template_var = tk.StringVar()
+        self._template_combo = ttk.Combobox(
+            template_bar, state="readonly", textvariable=self._template_var, width=26,
+        )
+        self._template_combo.pack(side=tk.LEFT)
+        self._template_combo.bind(
+            "<<ComboboxSelected>>", lambda _e: self._on_template_selected()
+        )
+        ttk.Button(
+            template_bar, text="+ New", width=7, command=self._new_template,
+        ).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(
+            template_bar, text="✎ Edit", width=7, command=self._edit_template,
+        ).pack(side=tk.LEFT, padx=(4, 0))
+        self._template_hint_var = tk.StringVar(value="")
+        ttk.Label(
+            template_bar, textvariable=self._template_hint_var, style="Subtle.TLabel",
+        ).pack(side=tk.LEFT, padx=(10, 0))
+
         self.slot_grid = SlotGrid(grid_box)
         self.slot_grid.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
 
@@ -948,6 +975,7 @@ class RunTab(ttk.Frame):
         self.details.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
 
         self._build_slot_cards()
+        self._refresh_templates()
         self._refresh_card_headstamps()
         self._update_parent_option_visibility()
         # Initial sash placement once the FlowGrid has a real width.
@@ -1084,6 +1112,84 @@ class RunTab(ttk.Frame):
         for card in self._slot_cards:
             card.set_headstamps(sorted(slot_map.get(card.slot_number, []), key=str.casefold))
 
+    # ----- sorting templates --------------------------------------------------
+
+    def _refresh_templates(self) -> None:
+        """Repopulate the dropdown for the active model + current run mode."""
+        mode = self.config.slot_template_mode()
+        self._templates = self.config.list_slot_templates(mode)
+        active = self.config.active_slot_template(mode)
+        self._template_combo["values"] = [t.name for t in self._templates]
+        self._template_var.set(active.name)
+        self._template_hint_var.set(
+            "Package-mode layout" if mode == "package" else ""
+        )
+
+    def _template_busy(self) -> bool:
+        """Templates swap the whole layout, so keep them out of a live run."""
+        if not self._is_running:
+            return False
+        messagebox.showinfo(
+            "Run in progress",
+            "Stop the run before changing sorting templates — switching one "
+            "reassigns every slot.",
+            parent=self,
+        )
+        return True
+
+    def _on_template_selected(self) -> None:
+        idx = self._template_combo.current()
+        if idx < 0 or idx >= len(self._templates):
+            return
+        target = self._templates[idx]
+        if self._template_busy():
+            self._refresh_templates()  # snap the combobox back to the active one
+            return
+        if self.config.activate_slot_template(target.id) is None:
+            self._refresh_templates()
+            return
+        self._after_template_change(f"Loaded sorting template “{target.name}”.")
+
+    def _new_template(self) -> None:
+        if self._template_busy():
+            return
+        from .dialog_slot_template import NewSlotTemplateDialog
+
+        mode = self.config.slot_template_mode()
+        NewSlotTemplateDialog(
+            self, config=self.config, mode=mode,
+            current_name=self.config.active_slot_template(mode).name,
+            on_created=lambda t: self._after_template_change(
+                f"Created sorting template “{t.name}”."
+            ),
+        )
+
+    def _edit_template(self) -> None:
+        if self._template_busy():
+            return
+        from .dialog_slot_template import EditSlotTemplateDialog
+
+        mode = self.config.slot_template_mode()
+        EditSlotTemplateDialog(
+            self, config=self.config,
+            template=self.config.active_slot_template(mode),
+            can_delete=len(self.config.list_slot_templates(mode)) > 1,
+            on_changed=lambda _t: self._after_template_change("Sorting templates updated."),
+        )
+
+    def _after_template_change(self, status: str) -> None:
+        """Re-render everything the layout drives, then report what happened.
+
+        Counters are per-layout, so they're zeroed — a slot that held one
+        headstamp before the swap may hold another now.
+        """
+        self._refresh_templates()
+        self._reset_counters()
+        self._refresh_card_headstamps()
+        if self.details.current_slot is not None:
+            self.details.show_slot(self.details.current_slot)
+        self.app.set_status(status)
+
     def _update_parent_option_visibility(self) -> None:
         """Show the parent-classification toggle only when the active model has
         parent groups; sync its checked state from the persisted preference."""
@@ -1143,8 +1249,10 @@ class RunTab(ttk.Frame):
             self._batch_row.pack_forget()
         for card in self._slot_cards:
             card.set_package_mode(enabled)
-        # Counts and assignments are mode-specific; reset and re-render both.
+        # Counts, assignments and templates are all mode-specific; package mode
+        # swaps to its own template list (and its own stored layout).
         self._reset_counters()
+        self._refresh_templates()
         self._refresh_card_headstamps()
         if self.details.current_slot is not None:
             self.details.show_slot(self.details.current_slot)
@@ -1225,6 +1333,7 @@ class RunTab(ttk.Frame):
         """
         self._reset_counters()
         self._update_parent_option_visibility()
+        self._refresh_templates()
         self._refresh_card_headstamps()
         if self.details.current_slot is not None:
             self.details.show_slot(self.details.current_slot)
