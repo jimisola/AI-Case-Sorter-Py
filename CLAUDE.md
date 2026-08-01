@@ -327,8 +327,12 @@ image browser/reclassify/delete), `dialog_share_model` (publish to community),
 `dialog_slot_template` (new / rename / delete a sorting template).
 
 ### Shared UI infrastructure
-- **`theme.py`** — `PALETTE` (dark slate theme), `apply_theme(root)` (fonts +
-  ttk styles, single source of truth), `paint_gradient`.
+- **`theme.py`** — `PALETTE`, `apply_theme(root)` (fonts + ttk styles, single
+  source of truth), `paint_gradient`. The chrome (window, panels, cards,
+  inputs, borders, text, focus/selection tints) is **neutral grayscale**;
+  hue is reserved for action buttons (`action*` green = primary/go,
+  `danger*` red = stop/destructive) and status text. Keep new surfaces gray —
+  the colored buttons read as meaningful only because nothing else does.
 - **`widgets.py`** — `ScrollableFrame`, `ImagePanel` (shows BGR numpy frames),
   `NumericField`, labeled-entry/button-row helpers.
 - **`monitor.py`** — detachable history window: ring buffer of recent

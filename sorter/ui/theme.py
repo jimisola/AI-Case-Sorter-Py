@@ -1,10 +1,13 @@
 """Modern dark theme for the OSS Client UI.
 
 Centralises colors, fonts, and ttk styles so the rest of the app can stay
-focused on layout. Inspired by the Tokyo Night / VS Code Dark+ palettes —
-flat surfaces with a single blue accent, high-contrast text, and a small
-vertical color hierarchy that gives the UI a sense of depth without
-relying on bevels or relief.
+focused on layout. The chrome — window, panels, cards, inputs, borders,
+text — is **neutral grayscale**: a flat luminance ladder that gives the UI
+depth without bevels, relief, or a hue of its own. Color is reserved for
+things that mean something: action buttons (green = go / primary,
+red = stop / destructive) and status text (success / warning / error).
+Keeping the surfaces colorless means a green Start or a red Stop is the
+only saturated thing on screen, so it reads instantly.
 
 Two helpers are exported:
 
@@ -23,34 +26,51 @@ from tkinter import ttk
 
 
 # Color palette — single source of truth.
+#
+# Everything above the "Action colors" block is neutral gray (R == G == B):
+# surfaces, borders, text, and the selection/focus tints. Only the action
+# and status entries carry hue. If you add a color here, ask which of the
+# two groups it belongs to — a new tinted surface breaks the contrast the
+# colored buttons rely on.
 PALETTE = {
-    # Backgrounds — slate / blue-gray, darkest to lightest.
-    "bg_window":     "#0f172a",   # slate-900 — gradient bottom
-    "bg_gradient_a": "#0c1c4a",   # blue-700 — title bar left
-    "bg_gradient_b": "#05061f",   # deep navy — title bar right
-    "bg_surface":    "#1a2438",   # slate-800-ish, slightly cooler
-    "bg_card":       "#22304a",   # raised surfaces (slot cards, monitor log)
-    "bg_card_hover": "#2b3a5a",   # card hover
-    "bg_card_sel":   "#34487a",   # blue-tinted selected card
-    "bg_input":      "#0a1122",   # deeper than window — entries, listbox, text
+    # Backgrounds — neutral gray, darkest to lightest.
+    "bg_window":     "#131313",   # app background / gradient bottom
+    "bg_gradient_a": "#2e2e2e",   # title bar left
+    "bg_gradient_b": "#0c0c0c",   # title bar right
+    "bg_surface":    "#1c1c1c",   # panels — one step up from the window
+    "bg_card":       "#272727",   # raised surfaces (slot cards, monitor log)
+    "bg_card_hover": "#333333",   # card hover
+    "bg_card_sel":   "#474747",   # selected card — lifted, still neutral
+    "bg_input":      "#0b0b0b",   # deeper than window — entries, listbox, text
 
     # Borders / separators.
-    "border":        "#2d3a52",
-    "border_focus":  "#60a5fa",
+    "border":        "#3a3a3a",
+    "border_focus":  "#8f8f8f",   # focus ring — brightness, not hue
 
     # Text.
-    "text":          "#e2e8f0",   # slate-200
-    "text_muted":    "#94a3b8",   # slate-400
-    "text_subtle":   "#64748b",   # slate-500
-    "text_inverse":  "#0f172a",   # for text on accent backgrounds
+    "text":          "#d4d4d4",
+    "text_highlight": "#ffffff",  # emphasised values (Accent.TLabel)
+    "text_muted":    "#9a9a9a",
+    "text_subtle":   "#6f6f6f",
+    "text_inverse":  "#131313",   # for text on light/action backgrounds
 
-    # Accents.
-    "accent":        "#60a5fa",   # blue-400 — primary
-    "accent_hover":  "#93c5fd",   # blue-300
-    "accent_press":  "#3b82f6",   # blue-500
-    "accent_dim":    "#1e2a44",   # subtle button rest state
+    # Neutral "accent" — section titles, focus, indicators, selection fills.
+    # Kept gray on purpose: emphasis here comes from brightness so that the
+    # action colors below stay the only saturated thing on screen.
+    "accent":        "#e0e0e0",
+    "accent_hover":  "#f2f2f2",
+    "accent_press":  "#c2c2c2",
+    "accent_dim":    "#2e2e2e",   # subtle button rest state
 
-    # Status colors.
+    # Action colors — buttons only. Green = primary/go, red = stop/destructive.
+    "action":        "#22c55e",
+    "action_hover":  "#4ade80",
+    "action_press":  "#16a34a",
+    "danger":        "#ef4444",
+    "danger_hover":  "#f87171",
+    "danger_press":  "#dc2626",
+
+    # Status colors — text and small indicators.
     "success":       "#22c55e",
     "success_dim":   "#14331f",   # muted green fill — e.g. applied auto-suggestions
     "warning":       "#f59e0b",
@@ -100,6 +120,45 @@ def get_fonts(root: tk.Misc) -> dict[str, tuple]:
         "small":        (family, 9),
         "mono":         (mono, 10),
     }
+
+
+def _colored_button(
+    style: ttk.Style,
+    name: str,
+    fonts: dict[str, tuple],
+    *,
+    rest: str,
+    hover: str,
+    press: str,
+) -> None:
+    """Configure a solid-fill action button (the app's only colored controls).
+
+    clam draws a button's edge from bordercolor/darkcolor/lightcolor, so all
+    three track the fill or the button reads as outlined.
+    """
+    style.configure(
+        name,
+        background=rest,
+        foreground=PALETTE["text_inverse"],
+        bordercolor=rest,
+        darkcolor=rest,
+        lightcolor=rest,
+        focuscolor=PALETTE["text_inverse"],
+        font=fonts["bold"],
+    )
+    fill = [
+        ("pressed", press),
+        ("active", hover),
+        ("disabled", PALETTE["bg_surface"]),
+    ]
+    style.map(
+        name,
+        background=fill,
+        bordercolor=fill,
+        darkcolor=fill,
+        lightcolor=fill,
+        foreground=[("disabled", PALETTE["text_subtle"])],
+    )
 
 
 def apply_theme(root: tk.Tk) -> dict[str, tuple]:
@@ -191,7 +250,7 @@ def apply_theme(root: tk.Tk) -> dict[str, tuple]:
     style.configure(
         "Accent.TLabel",
         background=bg,
-        foreground=accent,
+        foreground=PALETTE["text_highlight"],
         font=fonts["bold"],
     )
     # Card-context labels.
@@ -228,7 +287,7 @@ def apply_theme(root: tk.Tk) -> dict[str, tuple]:
     style.configure(
         "CardSelTitle.TLabel",
         background=PALETTE["bg_card_sel"],
-        foreground=accent,
+        foreground=PALETTE["text_highlight"],
         font=fonts["bold"],
     )
     style.configure(
@@ -349,6 +408,9 @@ def apply_theme(root: tk.Tk) -> dict[str, tuple]:
     )
 
     # ----- Buttons -----------------------------------------------------------
+    # Secondary buttons stay in the gray ladder — they lift on hover rather
+    # than taking on a color, so the green/red action buttons keep their
+    # meaning as the only saturated controls in the window.
     style.configure(
         "TButton",
         background=PALETTE["accent_dim"],
@@ -356,100 +418,43 @@ def apply_theme(root: tk.Tk) -> dict[str, tuple]:
         bordercolor=PALETTE["accent_dim"],
         darkcolor=PALETTE["accent_dim"],
         lightcolor=PALETTE["accent_dim"],
-        focuscolor=PALETTE["accent"],
+        focuscolor=PALETTE["border_focus"],
         borderwidth=0,
         relief="flat",
         padding=(14, 7),
         font=fonts["body"],
     )
+    _button_fill = [
+        ("pressed", PALETTE["bg_card_sel"]),
+        ("active", PALETTE["bg_card_hover"]),
+        ("disabled", PALETTE["bg_surface"]),
+    ]
     style.map(
         "TButton",
-        background=[
-            ("pressed", PALETTE["accent_press"]),
-            ("active", PALETTE["accent"]),
-            ("disabled", PALETTE["bg_surface"]),
-        ],
+        background=_button_fill,
+        bordercolor=_button_fill,
+        darkcolor=_button_fill,
+        lightcolor=_button_fill,
         foreground=[
             ("disabled", PALETTE["text_subtle"]),
-            ("active", PALETTE["text_inverse"]),
-            ("pressed", PALETTE["text_inverse"]),
-        ],
-        bordercolor=[
-            ("active", PALETTE["accent"]),
-            ("pressed", PALETTE["accent_press"]),
-        ],
-        darkcolor=[
-            ("active", PALETTE["accent"]),
-            ("pressed", PALETTE["accent_press"]),
-        ],
-        lightcolor=[
-            ("active", PALETTE["accent"]),
-            ("pressed", PALETTE["accent_press"]),
+            ("active", PALETTE["text_highlight"]),
         ],
     )
 
-    # Primary / accent button.
-    style.configure(
-        "Accent.TButton",
-        background=accent,
-        foreground=PALETTE["text_inverse"],
-        bordercolor=accent,
-        darkcolor=accent,
-        lightcolor=accent,
-        font=fonts["bold"],
-    )
-    style.map(
-        "Accent.TButton",
-        background=[
-            ("pressed", PALETTE["accent_press"]),
-            ("active", PALETTE["accent_hover"]),
-            ("disabled", PALETTE["bg_surface"]),
-        ],
-        foreground=[
-            ("disabled", PALETTE["text_subtle"]),
-        ],
-        bordercolor=[
-            ("active", PALETTE["accent_hover"]),
-            ("pressed", PALETTE["accent_press"]),
-        ],
-        darkcolor=[
-            ("active", PALETTE["accent_hover"]),
-            ("pressed", PALETTE["accent_press"]),
-        ],
-        lightcolor=[
-            ("active", PALETTE["accent_hover"]),
-            ("pressed", PALETTE["accent_press"]),
-        ],
+    # Primary / go button — the one colored control on most screens.
+    _colored_button(
+        style, "Accent.TButton", fonts,
+        rest=PALETTE["action"],
+        hover=PALETTE["action_hover"],
+        press=PALETTE["action_press"],
     )
 
-    # Stop / danger button — used while a run is active.
-    style.configure(
-        "Danger.TButton",
-        background=PALETTE["error"],
-        foreground=PALETTE["text_inverse"],
-        bordercolor=PALETTE["error"],
-        darkcolor=PALETTE["error"],
-        lightcolor=PALETTE["error"],
-        font=fonts["bold"],
-    )
-    style.map(
-        "Danger.TButton",
-        background=[
-            ("pressed", "#d04258"),
-            ("active", "#ff8aa0"),
-        ],
-        bordercolor=[
-            ("active", "#ff8aa0"),
-            ("pressed", "#d04258"),
-        ],
-        darkcolor=[
-            ("active", "#ff8aa0"),
-            ("pressed", "#d04258"),
-        ],
-        lightcolor=[
-            ("active", "#ff8aa0"),
-            ("pressed", "#d04258"),
-        ],
+    # Stop / destructive button — used while a run is active, and for Delete.
+    _colored_button(
+        style, "Danger.TButton", fonts,
+        rest=PALETTE["danger"],
+        hover=PALETTE["danger_hover"],
+        press=PALETTE["danger_press"],
     )
 
     # ----- Entries / Spinboxes / Combobox -----------------------------------
