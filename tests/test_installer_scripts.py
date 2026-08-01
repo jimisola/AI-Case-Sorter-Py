@@ -1,0 +1,75 @@
+"""Guards on the Windows installer scripts.
+
+These can't be executed here (no Windows), so the suite enforces the two
+properties that silently broke them once already.
+
+The expensive one to relearn: Windows PowerShell 5.1 decodes a BOM-less file
+using the system ANSI codepage, not UTF-8. A UTF-8 em-dash (``E2 80 94``)
+therefore arrives as ``a``, ``EUR``, ``U+201D`` -- and PowerShell accepts
+U+201D as a **closing double quote**. Inside a string literal that silently
+truncates the string and misparses everything after it, so the reported error
+lands on some unrelated line much further down.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+INSTALLER = ROOT / "installer"
+SCRIPTS = ("install-windows.ps1", "install-windows.bat")
+
+
+@pytest.mark.parametrize("name", SCRIPTS)
+def test_script_exists(name: str) -> None:
+    assert (INSTALLER / name).is_file(), f"installer/{name} is missing"
+
+
+@pytest.mark.parametrize("name", SCRIPTS)
+def test_script_is_pure_ascii(name: str) -> None:
+    """Non-ASCII in these files is a parse hazard, not a style preference."""
+    raw = (INSTALLER / name).read_bytes()
+    offenders = [
+        (n, line) for n, line in enumerate(raw.split(b"\n"), 1)
+        if any(b > 0x7F for b in line)
+    ]
+    assert not offenders, (
+        "Non-ASCII bytes in installer/" + name + " at line(s) "
+        + ", ".join(str(n) for n, _ in offenders)
+        + ". Use '-' for dashes and '...' for ellipses -- PowerShell 5.1 reads "
+        "this file as ANSI and a UTF-8 em-dash becomes a closing quote."
+    )
+
+
+@pytest.mark.parametrize("name", SCRIPTS)
+def test_script_uses_crlf(name: str) -> None:
+    """cmd.exe is unforgiving about bare LF in a .bat; keep both CRLF."""
+    raw = (INSTALLER / name).read_bytes()
+    bare_lf = raw.replace(b"\r\n", b"").count(b"\n")
+    assert bare_lf == 0, f"installer/{name} has {bare_lf} bare LF line ending(s)"
+
+
+def test_powershell_script_has_no_unpaired_quotes_per_line() -> None:
+    """Cheap smoke check for the failure mode the em-dash caused.
+
+    Not a parser -- it only flags an odd number of double quotes on a line
+    that isn't a continuation or a here-string, which is what a truncated
+    string literal looks like.
+    """
+    text = (INSTALLER / "install-windows.ps1").read_text(encoding="ascii")
+    in_block_comment = False
+    bad: list[int] = []
+    for n, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if stripped.startswith("<#"):
+            in_block_comment = True
+        if in_block_comment:
+            if stripped.endswith("#>"):
+                in_block_comment = False
+            continue
+        if stripped.startswith("#") or line.rstrip().endswith("`"):
+            continue
+        if line.count('"') % 2 != 0:
+            bad.append(n)
+    assert not bad, f"odd number of double quotes on line(s): {bad}"
