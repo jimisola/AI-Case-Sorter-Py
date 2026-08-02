@@ -1,0 +1,107 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+
+  extends: [
+    "config:recommended",
+    ":semanticCommits",
+  ],
+
+  semanticCommits: "enabled",
+  semanticCommitType: "chore",
+  semanticCommitScope: "{{datasource}}",
+
+  automergeType: "pr",
+  platformAutomerge: true,
+
+  branchPrefix: "renovate/",
+
+  addLabels: [
+    "bot-renovate",
+  ],
+
+  stopUpdatingLabel: "bot-renovate-stop",
+
+  dependencyDashboard: false,
+
+  prConcurrentLimit: 10,
+  prHourlyLimit: 5,
+
+  separateMajorMinor: true,
+  separateMultipleMajor: true,
+
+  lockFileMaintenance: {
+    enabled: true,
+  },
+
+  vulnerabilityAlerts: {
+    enabled: true,
+    addLabels: ["security"],
+  },
+
+  osvVulnerabilityAlerts: true,
+
+  packageRules: [
+
+    // =====================================================
+    // Version classification labels
+    // =====================================================
+
+    {
+      matchUpdateTypes: ["major"],
+      addLabels: ["renovate-version-major"],
+      minimumReleaseAge: "7 days",
+    },
+    {
+      matchUpdateTypes: ["minor"],
+      addLabels: ["renovate-version-minor"],
+      automerge: true,
+      minimumReleaseAge: "3 days",
+    },
+    {
+      matchUpdateTypes: ["patch"],
+      addLabels: ["renovate-version-patch"],
+      automerge: true,
+      minimumReleaseAge: "3 days",
+    },
+    {
+      matchUpdateTypes: ["digest"],
+      addLabels: ["renovate-version-digest"],
+    },
+
+    // =====================================================
+    // torch / torchvision -- never automerge. Old-CUDA users depend on
+    // specific builds, and a routine bump can silently break them. See
+    // CLAUDE.md and FEEDBACK.md.
+    // =====================================================
+
+    {
+      matchPackageNames: ["torch", "torchvision"],
+      automerge: false,
+      addLabels: ["needs-hardware-test"],
+      minimumReleaseAge: "14 days",
+    },
+
+    // =====================================================
+    // GitHub Actions -- major version tags (v3 -> v4) are routine;
+    // auto-merge once all checks pass. Digest/SHA pins still get their
+    // own PRs regardless (see matchUpdateTypes: ["digest"] above).
+    // =====================================================
+
+    {
+      matchManagers: ["github-actions"],
+      semanticCommitType: "chore",
+      semanticCommitScope: "github-actions",
+      addLabels: ["renovate-type-cicd"],
+      automerge: true,
+    },
+
+    // =====================================================
+    // Ecosystem classification labels
+    // =====================================================
+
+    {
+      matchDatasources: ["pypi"],
+      addLabels: ["renovate-type-python"],
+    },
+  ],
+}
