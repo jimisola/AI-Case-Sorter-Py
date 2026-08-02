@@ -41,14 +41,14 @@ Issues = "https://github.com/sjseth/AI-Case-Sorter-Py/issues"
 ml = ["torch>=2.2", "torchvision>=0.17"]
 
 [build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
 
-[tool.setuptools]
-packages = ["sorter", "sorter.ui", "sorter.training"]
+[tool.hatch.version]
+path = "sorter/__init__.py"
 
-[tool.setuptools.dynamic]
-version = { attr = "sorter.__version__" }
+[tool.hatch.build.targets.wheel]
+packages = ["sorter"]
 
 [tool.ruff]
 line-length = 120
