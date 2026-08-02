@@ -14,6 +14,7 @@ closes the app — which is what makes the staged update take effect.
 Opening the dialog when an update is already staged jumps straight to
 ``ready``, so a user who picked "Later" can come back and restart.
 """
+
 from __future__ import annotations
 
 import queue
@@ -72,51 +73,59 @@ class UpdateDialog(tk.Toplevel):
 
     def _build_header(self, parent: tk.Misc) -> None:
         self._title_var = tk.StringVar()
-        ttk.Label(parent, textvariable=self._title_var,
-                  style="Header.TLabel").pack(anchor="w")
+        ttk.Label(parent, textvariable=self._title_var, style="Header.TLabel").pack(anchor="w")
         self._version_var = tk.StringVar()
-        ttk.Label(parent, textvariable=self._version_var,
-                  style="Accent.TLabel").pack(anchor="w", pady=(4, 0))
+        ttk.Label(parent, textvariable=self._version_var, style="Accent.TLabel").pack(anchor="w", pady=(4, 0))
         self._detail_var = tk.StringVar()
-        ttk.Label(parent, textvariable=self._detail_var, style="Muted.TLabel",
-                  wraplength=560, justify=tk.LEFT).pack(
-            anchor="w", pady=(6, 8), fill=tk.X,
+        ttk.Label(parent, textvariable=self._detail_var, style="Muted.TLabel", wraplength=560, justify=tk.LEFT).pack(
+            anchor="w",
+            pady=(6, 8),
+            fill=tk.X,
         )
 
     def _build_notes(self, parent: tk.Misc) -> None:
         self._notes_wrap = ttk.Frame(parent, style="Card.TFrame", padding=4)
         self._notes_wrap.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self._notes = tk.Text(
-            self._notes_wrap, height=10, wrap=tk.WORD, state=tk.DISABLED,
-            bg=PALETTE["bg_input"], fg=PALETTE["text"],
+            self._notes_wrap,
+            height=10,
+            wrap=tk.WORD,
+            state=tk.DISABLED,
+            bg=PALETTE["bg_input"],
+            fg=PALETTE["text"],
             insertbackground=PALETTE["accent"],
-            highlightthickness=0, borderwidth=0, padx=8, pady=6,
+            highlightthickness=0,
+            borderwidth=0,
+            padx=8,
+            pady=6,
         )
         self._notes.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        ttk.Scrollbar(self._notes_wrap, orient=tk.VERTICAL,
-                      command=self._notes.yview).pack(side=tk.RIGHT, fill=tk.Y)
+        ttk.Scrollbar(self._notes_wrap, orient=tk.VERTICAL, command=self._notes.yview).pack(side=tk.RIGHT, fill=tk.Y)
 
     def _build_progress(self, parent: tk.Misc) -> None:
         self._progress_row = ttk.Frame(parent)
-        self._progress = ttk.Progressbar(self._progress_row, mode="determinate",
-                                         maximum=100)
+        self._progress = ttk.Progressbar(self._progress_row, mode="determinate", maximum=100)
         self._progress.pack(side=tk.TOP, fill=tk.X)
         self._progress_var = tk.StringVar(value="")
-        ttk.Label(self._progress_row, textvariable=self._progress_var,
-                  style="Muted.TLabel").pack(anchor="w", pady=(4, 0))
+        ttk.Label(self._progress_row, textvariable=self._progress_var, style="Muted.TLabel").pack(
+            anchor="w", pady=(4, 0)
+        )
 
     def _build_buttons(self) -> None:
         self._secondary = ttk.Button(self._btns, text="Later", command=self._close)
         self._secondary.pack(side=tk.RIGHT)
         # Blue "update" hue: refreshing something already installed.
-        self._primary = ttk.Button(self._btns, text="Download & Install",
-                                   style="Update.TButton", command=self._on_primary)
+        self._primary = ttk.Button(
+            self._btns, text="Download & Install", style="Update.TButton", command=self._on_primary
+        )
         self._primary.pack(side=tk.RIGHT, padx=(0, 8))
 
         self._auto_var = tk.BooleanVar(value=self._read_auto_check())
         self._auto_check = ttk.Checkbutton(
-            self._btns, text="Check for updates on startup",
-            variable=self._auto_var, command=self._on_toggle_auto,
+            self._btns,
+            text="Check for updates on startup",
+            variable=self._auto_var,
+            command=self._on_toggle_auto,
         )
         self._auto_check.pack(side=tk.LEFT)
 
@@ -294,8 +303,7 @@ class UpdateDialog(tk.Toplevel):
             self._progress_row.pack_forget()
             self._progress_var.set("")
             self._primary.config(state=tk.NORMAL, text="Download & Install")
-            self._secondary.config(text="Later", state=tk.NORMAL,
-                                   command=self._close)
+            self._secondary.config(text="Later", state=tk.NORMAL, command=self._close)
             return
         self._progress_var.set(message)
         self._primary.config(state=tk.NORMAL, text="Try Again")
@@ -314,27 +322,27 @@ class UpdateDialog(tk.Toplevel):
         """Re-exec the launcher, then shut the app down so the swap can happen."""
         launcher = updater.launcher_path()
         if launcher is None:
-            self._detail_var.set(
-                "Close the app and start it again to finish installing the "
-                "update."
-            )
+            self._detail_var.set("Close the app and start it again to finish installing the update.")
             self._primary.config(state=tk.DISABLED)
             return
 
         root = launcher.parent
         try:
             if sys.platform == "win32":
-                flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
-                    subprocess, "CREATE_NEW_PROCESS_GROUP", 0
-                )
+                flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
                 subprocess.Popen(
-                    [str(launcher)], cwd=str(root), close_fds=True,
-                    creationflags=flags, shell=True,
+                    [str(launcher)],
+                    cwd=str(root),
+                    close_fds=True,
+                    creationflags=flags,
+                    shell=True,
                 )
             else:
                 subprocess.Popen(
-                    ["/bin/bash", str(launcher)], cwd=str(root),
-                    start_new_session=True, close_fds=True,
+                    ["/bin/bash", str(launcher)],
+                    cwd=str(root),
+                    start_new_session=True,
+                    close_fds=True,
                 )
         except OSError as exc:
             self._detail_var.set(

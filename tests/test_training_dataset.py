@@ -1,7 +1,8 @@
 """Tests for the training dataset helpers."""
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -21,13 +22,13 @@ from sorter.training.dataset import (
 
 def test_dotnet_ticks_for_known_date() -> None:
     """`new DateTime(2026,1,1,0,0,0,DateTimeKind.Utc).Ticks` == 639_028_224_000_000_000."""
-    when = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    when = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
     assert dotnet_ticks(when) == 639_028_224_000_000_000
 
 
 def test_dotnet_ticks_at_unix_epoch_matches_known_offset() -> None:
     """1970-01-01 UTC must produce exactly the .NET Unix-epoch ticks constant."""
-    when = datetime(1970, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    when = datetime(1970, 1, 1, 0, 0, 0, tzinfo=UTC)
     assert dotnet_ticks(when) == 621_355_968_000_000_000
 
 
@@ -70,6 +71,7 @@ def test_class_counts_groups_by_label(tmp_path: Path) -> None:
 
 # ----- label sanitization -----------------------------------
 
+
 def test_safe_label_passes_through_normal_headstamps() -> None:
     for label in ("9mm WIN", "R-P", "+P", "FC", "S&B"):
         assert safe_label(label) == label
@@ -90,7 +92,7 @@ def test_safe_label_strips_illegal_chars_and_reserved_names() -> None:
 
 
 def test_filenames_use_sanitized_label() -> None:
-    when = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    when = datetime(2020, 1, 1, tzinfo=UTC)
     tf = training_filename("../evil", when=when)
     ff = feedback_filename("../evil", 42.7, when=when)
     assert "/" not in tf and ".." not in tf

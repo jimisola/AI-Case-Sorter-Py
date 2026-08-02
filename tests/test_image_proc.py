@@ -1,9 +1,9 @@
 """Unit tests for image_proc — both crop strategies + primer mask."""
+
 from __future__ import annotations
 
 import cv2
 import numpy as np
-import pytest
 
 from sorter import image_proc
 

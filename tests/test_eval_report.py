@@ -1,4 +1,5 @@
 """HTML evaluation report generation (verbatim legacy format)."""
+
 from __future__ import annotations
 
 import json
@@ -18,12 +19,26 @@ def _results(img_dir: Path) -> list[dict]:
     for n in ("WIN__1.jpg", "FC__2.jpg"):
         cv2.imwrite(str(img_dir / n), np.full((20, 20, 3), 120, np.uint8))
     return [
-        {"filename": "WIN__1.jpg", "filepath": str(img_dir / "WIN__1.jpg"),
-         "predicted": "WIN", "confidence": 97.0, "original": "WIN",
-         "raw_original": "WIN", "has_mapping": True, "match": "match"},
-        {"filename": "FC__2.jpg", "filepath": str(img_dir / "FC__2.jpg"),
-         "predicted": "Brass", "confidence": 40.0, "original": "FC",
-         "raw_original": "FC", "has_mapping": False, "match": "mismatch"},
+        {
+            "filename": "WIN__1.jpg",
+            "filepath": str(img_dir / "WIN__1.jpg"),
+            "predicted": "WIN",
+            "confidence": 97.0,
+            "original": "WIN",
+            "raw_original": "WIN",
+            "has_mapping": True,
+            "match": "match",
+        },
+        {
+            "filename": "FC__2.jpg",
+            "filepath": str(img_dir / "FC__2.jpg"),
+            "predicted": "Brass",
+            "confidence": 40.0,
+            "original": "FC",
+            "raw_original": "FC",
+            "has_mapping": False,
+            "match": "mismatch",
+        },
     ]
 
 
@@ -57,6 +72,12 @@ def test_report_row_key_order_matches_winforms(tmp_path: Path) -> None:
     rows = eval_report.report_rows(_results(img_dir))
     # Key order must match the legacy report for byte-stable output.
     assert list(rows[0].keys()) == [
-        "filename", "filepath", "thumbnail", "classification", "confidence",
-        "original_classification", "raw_original_classification", "has_mapping",
+        "filename",
+        "filepath",
+        "thumbnail",
+        "classification",
+        "confidence",
+        "original_classification",
+        "raw_original_classification",
+        "has_mapping",
     ]

@@ -7,6 +7,7 @@ the platform-specific user data dir.
 Authentication is OPTIONAL — the app boots fine without it. The community
 tab is the only gated surface.
 """
+
 from __future__ import annotations
 
 import os
@@ -19,20 +20,14 @@ import msal
 
 from . import paths
 
-
 CLIENT_ID = "9b0e9de2-e652-47f6-ad7d-c93a90be8a2e"
 TENANT_ID = "704a9dfb-f600-47db-b95f-28ea72de1ab3"
-B2C_AUTHORITY = (
-    "https://sjsreloadingrecipes.b2clogin.com/tfp/"
-    "sjsreloadingrecipes.onmicrosoft.com/B2C_1_SignInUp"
-)
+B2C_AUTHORITY = "https://sjsreloadingrecipes.b2clogin.com/tfp/sjsreloadingrecipes.onmicrosoft.com/B2C_1_SignInUp"
 REDIRECT_URI = "http://localhost:44300/"
 REDIRECT_PORT = 44300
 
 LOGIN_SCOPES: list[str] = []  # B2C: AcquireTokenInteractive injects openid/offline_access
-API_SCOPES: list[str] = [
-    "https://sjsreloadingrecipes.onmicrosoft.com/7756be51-5446-43ca-9742-4693f53ad48a/ApiRead"
-]
+API_SCOPES: list[str] = ["https://sjsreloadingrecipes.onmicrosoft.com/7756be51-5446-43ca-9742-4693f53ad48a/ApiRead"]
 
 
 @dataclass
@@ -140,8 +135,7 @@ class AuthManager:
             # Port-in-use is common on dev machines that already ran the app.
             if "address already in use" in str(exc).lower() or getattr(exc, "errno", None) == 98:
                 raise PortInUseError(
-                    f"Local redirect port {REDIRECT_PORT} is in use. "
-                    "Close the app currently bound to it and try again."
+                    f"Local redirect port {REDIRECT_PORT} is in use. Close the app currently bound to it and try again."
                 ) from exc
             raise AuthError(f"Failed to start auth listener: {exc}") from exc
 
@@ -220,6 +214,7 @@ class AuthManager:
         home_account_id = acct.get("home_account_id")
         try:
             import msal
+
             id_token_type = msal.TokenCache.CredentialType.ID_TOKEN
             query = {"home_account_id": home_account_id} if home_account_id else None
             # `search` is the modern API; `find` is deprecated but present on
@@ -247,6 +242,7 @@ def _decode_jwt_claims(token: str) -> dict[str, Any]:
     """
     import base64
     import json
+
     try:
         parts = token.split(".")
         if len(parts) < 2:

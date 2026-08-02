@@ -7,6 +7,7 @@ the event bus (PhotoImage must be created on the main thread).
 
 Launched from the Models tab's per-row "Images" button.
 """
+
 from __future__ import annotations
 
 import tkinter as tk
@@ -33,6 +34,7 @@ def _decode_thumb(path: str, size: int = _THUMB):
     """Decode + letterbox a thumbnail (worker thread). Returns a PIL image."""
     try:
         from PIL import Image
+
         img = Image.open(path)
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
@@ -46,8 +48,9 @@ def _decode_thumb(path: str, size: int = _THUMB):
 
 class _ThumbTile(tk.Frame):
     def __init__(self, parent, *, path, headstamp, on_click, on_double, on_context):
-        super().__init__(parent, bg=PALETTE["bg_card"], bd=0,
-                         highlightthickness=2, highlightbackground=PALETTE["bg_card"])
+        super().__init__(
+            parent, bg=PALETTE["bg_card"], bd=0, highlightthickness=2, highlightbackground=PALETTE["bg_card"]
+        )
         self.path = path
         self.headstamp = headstamp
         self.selected = False
@@ -60,8 +63,7 @@ class _ThumbTile(tk.Frame):
         self._img.pack(fill=tk.BOTH, expand=True)
 
         caption = headstamp if len(headstamp) <= 16 else headstamp[:15] + "…"
-        self._cap = tk.Label(self, text=caption, bg=PALETTE["bg_card"],
-                             fg=PALETTE["text"], font=(None, 8))
+        self._cap = tk.Label(self, text=caption, bg=PALETTE["bg_card"], fg=PALETTE["text"], font=(None, 8))
         self._cap.pack(pady=(0, 4))
 
         for w in (self, holder, self._img, self._cap):
@@ -87,9 +89,7 @@ class ModelImagesDialog(tk.Toplevel):
         self.app = app
         self.images_dir = paths.model_images_dir(model.id)
         self.images_dir.mkdir(parents=True, exist_ok=True)
-        self._headstamp_names = [
-            h.name for h in HeadstampRepo(db).list_for_model(model.id)
-        ]
+        self._headstamp_names = [h.name for h in HeadstampRepo(db).list_for_model(model.id)]
 
         self.title(f"Images — {model.name}")
         self.transient(parent)
@@ -120,16 +120,16 @@ class ModelImagesDialog(tk.Toplevel):
 
         ttk.Label(top, text="Show", style="Muted.TLabel").pack(side=tk.LEFT)
         self._filter_var = tk.StringVar()
-        self._filter_combo = ttk.Combobox(top, state="readonly", width=22,
-                                          textvariable=self._filter_var)
+        self._filter_combo = ttk.Combobox(top, state="readonly", width=22, textvariable=self._filter_var)
         self._filter_combo.pack(side=tk.LEFT, padx=(6, 12))
         self._filter_combo.bind("<<ComboboxSelected>>", lambda _e: self._reload(reset_page=True))
         self._populate_filter_combo()
 
         ttk.Label(top, text="Per page", style="Muted.TLabel").pack(side=tk.LEFT)
         self._pagesize_var = tk.StringVar(value=str(self._page_size))
-        pagesize = ttk.Combobox(top, state="readonly", width=6, textvariable=self._pagesize_var,
-                                values=[str(n) for n in _PAGE_SIZES])
+        pagesize = ttk.Combobox(
+            top, state="readonly", width=6, textvariable=self._pagesize_var, values=[str(n) for n in _PAGE_SIZES]
+        )
         pagesize.pack(side=tk.LEFT, padx=(6, 12))
         pagesize.bind("<<ComboboxSelected>>", lambda _e: self._on_pagesize())
 
@@ -145,25 +145,22 @@ class ModelImagesDialog(tk.Toplevel):
         self._grid = self._scroll.body
         self._grid.bind("<Configure>", lambda _e: self._reflow(), add="+")
         self._empty = ttk.Label(
-            self._grid, text="No images.", style="Subtle.TLabel",
+            self._grid,
+            text="No images.",
+            style="Subtle.TLabel",
         )
 
         # ---- pager ----------------------------------------------------------
         pager = ttk.Frame(self, style="Window.TFrame", padding=(10, 0))
         pager.pack(fill=tk.X)
-        self._first_btn = ttk.Button(pager, text="⏮ First", width=8,
-                                     command=lambda: self._go(0))
-        self._prev_btn = ttk.Button(pager, text="◀ Prev", width=8,
-                                    command=lambda: self._go(self._page_index - 1))
-        self._next_btn = ttk.Button(pager, text="Next ▶", width=8,
-                                    command=lambda: self._go(self._page_index + 1))
-        self._last_btn = ttk.Button(pager, text="Last ⏭", width=8,
-                                    command=lambda: self._go(self._page_count() - 1))
+        self._first_btn = ttk.Button(pager, text="⏮ First", width=8, command=lambda: self._go(0))
+        self._prev_btn = ttk.Button(pager, text="◀ Prev", width=8, command=lambda: self._go(self._page_index - 1))
+        self._next_btn = ttk.Button(pager, text="Next ▶", width=8, command=lambda: self._go(self._page_index + 1))
+        self._last_btn = ttk.Button(pager, text="Last ⏭", width=8, command=lambda: self._go(self._page_count() - 1))
         self._first_btn.pack(side=tk.LEFT)
         self._prev_btn.pack(side=tk.LEFT, padx=(6, 0))
         self._page_var = tk.StringVar(value="")
-        ttk.Label(pager, textvariable=self._page_var, style="Muted.TLabel")\
-            .pack(side=tk.LEFT, padx=12)
+        ttk.Label(pager, textvariable=self._page_var, style="Muted.TLabel").pack(side=tk.LEFT, padx=12)
         self._last_btn.pack(side=tk.LEFT)
         self._next_btn.pack(side=tk.LEFT, padx=(0, 6))
 
@@ -173,16 +170,16 @@ class ModelImagesDialog(tk.Toplevel):
         self._sel_var = tk.StringVar(value="0 selected")
         ttk.Label(actions, textvariable=self._sel_var, style="Muted.TLabel").pack(side=tk.LEFT)
         ttk.Button(actions, text="Close", command=self._close).pack(side=tk.RIGHT)
-        self._delete_btn = ttk.Button(actions, text="Delete selected",
-                                      command=self._delete_selected, style="Danger.TButton")
+        self._delete_btn = ttk.Button(
+            actions, text="Delete selected", command=self._delete_selected, style="Danger.TButton"
+        )
         self._delete_btn.pack(side=tk.RIGHT, padx=(8, 12))
-        self._reclassify_btn = ttk.Button(actions, text="Reclassify selected",
-                                          command=self._reclassify_selected)
+        self._reclassify_btn = ttk.Button(actions, text="Reclassify selected", command=self._reclassify_selected)
         self._reclassify_btn.pack(side=tk.RIGHT, padx=(8, 0))
         self._target_var = tk.StringVar()
-        self._target_combo = ttk.Combobox(actions, state="readonly", width=20,
-                                          textvariable=self._target_var,
-                                          values=self._headstamp_names)
+        self._target_combo = ttk.Combobox(
+            actions, state="readonly", width=20, textvariable=self._target_var, values=self._headstamp_names
+        )
         if self._headstamp_names:
             self._target_combo.current(0)
         self._target_combo.pack(side=tk.RIGHT)
@@ -198,7 +195,9 @@ class ModelImagesDialog(tk.Toplevel):
     def _scan_filter(self) -> None:
         files = image_store.list_images(self.images_dir)
         self._filtered = image_store.filter_images(
-            files, self._filter_var.get(), self._headstamp_names,
+            files,
+            self._filter_var.get(),
+            self._headstamp_names,
         )
         max_page = max(0, self._page_count() - 1)
         self._page_index = min(self._page_index, max_page)
@@ -210,7 +209,7 @@ class ModelImagesDialog(tk.Toplevel):
 
     def _page_files(self) -> list[Path]:
         start = self._page_index * self._page_size
-        return self._filtered[start:start + self._page_size]
+        return self._filtered[start : start + self._page_size]
 
     def _on_pagesize(self) -> None:
         try:
@@ -250,8 +249,11 @@ class ModelImagesDialog(tk.Toplevel):
         self._empty.grid_forget()
         for path in page:
             tile = _ThumbTile(
-                self._grid, path=path, headstamp=image_store.parse_headstamp(path),
-                on_click=self._toggle_tile, on_double=self._open_preview,
+                self._grid,
+                path=path,
+                headstamp=image_store.parse_headstamp(path),
+                on_click=self._toggle_tile,
+                on_double=self._open_preview,
                 on_context=self._show_context,
             )
             self._tiles.append(tile)
@@ -285,6 +287,7 @@ class ModelImagesDialog(tk.Toplevel):
             return
         try:
             from PIL import ImageTk
+
             self._tiles[idx].set_image(ImageTk.PhotoImage(pil))
         except Exception:
             pass
@@ -303,8 +306,7 @@ class ModelImagesDialog(tk.Toplevel):
         self._sel_var.set(f"{count} selected")
         state = tk.NORMAL if count else tk.DISABLED
         self._delete_btn.configure(state=state)
-        self._reclassify_btn.configure(
-            state=tk.NORMAL if (count and self._headstamp_names) else tk.DISABLED)
+        self._reclassify_btn.configure(state=tk.NORMAL if (count and self._headstamp_names) else tk.DISABLED)
 
     def _update_pager(self) -> None:
         total = len(self._filtered)
@@ -350,23 +352,35 @@ class ModelImagesDialog(tk.Toplevel):
 
     def _open_preview(self, tile: _ThumbTile) -> None:
         ImagePreviewDialog(
-            self, tile.path, self._headstamp_names, tile.headstamp,
+            self,
+            tile.path,
+            self._headstamp_names,
+            tile.headstamp,
             on_changed=lambda _change: self._reload(),
         )
 
     def _show_context(self, tile: _ThumbTile, event: tk.Event) -> None:
         self._context_tile = tile
         menu = tk.Menu(
-            self, tearoff=0, bg=PALETTE["bg_card"], fg=PALETTE["text"],
-            activebackground=PALETTE["accent"], activeforeground=PALETTE["text_inverse"],
+            self,
+            tearoff=0,
+            bg=PALETTE["bg_card"],
+            fg=PALETTE["text"],
+            activebackground=PALETTE["accent"],
+            activeforeground=PALETTE["text_inverse"],
         )
         menu.add_command(label="Preview", command=lambda: self._open_preview(tile))
-        sub = tk.Menu(menu, tearoff=0, bg=PALETTE["bg_card"], fg=PALETTE["text"],
-                      activebackground=PALETTE["accent"], activeforeground=PALETTE["text_inverse"])
+        sub = tk.Menu(
+            menu,
+            tearoff=0,
+            bg=PALETTE["bg_card"],
+            fg=PALETTE["text"],
+            activebackground=PALETTE["accent"],
+            activeforeground=PALETTE["text_inverse"],
+        )
         for name in self._headstamp_names:
             sub.add_command(label=name, command=lambda n=name: self._reclassify_one(tile, n))
-        menu.add_cascade(label="Reclassify to", menu=sub,
-                         state=tk.NORMAL if self._headstamp_names else tk.DISABLED)
+        menu.add_cascade(label="Reclassify to", menu=sub, state=tk.NORMAL if self._headstamp_names else tk.DISABLED)
         menu.add_separator()
         menu.add_command(label="Delete", command=lambda: self._delete_one(tile))
         try:
@@ -380,7 +394,9 @@ class ModelImagesDialog(tk.Toplevel):
 
     def _delete_one(self, tile: _ThumbTile) -> None:
         if not messagebox.askyesno(
-            "Delete image", f"Delete this image?\n\n{Path(tile.path).name}", parent=self,
+            "Delete image",
+            f"Delete this image?\n\n{Path(tile.path).name}",
+            parent=self,
         ):
             return
         image_store.delete(tile.path)

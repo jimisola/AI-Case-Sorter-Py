@@ -3,6 +3,7 @@
 These tests mock `msal.PublicClientApplication` to avoid any real network
 interaction. Real interactive login is a manual smoke test.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -114,12 +115,14 @@ def test_identity_prefers_account_claims(tmp_path: Path) -> None:
     """When the account dict carries id_token_claims, use them directly
     (no silent token call needed)."""
     mgr = _mgr(tmp_path)
-    mgr._client._accounts = [{
-        "home_account_id": "u1",
-        # B2C username is the ugly policy-prefixed object id.
-        "username": "abc123-b2c_1_signinup.def456",
-        "id_token_claims": {"name": "Jane Doe", "emails": ["jane@example.com"]},
-    }]
+    mgr._client._accounts = [
+        {
+            "home_account_id": "u1",
+            # B2C username is the ugly policy-prefixed object id.
+            "username": "abc123-b2c_1_signinup.def456",
+            "id_token_claims": {"name": "Jane Doe", "emails": ["jane@example.com"]},
+        }
+    ]
     name, email = mgr.identity()
     assert name == "Jane Doe"
     assert email == "jane@example.com"
@@ -128,10 +131,12 @@ def test_identity_prefers_account_claims(tmp_path: Path) -> None:
 def test_identity_falls_back_to_silent_token(tmp_path: Path) -> None:
     """Account dict without claims → resolve via a silent token read."""
     mgr = _mgr(tmp_path)
-    mgr._client._accounts = [{
-        "home_account_id": "u1",
-        "username": "abc123-b2c_1_signinup.def456",
-    }]
+    mgr._client._accounts = [
+        {
+            "home_account_id": "u1",
+            "username": "abc123-b2c_1_signinup.def456",
+        }
+    ]
     mgr._client.next_silent_result = {
         "access_token": "T",
         "id_token_claims": {"name": "Bob", "emails": ["bob@example.com"]},
@@ -155,6 +160,7 @@ def _make_jwt(claims: dict) -> str:
 
 def test_decode_jwt_claims_roundtrip() -> None:
     from sorter.auth import _decode_jwt_claims
+
     token = _make_jwt({"name": "Jane", "emails": ["jane@example.com"]})
     claims = _decode_jwt_claims(token)
     assert claims["name"] == "Jane"
@@ -163,12 +169,14 @@ def test_decode_jwt_claims_roundtrip() -> None:
 
 def test_decode_jwt_claims_garbage_returns_empty() -> None:
     from sorter.auth import _decode_jwt_claims
+
     assert _decode_jwt_claims("not-a-jwt") == {}
     assert _decode_jwt_claims("") == {}
 
 
 def test_extract_name_falls_back_to_given_family() -> None:
     from sorter.auth import _extract_name
+
     assert _extract_name({"name": "Full Name"}) == "Full Name"
     assert _extract_name({"given_name": "Ada", "family_name": "Lovelace"}) == "Ada Lovelace"
     assert _extract_name({"given_name": "Ada"}) == "Ada"
@@ -216,10 +224,12 @@ def test_identity_decodes_cached_id_token(tmp_path: Path) -> None:
     claims, no silent token, just the cached id token.
     """
     mgr = _mgr(tmp_path)
-    mgr._client._accounts = [{
-        "home_account_id": "u1",
-        "username": "abc123-b2c_1_signinup.def456",
-    }]
+    mgr._client._accounts = [
+        {
+            "home_account_id": "u1",
+            "username": "abc123-b2c_1_signinup.def456",
+        }
+    ]
     jwt = _make_jwt({"name": "Cached User", "emails": ["cached@example.com"]})
     # Stub the cache search to return an ID-token entry carrying the JWT.
     mgr._cache.search = lambda *_a, **_k: [{"secret": jwt}]
@@ -238,6 +248,7 @@ def test_cache_file_persisted_and_chmod(tmp_path: Path) -> None:
     mgr._cache.flush()
     assert cache_path.exists()
     import os
+
     mode = os.stat(cache_path).st_mode & 0o777
     if mode != 0:
         assert mode in (0o600, 0o400, 0o700)

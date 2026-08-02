@@ -24,6 +24,7 @@ Safety model:
 * The exit code is **always 0**. A broken updater must never stop the app
   from starting; it reports on stderr and leaves the previous version running.
 """
+
 from __future__ import annotations
 
 import json
@@ -34,9 +35,7 @@ from pathlib import Path
 from . import __version__, paths
 
 # Never overwritten, never pruned, regardless of what an archive contains.
-PROTECTED_TOP_LEVEL = frozenset(
-    {".git", ".venv", "venv", "data", ".env", ".installed", "portable.txt"}
-)
+PROTECTED_TOP_LEVEL = frozenset({".git", ".venv", "venv", "data", ".env", ".installed", "portable.txt"})
 
 # Pruning stale files is confined to these directories.
 PRUNE_ROOTS = ("sorter",)

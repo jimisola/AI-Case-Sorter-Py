@@ -1,4 +1,5 @@
 """Tests for the SQLite Database wrapper + JSON migration."""
+
 from __future__ import annotations
 
 import json
@@ -6,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from sorter.db import Database, DEFAULT_CARTRIDGE_NAME, DEFAULT_MODEL_MODE
+from sorter.db import DEFAULT_CARTRIDGE_NAME, DEFAULT_MODEL_MODE, Database
 
 
 def test_fresh_db_seeds_default_cartridge_and_model(tmp_path: Path) -> None:
@@ -36,16 +37,20 @@ def test_ensure_initialized_is_idempotent(tmp_path: Path) -> None:
 
 def test_migration_from_legacy_json(tmp_path: Path) -> None:
     legacy = tmp_path / "config.json"
-    legacy.write_text(json.dumps({
-        "api": {"endpoint_url": "http://example.com", "model": "9mm-comp"},
-        "serial": {"port": "COM3", "baud": 115200},
-        "image_proc": {"strategy": "hough"},
-        "camera": {"device_index": 1},
-        "headstamps": [
-            {"name": "WIN", "slot": 3},
-            {"name": "FC", "slot": 5},
-        ],
-    }))
+    legacy.write_text(
+        json.dumps(
+            {
+                "api": {"endpoint_url": "http://example.com", "model": "9mm-comp"},
+                "serial": {"port": "COM3", "baud": 115200},
+                "image_proc": {"strategy": "hough"},
+                "camera": {"device_index": 1},
+                "headstamps": [
+                    {"name": "WIN", "slot": 3},
+                    {"name": "FC", "slot": 5},
+                ],
+            }
+        )
+    )
 
     db = Database(tmp_path / "test.db")
     db.ensure_initialized(legacy_config_json=legacy)
@@ -87,10 +92,7 @@ def test_foreign_key_constraint_enforced(tmp_path: Path) -> None:
     db.ensure_initialized()
 
     with pytest.raises(Exception):  # IntegrityError
-        db.conn.execute(
-            "INSERT INTO models(name, cartridge_id, model_mode) "
-            "VALUES ('bad', 9999, 'convnext_tiny')"
-        )
+        db.conn.execute("INSERT INTO models(name, cartridge_id, model_mode) VALUES ('bad', 9999, 'convnext_tiny')")
 
 
 def test_model_mode_check_constraint(tmp_path: Path) -> None:

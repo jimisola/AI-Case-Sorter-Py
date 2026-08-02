@@ -3,11 +3,13 @@
 All worker threads (serial reader, camera grabber, HTTP worker) push (topic, payload)
 tuples onto a single Queue. The Tk main loop polls it via root.after().
 """
+
 from __future__ import annotations
 
 import queue
 from collections import defaultdict
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 
 class EventBus:

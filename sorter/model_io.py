@@ -23,28 +23,28 @@ backslashes, which breaks `Path` ops. Every read normalizes to forward
 slashes before any path manipulation. Path-traversal entries (``..``) are
 rejected.
 """
+
 from __future__ import annotations
 
-import dataclasses
 import enum
-import io
 import json
 import os
 import shutil
 import zipfile
+from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Iterable
+from typing import Any
 
 from . import paths
 from .models import (
+    SUPPORTED_MODEL_MODES,
     AIModelConfig,
     Headstamp,
     ImageProcessingConfig,
     Model,
-    normalize_upload_mode,
-    SUPPORTED_MODEL_MODES,
     TrainingConfig,
+    normalize_upload_mode,
 )
 from .repository import (
     CartridgeRepo,
@@ -104,12 +104,12 @@ def model_to_export_dict(m: Model) -> dict[str, Any]:
 # to our snake_case backbone identifiers; non-ConvNeXt modes fall through to a
 # ConvNeXt this app can actually run.
 _WINFORMS_MODELMODE_INT_TO_STR = {
-    0: "convnext_tiny",   # DeepLearning (ResNet50) — can't run, fall back
-    1: "convnext_tiny",   # Inception           — fall back
-    2: "openai",          # OpenAI
+    0: "convnext_tiny",  # DeepLearning (ResNet50) — can't run, fall back
+    1: "convnext_tiny",  # Inception           — fall back
+    2: "openai",  # OpenAI
     3: "convnext_large",
-    4: "convnext_tiny",   # DeeperLearning (ResNet101) — fall back
-    5: "convnext_tiny",   # Custom              — fall back
+    4: "convnext_tiny",  # DeeperLearning (ResNet101) — fall back
+    5: "convnext_tiny",  # Custom              — fall back
     6: "convnext_base",
     7: "convnext_small",
     8: "convnext_tiny",
@@ -127,7 +127,7 @@ def _normalize_model_mode(raw: Any) -> str:
             return rl
         # ConvNeXtTiny → convnext_tiny
         if rl.startswith("convnext") and not rl.startswith("convnext_"):
-            tail = rl[len("convnext"):]
+            tail = rl[len("convnext") :]
             candidate = f"convnext_{tail}"
             if candidate in SUPPORTED_MODEL_MODES:
                 return candidate
@@ -167,20 +167,14 @@ def model_from_export_dict(d: dict[str, Any]) -> Model:
     """
     if not d:
         return Model()
-    image_processing = ImageProcessingConfig.from_dict(
-        _g(d, "image_processing", "ImageProcessingConfig")
-    )
+    image_processing = ImageProcessingConfig.from_dict(_g(d, "image_processing", "ImageProcessingConfig"))
     # The legacy app persists two training_configs: PythonTrainingConfig (for
     # the python training pipeline — what we care about) and
     # ModelTrainingConfig (for the legacy ML.NET pipeline). Prefer the
     # python one because it carries the ImageSize the model was actually
     # trained at.
-    training_config = TrainingConfig.from_dict(
-        _g(d, "training_config", "PythonTrainingConfig", "ModelTrainingConfig")
-    )
-    ai_model_config = AIModelConfig.from_dict(
-        _g(d, "ai_model_config", "AIModelConfig")
-    )
+    training_config = TrainingConfig.from_dict(_g(d, "training_config", "PythonTrainingConfig", "ModelTrainingConfig"))
+    ai_model_config = AIModelConfig.from_dict(_g(d, "ai_model_config", "AIModelConfig"))
     fb_enabled = bool(_g(d, "feedback_loop_enabled", "FeedbackLoopEnabled", default=False))
     return Model(
         id=None,
@@ -202,7 +196,9 @@ def model_from_export_dict(d: dict[str, Any]) -> Model:
         trained_image_count=int(_g(d, "trained_image_count", "TrainedImageCount", default=0)),
         training_confusion_table=_g(d, "training_confusion_table", "TrainingConfusionTable"),
         feedback_loop_enabled=fb_enabled,
-        feedback_loop_confidence_floor=int(_g(d, "feedback_loop_confidence_floor", "FeedbackLoopConfidenceFloor", default=95)),
+        feedback_loop_confidence_floor=int(
+            _g(d, "feedback_loop_confidence_floor", "FeedbackLoopConfidenceFloor", default=95)
+        ),
         feedback_loop_upload_mode=normalize_upload_mode(
             _g(d, "feedback_loop_upload_mode", "FeedbackLoopUploadMode"),
             feedback_enabled=fb_enabled,
@@ -244,10 +240,7 @@ def export_model(
     if mode in (ExportMode.IMAGES_ONLY, ExportMode.MODEL_AND_IMAGES) and images_dir:
         d = Path(images_dir)
         if d.exists():
-            image_files = sorted(
-                p for p in d.iterdir()
-                if p.is_file() and p.suffix.lower() in _VALID_IMAGE_EXTS
-            )
+            image_files = sorted(p for p in d.iterdir() if p.is_file() and p.suffix.lower() in _VALID_IMAGE_EXTS)
 
     include_model = (
         mode in (ExportMode.MODEL_ONLY, ExportMode.MODEL_AND_IMAGES)
@@ -285,9 +278,15 @@ def export_model(
 
 class _suppressed:
     """Inline contextlib.suppress (avoids the import for this single use)."""
-    def __init__(self, *exc): self.exc = exc
-    def __enter__(self): return self
-    def __exit__(self, t, v, tb): return t is not None and issubclass(t, self.exc)
+
+    def __init__(self, *exc):
+        self.exc = exc
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, t, v, tb):
+        return t is not None and issubclass(t, self.exc)
 
 
 def read_manifest(zip_path: Path | str) -> dict[str, Any]:
@@ -344,8 +343,14 @@ def export_for_share(
     if feedback_enabled:
         m.feedback_loop_upload_mode = "Instant"
     zip_path = export_model(
-        output_zip, m, cartridge_name, headstamps,
-        mode=mode, model_file=model_file, images_dir=images_dir, progress=progress,
+        output_zip,
+        m,
+        cartridge_name,
+        headstamps,
+        mode=mode,
+        model_file=model_file,
+        images_dir=images_dir,
+        progress=progress,
     )
     manifest_path = write_manifest_sidecar(zip_path)
     return zip_path, manifest_path
@@ -399,9 +404,7 @@ def _merge_onto_installed(incoming: Model, existing: Model, *, name: str) -> Mod
     # The publisher offers the feedback loop, the user opts in — an update
     # can't opt them back in, and can't keep it on if the publisher stopped
     # offering it.
-    incoming.feedback_loop_enabled = bool(
-        existing.feedback_loop_enabled and incoming.feedback_loop_enabled
-    )
+    incoming.feedback_loop_enabled = bool(existing.feedback_loop_enabled and incoming.feedback_loop_enabled)
     if incoming.feedback_loop_enabled:
         incoming.feedback_loop_upload_mode = existing.feedback_loop_upload_mode
     return incoming
@@ -447,9 +450,7 @@ def import_model(
         for entry in entries:
             rel = _normalize(entry.filename)
             if _is_traversal(rel):
-                raise ValueError(
-                    f"Refusing to import {zip_path}: traversal entry {entry.filename!r}"
-                )
+                raise ValueError(f"Refusing to import {zip_path}: traversal entry {entry.filename!r}")
             if (
                 entry.file_size >= _RATIO_CHECK_MIN_BYTES
                 and entry.compress_size > 0
@@ -465,23 +466,15 @@ def import_model(
                 continue
             if posix.parts and posix.parts[0] == "images":
                 if Path(posix.parts[-1]).suffix.lower() not in _VALID_IMAGE_EXTS:
-                    raise ValueError(
-                        f"Refusing to import {zip_path}: unexpected image entry "
-                        f"{entry.filename!r}"
-                    )
+                    raise ValueError(f"Refusing to import {zip_path}: unexpected image entry {entry.filename!r}")
             elif posix.parts and posix.parts[0] == "model":
                 model_basename = posix.parts[-1]
                 suffix = Path(model_basename).suffix.lower()
                 is_legacy_zip = model_basename.lower() == _LEGACY_ZIP_MODEL_NAME
                 if suffix not in _VALID_MODEL_EXTS and not is_legacy_zip:
-                    raise ValueError(
-                        f"Refusing to import {zip_path}: unexpected model entry "
-                        f"{entry.filename!r}"
-                    )
+                    raise ValueError(f"Refusing to import {zip_path}: unexpected model entry {entry.filename!r}")
 
-        manifest_entry = next(
-            (e for e in entries if _normalize(e.filename) == "manifest.json"), None
-        )
+        manifest_entry = next((e for e in entries if _normalize(e.filename) == "manifest.json"), None)
         if manifest_entry is None:
             raise ValueError(f"{zip_path}: missing manifest.json")
         manifest = json.loads(zf.read(manifest_entry).decode("utf-8"))
@@ -517,7 +510,9 @@ def import_model(
 
         if existing is not None:
             saved = _merge_onto_installed(
-                model, existing, name=model_name_override or existing.name,
+                model,
+                existing,
+                name=model_name_override or existing.name,
             )
             model_repo.update(saved)
         else:

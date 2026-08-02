@@ -4,10 +4,11 @@ Images use the ``{headstamp}__{ticks}.ext`` convention. Reclassifying renames
 the prefix; deleting removes the file. Pure and cross-platform (pathlib only),
 so the UI image-manager and evaluator share one source of truth.
 """
+
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 IMAGE_EXTS: tuple[str, ...] = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 
@@ -41,7 +42,9 @@ def list_images(folder: Path | str, extensions: Iterable[str] = IMAGE_EXTS) -> l
 
 
 def filter_images(
-    files: list[Path], selected: str, known_headstamps: Iterable[str],
+    files: list[Path],
+    selected: str,
+    known_headstamps: Iterable[str],
 ) -> list[Path]:
     """Filter by the headstamp dropdown selection.
 

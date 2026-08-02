@@ -10,18 +10,18 @@ the CPU build is offered.
 console. On success the calling tab's `on_success` callback fires and the
 training run proceeds; on cancel/failure the venv is left as-is.
 """
+
 from __future__ import annotations
 
 import subprocess
 import sys
 import threading
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import ttk
-from typing import Callable
 
 from ..gpu_detect import GpuInfo, detect_supported_nvidia_gpu
 from .theme import PALETTE
-
 
 # Pin exactly the versions the legacy project validates against. Floating
 # versions (`torch>=2.2`) let pip pull the
@@ -70,16 +70,16 @@ class TorchInstallDialog(tk.Toplevel):
     # ----- UI build -----------------------------------------------------------
 
     def _build_header(self, parent: tk.Misc) -> None:
-        ttk.Label(parent, text="Training needs PyTorch",
-                  style="Header.TLabel").pack(anchor="w")
+        ttk.Label(parent, text="Training needs PyTorch", style="Header.TLabel").pack(anchor="w")
 
         body = (
             "Local training and local inference require PyTorch and torchvision. "
             "The download is large and only happens once."
         )
-        ttk.Label(parent, text=body, style="Muted.TLabel",
-                  wraplength=660, justify=tk.LEFT).pack(
-            anchor="w", pady=(6, 6), fill=tk.X,
+        ttk.Label(parent, text=body, style="Muted.TLabel", wraplength=660, justify=tk.LEFT).pack(
+            anchor="w",
+            pady=(6, 6),
+            fill=tk.X,
         )
 
         if self._gpu is not None:
@@ -89,9 +89,10 @@ class TorchInstallDialog(tk.Toplevel):
                 "Pick GPU build for fast training, or CPU only if you'd rather "
                 "skip the larger download / CUDA driver requirements."
             )
-            ttk.Label(parent, text=gpu_msg, style="Accent.TLabel",
-                      wraplength=660, justify=tk.LEFT).pack(
-                anchor="w", pady=(0, 8), fill=tk.X,
+            ttk.Label(parent, text=gpu_msg, style="Accent.TLabel", wraplength=660, justify=tk.LEFT).pack(
+                anchor="w",
+                pady=(0, 8),
+                fill=tk.X,
             )
         else:
             ttk.Label(
@@ -101,41 +102,50 @@ class TorchInstallDialog(tk.Toplevel):
                     "installed. (For Nvidia GPUs requires Ampere or newer; "
                     "compute capability ≥ 8.0.)"
                 ),
-                style="Muted.TLabel", wraplength=660, justify=tk.LEFT,
+                style="Muted.TLabel",
+                wraplength=660,
+                justify=tk.LEFT,
             ).pack(anchor="w", pady=(0, 8), fill=tk.X)
 
     def _build_console(self, parent: tk.Misc) -> None:
         console_wrap = ttk.Frame(parent, style="Card.TFrame", padding=4)
         console_wrap.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.console = tk.Text(
-            console_wrap, height=10, wrap=tk.NONE, state=tk.DISABLED,
-            bg=PALETTE["bg_input"], fg=PALETTE["text"],
+            console_wrap,
+            height=10,
+            wrap=tk.NONE,
+            state=tk.DISABLED,
+            bg=PALETTE["bg_input"],
+            fg=PALETTE["text"],
             insertbackground=PALETTE["accent"],
-            highlightthickness=0, borderwidth=0,
+            highlightthickness=0,
+            borderwidth=0,
         )
         self.console.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        ttk.Scrollbar(console_wrap, orient=tk.VERTICAL,
-                      command=self.console.yview).pack(side=tk.RIGHT, fill=tk.Y)
+        ttk.Scrollbar(console_wrap, orient=tk.VERTICAL, command=self.console.yview).pack(side=tk.RIGHT, fill=tk.Y)
 
     def _build_buttons(self, parent: tk.Misc) -> None:
         self.cancel_btn = ttk.Button(parent, text="Cancel", command=self._cancel)
         self.cancel_btn.pack(side=tk.RIGHT)
         if self._gpu is not None:
             self.gpu_btn = ttk.Button(
-                parent, text="Install with GPU support",
+                parent,
+                text="Install with GPU support",
                 style="Accent.TButton",
                 command=lambda: self._start_install(use_gpu=True),
             )
             self.gpu_btn.pack(side=tk.RIGHT, padx=(0, 8))
             self.cpu_btn = ttk.Button(
-                parent, text="CPU only",
+                parent,
+                text="CPU only",
                 command=lambda: self._start_install(use_gpu=False),
             )
             self.cpu_btn.pack(side=tk.RIGHT, padx=(0, 8))
             self._install_buttons = [self.gpu_btn, self.cpu_btn]
         else:
             self.cpu_btn = ttk.Button(
-                parent, text="Install PyTorch",
+                parent,
+                text="Install PyTorch",
                 style="Accent.TButton",
                 command=lambda: self._start_install(use_gpu=False),
             )
@@ -165,16 +175,18 @@ class TorchInstallDialog(tk.Toplevel):
         active_btn = self.gpu_btn if (use_gpu and self._gpu is not None) else self.cpu_btn
         active_btn.config(text="Installing…")
 
-        cmd: list[str] = [sys.executable, "-u", "-m", "pip", "install",
-                          *list(_CPU_TARGETS)]
+        cmd: list[str] = [sys.executable, "-u", "-m", "pip", "install", *list(_CPU_TARGETS)]
         if use_gpu:
             cmd.extend(["--index-url", _CUDA_INDEX])
         self._append("$ " + " ".join(cmd) + "\n")
 
         try:
             self._proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, bufsize=1,
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
             )
         except OSError as exc:
             self._append(f"Failed to spawn pip: {exc}\n")
@@ -209,9 +221,7 @@ class TorchInstallDialog(tk.Toplevel):
                 b.config(state=tk.NORMAL)
             if self._gpu is not None:
                 self.gpu_btn.config(text="Install with GPU support")
-            self.cpu_btn.config(
-                text="CPU only" if self._gpu is not None else "Install PyTorch"
-            )
+            self.cpu_btn.config(text="CPU only" if self._gpu is not None else "Install PyTorch")
 
     def _cancel(self) -> None:
         if self._installing and self._proc is not None and self._proc.poll() is None:

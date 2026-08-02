@@ -5,6 +5,7 @@ is active. Routing:
   - Active model has a `model_path` pointing to an existing file → local
   - Otherwise → HTTP via `api_client.classify`
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -32,20 +33,15 @@ def classify_active(
         active_id = SettingsRepo(db).get_active_model_id()
         if active_id is not None:
             model = ModelRepo(db).get(active_id)
-            if (
-                model is not None
-                and model.model_path
-                and Path(model.model_path).exists()
-            ):
+            if model is not None and model.model_path and Path(model.model_path).exists():
                 # Pass the trained image size from the model record so
                 # imported community models (often trained at 480) get
                 # the right resolution at inference.
-                image_size = (
-                    int(model.training_config.image_size)
-                    if model.training_config else None
-                )
+                image_size = int(model.training_config.image_size) if model.training_config else None
                 return local_inference.classify(
-                    image_bgr, model.model_path, image_size=image_size,
+                    image_bgr,
+                    model.model_path,
+                    image_size=image_size,
                 )
 
     return api_client.classify(image_bgr, headstamps, api_cfg)

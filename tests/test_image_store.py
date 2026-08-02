@@ -2,6 +2,7 @@
 
 Pure pathlib — no tkinter/cv2/PyTorch — so it runs under every interpreter.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -17,6 +18,7 @@ def _touch(folder: Path, *names: str) -> None:
 
 # ----- filename parsing ------------------------------------------------------
 
+
 def test_parse_headstamp() -> None:
     assert image_store.parse_headstamp("WIN__123.jpg") == "WIN"
     assert image_store.parse_headstamp("/a/b/FC 9MM__99.png") == "FC 9MM"
@@ -31,6 +33,7 @@ def test_has_headstamp() -> None:
 
 # ----- listing ---------------------------------------------------------------
 
+
 def test_list_images_filters_and_sorts(tmp_path: Path) -> None:
     _touch(tmp_path, "B__2.jpg", "a__1.JPG", "c__3.PNG", "notes.txt", "x__4.tiff")
     (tmp_path / "sub").mkdir()  # directories excluded
@@ -44,6 +47,7 @@ def test_list_images_missing_dir(tmp_path: Path) -> None:
 
 
 # ----- filtering -------------------------------------------------------------
+
 
 def test_filter_all_returns_everything(tmp_path: Path) -> None:
     _touch(tmp_path, "WIN__1.jpg", "FC__2.jpg")
@@ -70,6 +74,7 @@ def test_filter_unknown_headstamp(tmp_path: Path) -> None:
 
 
 # ----- reclassify ------------------------------------------------------------
+
 
 def test_reclassify_renames_prefix(tmp_path: Path) -> None:
     src = tmp_path / "WIN__123.jpg"
@@ -103,6 +108,7 @@ def test_reclassify_requires_separator(tmp_path: Path) -> None:
 
 
 # ----- delete ----------------------------------------------------------------
+
 
 def test_delete(tmp_path: Path) -> None:
     src = tmp_path / "WIN__1.jpg"

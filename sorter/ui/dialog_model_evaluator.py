@@ -12,15 +12,17 @@ Two dialogs:
 * :class:`ClassMapperDialog` — map the folder's ground-truth class names onto
   the model's headstamps. Mappings persist per-model for reuse.
 """
+
 from __future__ import annotations
 
 import threading
 import tkinter as tk
 import webbrowser
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-from typing import Any, Callable
+from typing import Any
 
 from .. import eval_report, evaluator, paths
 from ..db import Database
@@ -29,7 +31,6 @@ from ..repository import CartridgeRepo, HeadstampRepo, SettingsRepo
 from .dialog_image_preview import ImagePreviewDialog
 from .theme import PALETTE
 from .widgets import ImagePanel, ScrollableFrame
-
 
 _MATCH_LABELS = {"match": "Match", "mismatch": "Mismatch", "unknown": "—"}
 _MATCH_FILTERS = ("All", "Match", "Mismatch", "No ground truth")
@@ -93,42 +94,42 @@ class ModelEvaluatorDialog(tk.Toplevel):
         top.pack(fill=tk.X)
 
         ttk.Label(
-            top, text=f"{self.model.name}    ({self._cart_name} • {self.model.model_mode})",
+            top,
+            text=f"{self.model.name}    ({self._cart_name} • {self.model.model_mode})",
             style="Title.TLabel",
         ).pack(anchor=tk.W)
 
         folder_row = ttk.Frame(top, style="Window.TFrame")
         folder_row.pack(fill=tk.X, pady=(8, 0))
-        ttk.Label(folder_row, text="Image folder", style="Subtitle.TLabel", width=12, anchor=tk.W)\
-            .pack(side=tk.LEFT)
+        ttk.Label(folder_row, text="Image folder", style="Subtitle.TLabel", width=12, anchor=tk.W).pack(side=tk.LEFT)
         self._folder_var = tk.StringVar(value=str(paths.model_images_dir(self.model.id)))
-        ttk.Entry(folder_row, textvariable=self._folder_var).pack(
-            side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 6))
+        ttk.Entry(folder_row, textvariable=self._folder_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 6))
         ttk.Button(folder_row, text="Browse…", command=self._browse).pack(side=tk.LEFT)
 
         action_row = ttk.Frame(top, style="Window.TFrame")
         action_row.pack(fill=tk.X, pady=(8, 0))
-        ttk.Button(action_row, text="Class mapping…", command=self._open_mapper)\
-            .pack(side=tk.LEFT)
+        ttk.Button(action_row, text="Class mapping…", command=self._open_mapper).pack(side=tk.LEFT)
         self._run_btn = ttk.Button(
-            action_row, text="Run evaluation", command=self._run, style="Accent.TButton",
+            action_row,
+            text="Run evaluation",
+            command=self._run,
+            style="Accent.TButton",
         )
         self._run_btn.pack(side=tk.LEFT, padx=(8, 0))
         self._stop_btn = ttk.Button(
-            action_row, text="Stop", command=self._stop, style="Danger.TButton",
+            action_row,
+            text="Stop",
+            command=self._stop,
+            style="Danger.TButton",
         )  # packed only while running
         self._progress = ttk.Progressbar(action_row, mode="determinate", length=180)
         self._status_var = tk.StringVar(value="")
-        ttk.Label(action_row, textvariable=self._status_var, style="Muted.TLabel")\
-            .pack(side=tk.RIGHT)
+        ttk.Label(action_row, textvariable=self._status_var, style="Muted.TLabel").pack(side=tk.RIGHT)
 
         # ---- stats row ------------------------------------------------------
         self._stats = ttk.Frame(self, style="Window.TFrame", padding=(10, 8, 10, 0))
         self._stats.pack(fill=tk.X)
-        self._stat_vars = {
-            key: tk.StringVar(value="—")
-            for key in ("total", "total_acc", "known_acc", "avg_conf")
-        }
+        self._stat_vars = {key: tk.StringVar(value="—") for key in ("total", "total_acc", "known_acc", "avg_conf")}
         for label, key in (
             ("Total images", "total"),
             ("Total accuracy", "total_acc"),
@@ -174,7 +175,10 @@ class ModelEvaluatorDialog(tk.Toplevel):
         ttk.Label(filt, text="Match", style="Muted.TLabel").pack(side=tk.LEFT)
         self._match_var = tk.StringVar(value=_MATCH_FILTERS[0])
         match_combo = ttk.Combobox(
-            filt, state="readonly", width=18, textvariable=self._match_var,
+            filt,
+            state="readonly",
+            width=18,
+            textvariable=self._match_var,
             values=list(_MATCH_FILTERS),
         )
         match_combo.pack(side=tk.LEFT, padx=(6, 0))
@@ -190,7 +194,10 @@ class ModelEvaluatorDialog(tk.Toplevel):
         cols = ("filename", "predicted", "confidence", "original", "match")
         scroll = ttk.Scrollbar(table_wrap, orient=tk.VERTICAL)
         self._tree = ttk.Treeview(
-            table_wrap, columns=cols, show="headings", selectmode="browse",
+            table_wrap,
+            columns=cols,
+            show="headings",
+            selectmode="browse",
             yscrollcommand=scroll.set,
         )
         scroll.config(command=self._tree.yview)
@@ -202,8 +209,7 @@ class ModelEvaluatorDialog(tk.Toplevel):
             ("match", "Match", 80, tk.W),
         ):
             self._tree.heading(col, text=text, command=lambda c=col: self._sort_by(c))
-            self._tree.column(col, width=width, anchor=anchor,
-                              stretch=(col in ("filename", "original")))
+            self._tree.column(col, width=width, anchor=anchor, stretch=(col in ("filename", "original")))
         self._tree.tag_configure("match", foreground=PALETTE["success"])
         self._tree.tag_configure("mismatch", foreground=PALETTE["error"])
         self._tree.tag_configure("unknown", foreground=PALETTE["text_muted"])
@@ -220,11 +226,16 @@ class ModelEvaluatorDialog(tk.Toplevel):
         self._preview = ImagePanel(preview, width=240, height=240)
         self._preview.pack(padx=6, pady=2)
         self._preview_label = tk.StringVar(value="")
-        ttk.Label(preview, textvariable=self._preview_label, style="Subtle.TLabel",
-                  wraplength=240, justify=tk.LEFT).pack(anchor=tk.W, padx=6)
-        ttk.Label(preview, text="Double-click a row to reassign or delete.",
-                  style="Subtle.TLabel", wraplength=240, justify=tk.LEFT)\
-            .pack(anchor=tk.W, padx=6, pady=(6, 0))
+        ttk.Label(
+            preview, textvariable=self._preview_label, style="Subtle.TLabel", wraplength=240, justify=tk.LEFT
+        ).pack(anchor=tk.W, padx=6)
+        ttk.Label(
+            preview,
+            text="Double-click a row to reassign or delete.",
+            style="Subtle.TLabel",
+            wraplength=240,
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W, padx=6, pady=(6, 0))
 
         self._sort_state: tuple[str, bool] | None = None
         self._row_by_iid: dict[str, dict[str, Any]] = {}
@@ -235,7 +246,10 @@ class ModelEvaluatorDialog(tk.Toplevel):
         cols = ("cls", "count", "avg", "high", "low", "mismatch")
         scroll = ttk.Scrollbar(wrap, orient=tk.VERTICAL)
         self._summary_tree = ttk.Treeview(
-            wrap, columns=cols, show="headings", selectmode="browse",
+            wrap,
+            columns=cols,
+            show="headings",
+            selectmode="browse",
             yscrollcommand=scroll.set,
         )
         scroll.config(command=self._summary_tree.yview)
@@ -256,18 +270,25 @@ class ModelEvaluatorDialog(tk.Toplevel):
         bar = ttk.Frame(parent)
         bar.pack(fill=tk.X, pady=(8, 4), padx=2)
         ttk.Label(
-            bar, text="Saved HTML reports for this model (newest first). "
+            bar,
+            text="Saved HTML reports for this model (newest first). "
             "Open one to view the full interactive report in your browser.",
-            style="Muted.TLabel", wraplength=600, justify=tk.LEFT,
+            style="Muted.TLabel",
+            wraplength=600,
+            justify=tk.LEFT,
         ).pack(side=tk.LEFT)
-        ttk.Button(bar, text="Open in browser", command=self._open_selected_report,
-                   style="Accent.TButton").pack(side=tk.RIGHT)
+        ttk.Button(bar, text="Open in browser", command=self._open_selected_report, style="Accent.TButton").pack(
+            side=tk.RIGHT
+        )
 
         wrap = ttk.Frame(parent)
         wrap.pack(fill=tk.BOTH, expand=True, padx=2)
         scroll = ttk.Scrollbar(wrap, orient=tk.VERTICAL)
         self._history_tree = ttk.Treeview(
-            wrap, columns=("report", "created"), show="headings", selectmode="browse",
+            wrap,
+            columns=("report", "created"),
+            show="headings",
+            selectmode="browse",
             yscrollcommand=scroll.set,
         )
         scroll.config(command=self._history_tree.yview)
@@ -287,9 +308,11 @@ class ModelEvaluatorDialog(tk.Toplevel):
         reports = (
             sorted(
                 (p for p in report_dir.glob("*.html") if p.is_file()),
-                key=lambda p: p.stat().st_mtime, reverse=True,
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
             )
-            if report_dir.exists() else []
+            if report_dir.exists()
+            else []
         )
         for idx, p in enumerate(reports):
             iid = str(idx)
@@ -324,7 +347,9 @@ class ModelEvaluatorDialog(tk.Toplevel):
     def _browse(self) -> None:
         start = self._folder_var.get() or str(paths.models_dir())
         chosen = filedialog.askdirectory(
-            title="Select a folder of labelled images", initialdir=start, parent=self,
+            title="Select a folder of labelled images",
+            initialdir=start,
+            parent=self,
         )
         if chosen:
             self._folder_var.set(chosen)
@@ -338,8 +363,7 @@ class ModelEvaluatorDialog(tk.Toplevel):
         if not target_classes:
             messagebox.showinfo(
                 "No classes",
-                "No labelled images found in that folder. Filenames must look "
-                "like '<class>__<id>.jpg'.",
+                "No labelled images found in that folder. Filenames must look like '<class>__<id>.jpg'.",
                 parent=self,
             )
             return
@@ -351,7 +375,11 @@ class ModelEvaluatorDialog(tk.Toplevel):
             self.app.set_status(f"Saved {len(mapping)} class mapping(s).")
 
         ClassMapperDialog(
-            self, target_classes, model_classes, dict(self._mapping), on_ok=_on_ok,
+            self,
+            target_classes,
+            model_classes,
+            dict(self._mapping),
+            on_ok=_on_ok,
         )
 
     # ----- run ----------------------------------------------------------------
@@ -388,15 +416,12 @@ class ModelEvaluatorDialog(tk.Toplevel):
 
     def _do_eval(self) -> dict[str, Any]:
         from .. import local_inference
+
         if not local_inference.is_available():
             raise RuntimeError(
-                "PyTorch is not installed — it's required to evaluate a local model "
-                "(pip install .[ml])."
+                "PyTorch is not installed — it's required to evaluate a local model (pip install .[ml])."
             )
-        image_size = (
-            int(self.model.training_config.image_size)
-            if self.model.training_config else None
-        )
+        image_size = int(self.model.training_config.image_size) if self.model.training_config else None
         out = evaluator.evaluate_folder(
             self._run_folder,
             model_path=self.model.model_path,
@@ -416,6 +441,7 @@ class ModelEvaluatorDialog(tk.Toplevel):
                 out["report_path"] = str(report_path)
             except Exception:
                 import traceback
+
                 traceback.print_exc()
         return out
 
@@ -471,27 +497,35 @@ class ModelEvaluatorDialog(tk.Toplevel):
 
         self._stat_vars["total"].set(str(summary.get("total", 0)))
         self._stat_vars["total_acc"].set(
-            _acc(summary.get("total_accuracy"), summary.get("total_matches", 0),
-                 summary.get("with_original", 0))
+            _acc(summary.get("total_accuracy"), summary.get("total_matches", 0), summary.get("with_original", 0))
         )
         self._stat_vars["known_acc"].set(
-            _acc(summary.get("known_accuracy"), summary.get("known_matches", 0),
-                 summary.get("with_mapping", 0))
+            _acc(summary.get("known_accuracy"), summary.get("known_matches", 0), summary.get("with_mapping", 0))
         )
         self._stat_vars["avg_conf"].set(f"{summary.get('avg_confidence', 0.0):.1f}%")
 
         self._summary_tree.delete(*self._summary_tree.get_children())
         for row in summary.get("per_class", []):
-            self._summary_tree.insert("", "end", values=(
-                row["cls"], row["count"], f"{row['avg']:.1f}%",
-                f"{row['high']:.1f}%", f"{row['low']:.1f}%", row["mismatches"],
-            ))
+            self._summary_tree.insert(
+                "",
+                "end",
+                values=(
+                    row["cls"],
+                    row["count"],
+                    f"{row['avg']:.1f}%",
+                    f"{row['high']:.1f}%",
+                    f"{row['low']:.1f}%",
+                    row["mismatches"],
+                ),
+            )
 
     def _filtered_results(self) -> list[dict[str, Any]]:
         needle = self._search_var.get().strip().casefold()
         match_filter = self._match_var.get()
         want = {
-            "Match": "match", "Mismatch": "mismatch", "No ground truth": "unknown",
+            "Match": "match",
+            "Mismatch": "mismatch",
+            "No ground truth": "unknown",
         }.get(match_filter)
         rows = []
         for r in self._results:
@@ -521,10 +555,15 @@ class ModelEvaluatorDialog(tk.Toplevel):
         for idx, r in enumerate(rows):
             iid = str(idx)
             self._tree.insert(
-                "", "end", iid=iid,
+                "",
+                "end",
+                iid=iid,
                 values=(
-                    r["filename"], r["predicted"], f"{r['confidence']:.1f}%",
-                    r["original"] or "—", _MATCH_LABELS.get(r["match"], "—"),
+                    r["filename"],
+                    r["predicted"],
+                    f"{r['confidence']:.1f}%",
+                    r["original"] or "—",
+                    _MATCH_LABELS.get(r["match"], "—"),
                 ),
                 tags=(r["match"],),
             )
@@ -547,10 +586,11 @@ class ModelEvaluatorDialog(tk.Toplevel):
             return
         self._preview_label.set(
             f"{row['filename']}\nPredicted: {row['predicted']} ({row['confidence']:.1f}%)"
-            + (f"\nGround truth: {row['original']}" if row['original'] else "")
+            + (f"\nGround truth: {row['original']}" if row["original"] else "")
         )
         try:
             import cv2
+
             img = cv2.imread(row["filepath"])
             self._preview.show_bgr(img)
         except Exception:
@@ -565,7 +605,10 @@ class ModelEvaluatorDialog(tk.Toplevel):
             return
         headstamps = [h.name for h in self.headstamps_repo.list_for_model(self.model.id)]
         ImagePreviewDialog(
-            self, row["filepath"], headstamps, row.get("raw_original") or None,
+            self,
+            row["filepath"],
+            headstamps,
+            row.get("raw_original") or None,
             on_changed=self._apply_image_change,
         )
 
@@ -655,8 +698,7 @@ class ClassMapperDialog(tk.Toplevel):
 
         header = ttk.Frame(self, style="Window.TFrame", padding=(12, 12, 12, 4))
         header.pack(fill=tk.X)
-        ttk.Label(header, text="Folder class  →  model class", style="Header.TLabel")\
-            .pack(side=tk.LEFT)
+        ttk.Label(header, text="Folder class  →  model class", style="Header.TLabel").pack(side=tk.LEFT)
         ttk.Button(header, text="Auto-map all", command=self._auto_map).pack(side=tk.RIGHT)
 
         body = ScrollableFrame(self)
@@ -664,8 +706,7 @@ class ClassMapperDialog(tk.Toplevel):
         grid = body.body
         values = [self.UNMAPPED] + model_classes
         for row, target in enumerate(target_classes):
-            ttk.Label(grid, text=target, anchor=tk.W).grid(
-                row=row, column=0, sticky="w", padx=(0, 8), pady=3)
+            ttk.Label(grid, text=target, anchor=tk.W).grid(row=row, column=0, sticky="w", padx=(0, 8), pady=3)
             ttk.Label(grid, text="→", style="Muted.TLabel").grid(row=row, column=1, padx=4)
             # Use the combobox's own value (set/get) rather than a per-row
             # StringVar — a loop-local Variable would be garbage-collected and
@@ -685,8 +726,9 @@ class ClassMapperDialog(tk.Toplevel):
         btns = ttk.Frame(self, style="Window.TFrame", padding=12)
         btns.pack(fill=tk.X)
         ttk.Button(btns, text="Cancel", command=self.destroy).pack(side=tk.RIGHT)
-        ttk.Button(btns, text="Save mapping", command=self._save, style="Accent.TButton")\
-            .pack(side=tk.RIGHT, padx=(0, 8))
+        ttk.Button(btns, text="Save mapping", command=self._save, style="Accent.TButton").pack(
+            side=tk.RIGHT, padx=(0, 8)
+        )
 
         self.bind("<Escape>", lambda _e: self.destroy())
 
@@ -698,7 +740,9 @@ class ClassMapperDialog(tk.Toplevel):
                 combo.set(suggestion)
                 mapped += 1
         messagebox.showinfo(
-            "Auto-map", f"Auto-mapped {mapped} of {len(self._combos)} classes.", parent=self,
+            "Auto-map",
+            f"Auto-mapped {mapped} of {len(self._combos)} classes.",
+            parent=self,
         )
 
     def _current_mapping(self) -> dict[str, str]:
@@ -714,8 +758,7 @@ class ClassMapperDialog(tk.Toplevel):
         unmapped = len(self._combos) - len(mapping)
         if unmapped > 0 and not messagebox.askyesno(
             "Unmapped classes",
-            f"{unmapped} class(es) are unmapped and won't count toward known "
-            "accuracy.\n\nSave anyway?",
+            f"{unmapped} class(es) are unmapped and won't count toward known accuracy.\n\nSave anyway?",
             parent=self,
         ):
             return

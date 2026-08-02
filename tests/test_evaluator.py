@@ -1,4 +1,5 @@
 """Offline model-evaluation logic (no PyTorch — classify_fn is injected)."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -24,19 +25,25 @@ def _make_folder(tmp_path: Path, names: list[str]) -> Path:
 
 
 def test_list_images_and_folder_classes(tmp_path: Path) -> None:
-    folder = _make_folder(tmp_path, [
-        "WIN__1.jpg", "WIN__2.JPG", "FC__3.png", "noprefix.jpg",
-    ])
+    folder = _make_folder(
+        tmp_path,
+        [
+            "WIN__1.jpg",
+            "WIN__2.JPG",
+            "FC__3.png",
+            "noprefix.jpg",
+        ],
+    )
     (folder / "notes.txt").write_text("x")
-    assert len(evaluator.list_images(folder)) == 4   # txt excluded
+    assert len(evaluator.list_images(folder)) == 4  # txt excluded
     assert evaluator.folder_classes(folder) == ["FC", "WIN"]
 
 
 def test_map_classification() -> None:
     mapping = {"FC09": "FC", "win": "WIN"}
     assert evaluator.map_classification("FC09", mapping) == ("FC", True)
-    assert evaluator.map_classification("WIN", mapping) == ("WIN", True)   # case-insensitive
-    assert evaluator.map_classification("RP", mapping) == ("RP", False)    # unmapped -> passthrough
+    assert evaluator.map_classification("WIN", mapping) == ("WIN", True)  # case-insensitive
+    assert evaluator.map_classification("RP", mapping) == ("RP", False)  # unmapped -> passthrough
     assert evaluator.map_classification("", mapping) == ("", False)
 
 
@@ -48,20 +55,23 @@ def test_match_status() -> None:
 
 def test_suggest_mapping_levels() -> None:
     model = ["WIN", "FC", "9mm Luger", "5.56x45"]
-    assert evaluator.suggest_mapping("win", model) == "WIN"          # exact (ci)
-    assert evaluator.suggest_mapping("556X45", model) == "5.56x45"   # normalized tokens
+    assert evaluator.suggest_mapping("win", model) == "WIN"  # exact (ci)
+    assert evaluator.suggest_mapping("556X45", model) == "5.56x45"  # normalized tokens
     assert evaluator.suggest_mapping("ZZZ", model) is None
     auto = evaluator.auto_map(["win", "fc", "ZZZ"], model)
     assert auto == {"win": "WIN", "fc": "FC"}
 
 
 def test_evaluate_folder_scores_with_fake_classifier(tmp_path: Path) -> None:
-    folder = _make_folder(tmp_path, [
-        "WIN__1.jpg",      # predicted WIN  -> match
-        "WIN__2.jpg",      # predicted FC   -> mismatch
-        "FC__3.jpg",       # predicted FC   -> match
-        "noprefix.jpg",    # no ground truth
-    ])
+    folder = _make_folder(
+        tmp_path,
+        [
+            "WIN__1.jpg",  # predicted WIN  -> match
+            "WIN__2.jpg",  # predicted FC   -> mismatch
+            "FC__3.jpg",  # predicted FC   -> match
+            "noprefix.jpg",  # no ground truth
+        ],
+    )
 
     # Deterministic fake: prediction encoded by filename.
     preds = {
@@ -86,8 +96,11 @@ def test_evaluate_folder_scores_with_fake_classifier(tmp_path: Path) -> None:
         seen.append(name)
 
     out = evaluator.evaluate_folder(
-        folder, model_path="m.pth", image_size=232,
-        classify_fn=fake_classify, progress=progress,
+        folder,
+        model_path="m.pth",
+        image_size=232,
+        classify_fn=fake_classify,
+        progress=progress,
     )
     results = {r["filename"]: r for r in out["results"]}
     assert results["WIN__1.jpg"]["match"] == "match"
@@ -98,7 +111,7 @@ def test_evaluate_folder_scores_with_fake_classifier(tmp_path: Path) -> None:
 
     s = out["summary"]
     assert s["total"] == 4
-    assert s["with_original"] == 3          # three have a filename label
+    assert s["with_original"] == 3  # three have a filename label
     # 2 of 3 labelled images predicted correctly
     assert round(s["total_accuracy"], 1) == round(2 / 3 * 100, 1)
     # per-class FC: 2 predictions (WIN__2 mislabelled-as-FC, FC__3 correct), 1 mismatch
@@ -113,13 +126,15 @@ def test_evaluate_folder_known_accuracy_uses_mapping(tmp_path: Path) -> None:
         return ("Brass", 90.0)  # always predicts the parent/model class "Brass"
 
     out = evaluator.evaluate_folder(
-        folder, model_path="m.pth", image_size=232,
-        mapping={"BLZR": "Brass"},          # only BLZR is mapped
+        folder,
+        model_path="m.pth",
+        image_size=232,
+        mapping={"BLZR": "Brass"},  # only BLZR is mapped
         classify_fn=fake_classify,
     )
     s = out["summary"]
-    assert s["with_mapping"] == 1                 # only BLZR
-    assert s["known_accuracy"] == 100.0           # mapped BLZR predicted Brass -> correct
+    assert s["with_mapping"] == 1  # only BLZR
+    assert s["known_accuracy"] == 100.0  # mapped BLZR predicted Brass -> correct
     # RP is unmapped: counts toward total (passthrough original "RP") but not known
     assert s["with_original"] == 2
 
@@ -133,9 +148,10 @@ def test_evaluate_folder_stop(tmp_path: Path) -> None:
         return ("WIN", 99.0)
 
     out = evaluator.evaluate_folder(
-        folder, model_path="m.pth",
+        folder,
+        model_path="m.pth",
         classify_fn=fake_classify,
-        should_stop=lambda: calls["n"] >= 2,   # stop after 2 classified
+        should_stop=lambda: calls["n"] >= 2,  # stop after 2 classified
     )
     assert out["stopped"] is True
     assert len(out["results"]) == 2

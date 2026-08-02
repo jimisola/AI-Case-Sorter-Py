@@ -6,6 +6,7 @@ invoke it before installing dependencies so a staged update's own
 and must stay that way — it runs against a virtualenv that may not have any
 third-party packages in it yet.
 """
+
 from __future__ import annotations
 
 import sys

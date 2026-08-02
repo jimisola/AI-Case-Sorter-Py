@@ -1,16 +1,15 @@
 """Tests for the classify dispatcher."""
+
 from __future__ import annotations
 
 from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
-import pytest
 
 from sorter import classifier
 from sorter.db import Database
-from sorter.models import Model
-from sorter.repository import CartridgeRepo, ModelRepo, SettingsRepo
+from sorter.repository import ModelRepo, SettingsRepo
 
 
 def _seed_db(tmp_path: Path) -> Database:

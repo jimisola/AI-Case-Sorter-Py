@@ -5,6 +5,7 @@ Top right:    headstamp list management (add, remove, clear, load).
 Bottom:       single-shot test (Feed -> capture -> crop -> classify), reusing
               the same bus events the old Test tab subscribed to.
 """
+
 from __future__ import annotations
 
 import tkinter as tk
@@ -57,18 +58,23 @@ class AiTab(ttk.Frame):
         params = ttk.LabelFrame(left, text="Image encoding")
         params.pack(side=tk.TOP, fill=tk.X, pady=4)
         self.quality_field = NumericField(
-            params, "JPEG quality", from_=10, to=100,
+            params,
+            "JPEG quality",
+            from_=10,
+            to=100,
             initial=int(api_cfg.get("image_quality", 100)),
         )
         self.quality_field.pack(side=tk.LEFT, padx=8, pady=6)
         self.scale_field = NumericField(
-            params, "Scale %", from_=10, to=200,
+            params,
+            "Scale %",
+            from_=10,
+            to=200,
             initial=int(api_cfg.get("image_scale", 100)),
         )
         self.scale_field.pack(side=tk.LEFT, padx=8, pady=6)
 
-        build_button_row(left, [("Save", self.save)], primary="Save")\
-            .pack(side=tk.TOP, anchor=tk.W, pady=4)
+        build_button_row(left, [("Save", self.save)], primary="Save").pack(side=tk.TOP, anchor=tk.W, pady=4)
 
         # ----- RIGHT: headstamps ---------------------------------------------
         right = ttk.LabelFrame(top, text="Headstamps")
@@ -81,10 +87,8 @@ class AiTab(ttk.Frame):
         entry = ttk.Entry(add_row, textvariable=self.new_name_var, width=18)
         entry.pack(side=tk.LEFT, padx=6)
         entry.bind("<Return>", lambda _e: self.add_headstamp())
-        ttk.Button(add_row, text="Add", command=self.add_headstamp)\
-            .pack(side=tk.LEFT, padx=2)
-        ttk.Button(add_row, text="Load from server", command=self.load_headstamps)\
-            .pack(side=tk.RIGHT, padx=2)
+        ttk.Button(add_row, text="Add", command=self.add_headstamp).pack(side=tk.LEFT, padx=2)
+        ttk.Button(add_row, text="Load from server", command=self.load_headstamps).pack(side=tk.RIGHT, padx=2)
 
         list_row = ttk.Frame(right)
         list_row.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=8, pady=6)
@@ -108,15 +112,16 @@ class AiTab(ttk.Frame):
         side = ttk.Frame(list_row)
         side.pack(side=tk.LEFT, fill=tk.Y, padx=10)
         self.remove_btn = ttk.Button(
-            side, text="Remove selected", command=self.remove_selected, state=tk.DISABLED,
+            side,
+            text="Remove selected",
+            command=self.remove_selected,
+            state=tk.DISABLED,
         )
         self.remove_btn.pack(side=tk.TOP, fill=tk.X, pady=2)
-        ttk.Button(side, text="Clear all", command=self.clear_all)\
-            .pack(side=tk.TOP, fill=tk.X, pady=2)
+        ttk.Button(side, text="Clear all", command=self.clear_all).pack(side=tk.TOP, fill=tk.X, pady=2)
         ttk.Separator(side, orient=tk.HORIZONTAL).pack(side=tk.TOP, fill=tk.X, pady=8)
         self.count_var = tk.StringVar(value="0 headstamps")
-        ttk.Label(side, textvariable=self.count_var, style="Muted.TLabel")\
-            .pack(side=tk.TOP, anchor=tk.W)
+        ttk.Label(side, textvariable=self.count_var, style="Muted.TLabel").pack(side=tk.TOP, anchor=tk.W)
 
         self._refresh_list()
 
@@ -126,10 +131,8 @@ class AiTab(ttk.Frame):
         test_box = ttk.LabelFrame(self, text="Test (single-shot feed → classify)")
         test_box.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=8, pady=(2, 8))
 
-        ttk.Label(test_box, text="Live preview", style="Muted.TLabel")\
-            .grid(row=0, column=0, sticky=tk.W, padx=8)
-        ttk.Label(test_box, text="Last cropped", style="Muted.TLabel")\
-            .grid(row=0, column=1, sticky=tk.W, padx=8)
+        ttk.Label(test_box, text="Live preview", style="Muted.TLabel").grid(row=0, column=0, sticky=tk.W, padx=8)
+        ttk.Label(test_box, text="Last cropped", style="Muted.TLabel").grid(row=0, column=1, sticky=tk.W, padx=8)
 
         self.preview = ImagePanel(test_box, width=320, height=240)
         self.preview.grid(row=1, column=0, padx=8, pady=4, sticky=tk.NW)
@@ -140,24 +143,23 @@ class AiTab(ttk.Frame):
         controls = ttk.Frame(test_box)
         controls.grid(row=1, column=2, padx=12, pady=4, sticky=tk.NW)
         self.feed_btn = ttk.Button(
-            controls, text="Feed One", command=self.feed, style="Accent.TButton",
+            controls,
+            text="Feed One",
+            command=self.feed,
+            style="Accent.TButton",
         )
         self.feed_btn.pack(side=tk.TOP, fill=tk.X, pady=4)
         ttk.Separator(controls, orient=tk.HORIZONTAL).pack(side=tk.TOP, fill=tk.X, pady=8)
-        ttk.Label(controls, text="Result", style="Header.TLabel")\
-            .pack(side=tk.TOP, anchor=tk.W)
+        ttk.Label(controls, text="Result", style="Header.TLabel").pack(side=tk.TOP, anchor=tk.W)
         self.label_var = tk.StringVar(value="—")
         self.confidence_var = tk.StringVar(value="—")
         row = ttk.Frame(controls)
         row.pack(side=tk.TOP, fill=tk.X, pady=2)
-        ttk.Label(row, text="Label", style="Muted.TLabel", width=12, anchor=tk.W)\
-            .pack(side=tk.LEFT)
-        ttk.Label(row, textvariable=self.label_var, style="Accent.TLabel")\
-            .pack(side=tk.LEFT)
+        ttk.Label(row, text="Label", style="Muted.TLabel", width=12, anchor=tk.W).pack(side=tk.LEFT)
+        ttk.Label(row, textvariable=self.label_var, style="Accent.TLabel").pack(side=tk.LEFT)
         row = ttk.Frame(controls)
         row.pack(side=tk.TOP, fill=tk.X, pady=2)
-        ttk.Label(row, text="Confidence", style="Muted.TLabel", width=12, anchor=tk.W)\
-            .pack(side=tk.LEFT)
+        ttk.Label(row, text="Confidence", style="Muted.TLabel", width=12, anchor=tk.W).pack(side=tk.LEFT)
         ttk.Label(row, textvariable=self.confidence_var).pack(side=tk.LEFT)
 
         # Bus subscriptions reused from the old Test tab.
@@ -185,9 +187,7 @@ class AiTab(ttk.Frame):
         names = sorted(self._names(), key=str.casefold)
         for name in names:
             self.listbox.insert(tk.END, name)
-        self.count_var.set(
-            f"{len(names)} headstamp" + ("" if len(names) == 1 else "s")
-        )
+        self.count_var.set(f"{len(names)} headstamp" + ("" if len(names) == 1 else "s"))
         self._on_select_changed()
 
     def _on_select_changed(self, _event=None) -> None:

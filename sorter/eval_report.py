@@ -5,6 +5,7 @@ file.
 Thumbnails are embedded as base64 data URIs, so the report is a single portable
 file. Everything here is cross-platform (pathlib + PIL only).
 """
+
 from __future__ import annotations
 
 import base64
@@ -837,16 +838,18 @@ def report_rows(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     rows = []
     for r in results:
-        rows.append({
-            "filename": r["filename"],
-            "filepath": r["filepath"],
-            "thumbnail": create_thumbnail_b64(Path(r["filepath"])),
-            "classification": r["predicted"],
-            "confidence": float(r["confidence"]) / 100.0,
-            "original_classification": r["original"],
-            "raw_original_classification": r["raw_original"],
-            "has_mapping": r["has_mapping"],
-        })
+        rows.append(
+            {
+                "filename": r["filename"],
+                "filepath": r["filepath"],
+                "thumbnail": create_thumbnail_b64(Path(r["filepath"])),
+                "classification": r["predicted"],
+                "confidence": float(r["confidence"]) / 100.0,
+                "original_classification": r["original"],
+                "raw_original_classification": r["raw_original"],
+                "has_mapping": r["has_mapping"],
+            }
+        )
     return rows
 
 

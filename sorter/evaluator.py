@@ -10,11 +10,13 @@ be scored against the model's classes.
 Everything here is pure/headless and unit-testable: ``evaluate_folder`` takes an
 injectable ``classify_fn`` so tests don't need PyTorch.
 """
+
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any
 
 from .training.dataset import parse_label
 
@@ -27,16 +29,14 @@ StopFn = Callable[[], bool]
 
 # ----- folder / filename helpers --------------------------------------------
 
+
 def list_images(folder: Path | str, extensions: Iterable[str] = IMAGE_EXTS) -> list[Path]:
     """All image files directly in ``folder`` (case-insensitive extension)."""
     d = Path(folder)
     if not d.is_dir():
         return []
     exts = {e.lower() for e in extensions}
-    return sorted(
-        p for p in d.iterdir()
-        if p.is_file() and p.suffix.lower() in exts
-    )
+    return sorted(p for p in d.iterdir() if p.is_file() and p.suffix.lower() in exts)
 
 
 def folder_classes(folder: Path | str, extensions: Iterable[str] = IMAGE_EXTS) -> list[str]:
@@ -75,6 +75,7 @@ def match_status(predicted: str, original: str) -> str:
 
 # ----- auto-map suggestion ---------------------------------------------------
 
+
 def _tokenize(headstamp: str) -> list[str]:
     return [t for t in re.split(r"[ \-_+]+", headstamp) if t]
 
@@ -88,27 +89,17 @@ def _tokens_equivalent(a: str, b: str) -> bool:
 
 
 def _score_token_match(target: list[str], model: list[str]) -> float:
-    matches = [
-        (t, m)
-        for t in range(len(target))
-        for m in range(len(model))
-        if _tokens_equivalent(target[t], model[m])
-    ]
+    matches = [(t, m) for t in range(len(target)) for m in range(len(model)) if _tokens_equivalent(target[t], model[m])]
     if not matches:
         return 0.0
-    match_count = min(
-        len({t for t, _ in matches}), len({m for _, m in matches})
-    )
+    match_count = min(len({t for t, _ in matches}), len({m for _, m in matches}))
     # A lone match only counts when it's the leading token on both sides.
     if match_count == 1:
         t0, m0 = matches[0]
         if t0 != 0 or m0 != 0:
             return 0.0
     score = match_count * 100.0
-    positional = sum(
-        1 for i in range(min(len(target), len(model)))
-        if _tokens_equivalent(target[i], model[i])
-    )
+    positional = sum(1 for i in range(min(len(target), len(model))) if _tokens_equivalent(target[i], model[i]))
     score += positional * 50.0
     in_order, last = True, -1
     for t, m in sorted(matches, key=lambda x: x[0]):
@@ -161,8 +152,10 @@ def auto_map(target_classes: list[str], model_classes: list[str]) -> dict[str, s
 
 # ----- evaluation ------------------------------------------------------------
 
+
 def _default_classify(image_bgr, model_path: str, *, image_size: int | None) -> tuple[str, float]:
     from . import local_inference
+
     return local_inference.classify(image_bgr, model_path, image_size=image_size)
 
 
@@ -210,16 +203,18 @@ def evaluate_folder(
 
         raw = parse_label(path.name) or ""
         original, was_mapped = map_classification(raw, mapping)
-        results.append({
-            "filename": path.name,
-            "filepath": str(path),
-            "predicted": predicted,
-            "confidence": float(confidence),
-            "original": original,
-            "raw_original": raw,
-            "has_mapping": was_mapped,
-            "match": match_status(predicted, original),
-        })
+        results.append(
+            {
+                "filename": path.name,
+                "filepath": str(path),
+                "predicted": predicted,
+                "confidence": float(confidence),
+                "original": original,
+                "raw_original": raw,
+                "has_mapping": was_mapped,
+                "match": match_status(predicted, original),
+            }
+        )
 
     return {"results": results, "summary": summarize(results), "stopped": stopped}
 
@@ -245,14 +240,16 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     per_class = []
     for cls, b in sorted(by_class.items(), key=lambda kv: kv[0].casefold()):
         confs = b["confs"]
-        per_class.append({
-            "cls": cls,
-            "count": b["count"],
-            "avg": sum(confs) / len(confs) if confs else 0.0,
-            "high": max(confs) if confs else 0.0,
-            "low": min(confs) if confs else 0.0,
-            "mismatches": b["mismatches"],
-        })
+        per_class.append(
+            {
+                "cls": cls,
+                "count": b["count"],
+                "avg": sum(confs) / len(confs) if confs else 0.0,
+                "high": max(confs) if confs else 0.0,
+                "low": min(confs) if confs else 0.0,
+                "mismatches": b["mismatches"],
+            }
+        )
 
     return {
         "total": total,

@@ -10,21 +10,21 @@ Community Models layout:
 
 `Share a Model` is rendered disabled until the upload flow is in scope.
 """
+
 from __future__ import annotations
 
 import tempfile
 import tkinter as tk
+from collections.abc import Callable
 from pathlib import Path
 from tkinter import messagebox, ttk
-from typing import Any, Callable
+from typing import Any
 
 from ..community_api import CartridgeInfo, CommunityApi, ModelInfo
 from ..config import Config
 from ..events import EventBus
 from ..model_io import import_model
 from ..repository import ModelRepo
-from .theme import PALETTE
-
 
 _TYPE_VALUES = ("All", "ModelOnly", "ModelAndImages", "ImagesOnly")
 
@@ -45,13 +45,12 @@ def _format_size(n: int) -> str:
 def _format_date(iso: str) -> str:
     """ISO-ish → 'M/D/YYYY' to match the legacy look. Falls back to raw."""
     from datetime import datetime
+
     if not iso:
         return ""
-    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ",
-                "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
         try:
-            return datetime.strptime(iso[: len(fmt) + 6 if "%S" in fmt else len(fmt)],
-                                     fmt).strftime("%-m/%-d/%Y")
+            return datetime.strptime(iso[: len(fmt) + 6 if "%S" in fmt else len(fmt)], fmt).strftime("%-m/%-d/%Y")
         except (ValueError, OSError):
             continue
     return iso
@@ -65,7 +64,7 @@ class CommunityModelCard(ttk.Frame):
         parent: tk.Misc,
         info: ModelInfo,
         *,
-        installed_state: str,        # 'download' | 'update' | 'installed'
+        installed_state: str,  # 'download' | 'update' | 'installed'
         on_action: Callable[[ModelInfo], None],
     ) -> None:
         super().__init__(parent, style="Card.TFrame", padding=14)
@@ -75,7 +74,9 @@ class CommunityModelCard(ttk.Frame):
 
         # Header: model name
         ttk.Label(
-            self, text=info.model_name, style="CardTitle.TLabel",
+            self,
+            text=info.model_name,
+            style="CardTitle.TLabel",
         ).pack(side=tk.TOP, anchor="w")
 
         # Info grid (3 columns × 3 rows)
@@ -100,8 +101,11 @@ class CommunityModelCard(ttk.Frame):
         # Description
         if info.model_description:
             ttk.Label(
-                self, text=info.model_description,
-                style="CardSubtle.TLabel", wraplength=900, justify=tk.LEFT,
+                self,
+                text=info.model_description,
+                style="CardSubtle.TLabel",
+                wraplength=900,
+                justify=tk.LEFT,
             ).pack(side=tk.TOP, anchor="w", pady=(2, 8), fill=tk.X)
 
         # Action button (right-aligned)
@@ -109,18 +113,17 @@ class CommunityModelCard(ttk.Frame):
         action_row.pack(side=tk.TOP, fill=tk.X)
         ttk.Frame(action_row, style="CardRow.TFrame").pack(side=tk.LEFT, fill=tk.X, expand=True)
         if installed_state == "installed":
-            btn = ttk.Button(action_row, text="Already Installed",
-                             state=tk.DISABLED)
+            btn = ttk.Button(action_row, text="Already Installed", state=tk.DISABLED)
         elif installed_state == "update":
             # Blue, not the download green: this replaces a model already in
             # the library rather than adding one.
-            btn = ttk.Button(action_row, text="Update Model",
-                             style="Update.TButton",
-                             command=lambda: self.on_action(self.info))
+            btn = ttk.Button(
+                action_row, text="Update Model", style="Update.TButton", command=lambda: self.on_action(self.info)
+            )
         else:
-            btn = ttk.Button(action_row, text="Download Model",
-                             style="Accent.TButton",
-                             command=lambda: self.on_action(self.info))
+            btn = ttk.Button(
+                action_row, text="Download Model", style="Accent.TButton", command=lambda: self.on_action(self.info)
+            )
         btn.pack(side=tk.RIGHT)
 
 
@@ -180,7 +183,8 @@ class CommunityTab(ttk.Frame):
         # after the role check
         # comes back so non-contributors never see the button at all.
         self.share_button = ttk.Button(
-            bar, text="Share a Model",
+            bar,
+            text="Share a Model",
             command=self._open_share_dialog,
         )
         self.share_button.pack(side=tk.LEFT)
@@ -193,8 +197,7 @@ class CommunityTab(ttk.Frame):
         ttk.Label(right, text="Community Info:", style="Muted.TLabel").pack(side=tk.LEFT)
         # Resolved asynchronously — identity() may do a silent token read.
         self.community_info_var = tk.StringVar(value="…")
-        ttk.Label(right, textvariable=self.community_info_var,
-                  style="Accent.TLabel").pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Label(right, textvariable=self.community_info_var, style="Accent.TLabel").pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(right, text="Sign out", command=self._sign_out).pack(side=tk.LEFT, padx=(16, 0))
         self._load_community_info()
 
@@ -205,6 +208,7 @@ class CommunityTab(ttk.Frame):
         worker; results marshalled back via the bus-backed run_worker
         callbacks.
         """
+
         def _work() -> tuple[str, bool, str]:
             name, email = self.app.auth.identity()
             try:
@@ -258,15 +262,17 @@ class CommunityTab(ttk.Frame):
         bar.pack(fill=tk.X, padx=8, pady=(8, 4))
 
         self.cart_var = tk.StringVar(value="All")
-        self.cart_combo = ttk.Combobox(bar, state="readonly", width=14,
-                                       textvariable=self.cart_var)
+        self.cart_combo = ttk.Combobox(bar, state="readonly", width=14, textvariable=self.cart_var)
         self.cart_combo.pack(side=tk.LEFT)
         self.cart_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh())
 
         self.type_var = tk.StringVar(value="All")
         self.type_combo = ttk.Combobox(
-            bar, state="readonly", width=18,
-            textvariable=self.type_var, values=list(_TYPE_VALUES),
+            bar,
+            state="readonly",
+            width=18,
+            textvariable=self.type_var,
+            values=list(_TYPE_VALUES),
         )
         self.type_combo.current(0)
         self.type_combo.pack(side=tk.LEFT, padx=(8, 0))
@@ -277,15 +283,12 @@ class CommunityTab(ttk.Frame):
         entry.pack(side=tk.LEFT, padx=(8, 0))
         entry.bind("<Return>", lambda _e: self._refresh())
 
-        ttk.Button(bar, text="Search", style="Accent.TButton",
-                   command=self._refresh).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(bar, text="Refresh filters",
-                   command=self._populate_cartridge_filter).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(bar, text="Search", style="Accent.TButton", command=self._refresh).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(bar, text="Refresh filters", command=self._populate_cartridge_filter).pack(side=tk.LEFT, padx=(8, 0))
 
     def _build_status_label(self) -> None:
         self.status_var = tk.StringVar(value="")
-        ttk.Label(self, textvariable=self.status_var,
-                  style="Muted.TLabel").pack(fill=tk.X, padx=10, pady=(2, 4))
+        ttk.Label(self, textvariable=self.status_var, style="Muted.TLabel").pack(fill=tk.X, padx=10, pady=(2, 4))
 
     def _build_models_list(self) -> None:
         # The whole tab is already hosted in a ScrollableFrame (see
@@ -335,7 +338,8 @@ class CommunityTab(ttk.Frame):
             for info in models:
                 state = self._installed_state(info)
                 card = CommunityModelCard(
-                    self._list_body, info,
+                    self._list_body,
+                    info,
                     installed_state=state,
                     on_action=self._download,
                 )
@@ -367,11 +371,10 @@ class CommunityTab(ttk.Frame):
         is_update = self._installed_state(info) == "update"
         if not messagebox.askyesno(
             "Download model — security notice",
-            f"\"{name}\" is a community-published model. Models are loaded with "
+            f'"{name}" is a community-published model. Models are loaded with '
             "PyTorch and can execute code embedded in the file, so only download "
             "models from authors you trust.\n\n"
-            + ("Download and install this update?" if is_update
-               else "Download and import this model?"),
+            + ("Download and install this update?" if is_update else "Download and import this model?"),
             icon="warning",
             default="no",
             parent=self,
@@ -400,20 +403,17 @@ class CommunityTab(ttk.Frame):
                             last_pct[0] = pct
                             mb_done = done / (1024 * 1024)
                             mb_total = total / (1024 * 1024)
-                            self._post_progress(
-                                f"Downloading {name}: {pct}% ({mb_done:.1f} / {mb_total:.1f} MB)"
-                            )
+                            self._post_progress(f"Downloading {name}: {pct}% ({mb_done:.1f} / {mb_total:.1f} MB)")
                     else:
                         mb_done = done / (1024 * 1024)
                         # No Content-Length: report bytes-done every ~1 MB.
                         if int(mb_done) != last_pct[0]:
                             last_pct[0] = int(mb_done)
-                            self._post_progress(
-                                f"Downloading {name}: {mb_done:.1f} MB"
-                            )
+                            self._post_progress(f"Downloading {name}: {mb_done:.1f} MB")
 
                 api.download_to(
-                    url, zip_path,
+                    url,
+                    zip_path,
                     expected_total=info.download_size or None,
                     progress=_dl_progress,
                 )
@@ -428,22 +428,19 @@ class CommunityTab(ttk.Frame):
                     pct = int(step * 100 / total)
                     if pct != last_import_pct[0]:
                         last_import_pct[0] = pct
-                        self._post_progress(
-                            f"Importing {name}: {pct}% ({step} / {total} files)"
-                        )
+                        self._post_progress(f"Importing {name}: {pct}% ({step} / {total} files)")
 
                 result = import_model(
-                    zip_path, db=self.db, progress=_import_progress,
+                    zip_path,
+                    db=self.db,
+                    progress=_import_progress,
                 )
                 self._record_installed_version(result[1], info)
                 return result
 
         def _ok(result):
             _cart_id, mid = result
-            self._post_progress(
-                f"Updated {name} to v{info.model_version}." if is_update
-                else f"Imported {name}."
-            )
+            self._post_progress(f"Updated {name} to v{info.model_version}." if is_update else f"Imported {name}.")
             self._notify_import(mid, updated=is_update)
             models_tab = getattr(self.app, "models_tab", None)
             if models_tab is not None:
@@ -483,8 +480,7 @@ class CommunityTab(ttk.Frame):
         if updated:
             messagebox.showinfo(
                 "Update complete",
-                "The installed model was updated in place — your slot "
-                "assignments and sorting templates were kept.",
+                "The installed model was updated in place — your slot assignments and sorting templates were kept.",
                 parent=self,
             )
             return
@@ -504,6 +500,7 @@ class CommunityTab(ttk.Frame):
 
     def _open_share_dialog(self) -> None:
         from .dialog_share_model import ShareModelDialog
+
         if not ModelRepo(self.db).list():
             messagebox.showinfo(
                 "No models to share",

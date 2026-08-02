@@ -4,23 +4,23 @@ Minimal field set this round — name, cartridge, model mode, primer-mask
 settings. Advanced training hyperparameters live in a separate dialog
 (``dialog_training_config``).
 """
+
 from __future__ import annotations
 
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import messagebox, ttk
-from typing import Callable
 
 from ..db import Database
 from ..models import (
-    AIModelConfig,
     FEEDBACK_UPLOAD_MODES,
+    SUPPORTED_MODEL_MODES,
+    AIModelConfig,
     ImageProcessingConfig,
     Model,
-    SUPPORTED_MODEL_MODES,
     TrainingConfig,
 )
 from ..repository import CartridgeRepo, ModelRepo
-
 
 # Upload-mode value (persisted) <-> display label (shown in the combobox).
 _FEEDBACK_MODE_LABELS = {
@@ -32,10 +32,7 @@ _FEEDBACK_MODE_BY_LABEL = {label: value for value, label in _FEEDBACK_MODE_LABEL
 
 
 def _is_community_model(model: Model | None) -> bool:
-    return bool(
-        model is not None
-        and (model.community_model_uid or model.model_type == "CommunityManaged")
-    )
+    return bool(model is not None and (model.community_model_uid or model.model_type == "CommunityManaged"))
 
 
 class ModelEditorDialog(tk.Toplevel):
@@ -84,8 +81,7 @@ class ModelEditorDialog(tk.Toplevel):
 
         row += 1
         ttk.Label(frm, text="Model type:", anchor=tk.W).grid(row=row, column=0, sticky="w", pady=4)
-        self.mode_combo = ttk.Combobox(frm, state="readonly", width=30,
-                                       values=list(SUPPORTED_MODEL_MODES))
+        self.mode_combo = ttk.Combobox(frm, state="readonly", width=30, values=list(SUPPORTED_MODEL_MODES))
         if existing and existing.model_mode in SUPPORTED_MODEL_MODES:
             self.mode_combo.set(existing.model_mode)
         else:
@@ -94,20 +90,20 @@ class ModelEditorDialog(tk.Toplevel):
 
         row += 1
         self.hide_primer_var = tk.BooleanVar(value=bool(existing.hide_primer) if existing else True)
-        ttk.Checkbutton(frm, text="Hide primer in cropped image",
-                        variable=self.hide_primer_var).grid(
-            row=row, column=0, columnspan=2, sticky="w", pady=4,
+        ttk.Checkbutton(frm, text="Hide primer in cropped image", variable=self.hide_primer_var).grid(
+            row=row,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            pady=4,
         )
 
         row += 1
-        ttk.Label(frm, text="Primer mask size (px):", anchor=tk.W).grid(
-            row=row, column=0, sticky="w", pady=4
+        ttk.Label(frm, text="Primer mask size (px):", anchor=tk.W).grid(row=row, column=0, sticky="w", pady=4)
+        self.primer_size_var = tk.IntVar(value=int(existing.primer_mask_size) if existing else 135)
+        ttk.Spinbox(frm, from_=0, to=512, textvariable=self.primer_size_var, width=8).grid(
+            row=row, column=1, sticky="w", pady=4
         )
-        self.primer_size_var = tk.IntVar(
-            value=int(existing.primer_mask_size) if existing else 135
-        )
-        ttk.Spinbox(frm, from_=0, to=512, textvariable=self.primer_size_var,
-                    width=8).grid(row=row, column=1, sticky="w", pady=4)
 
         # Community Feedback Loop — only for community models. The publisher's
         # confidence floor is shown read-only; the user may opt out or change
@@ -116,7 +112,11 @@ class ModelEditorDialog(tk.Toplevel):
         if self._is_community:
             row += 1
             self._build_feedback_section(frm, existing).grid(
-                row=row, column=0, columnspan=2, sticky="ew", pady=(10, 2),
+                row=row,
+                column=0,
+                columnspan=2,
+                sticky="ew",
+                pady=(10, 2),
             )
 
         frm.columnconfigure(1, weight=1)
@@ -136,29 +136,42 @@ class ModelEditorDialog(tk.Toplevel):
         # Opt-out lives here (and only here): unchecking stops uploads.
         self.fb_enabled_var = tk.BooleanVar(value=bool(model.feedback_loop_enabled))
         ttk.Checkbutton(
-            box, text="Participate in feedback loop",
-            variable=self.fb_enabled_var, command=self._on_fb_toggle,
+            box,
+            text="Participate in feedback loop",
+            variable=self.fb_enabled_var,
+            command=self._on_fb_toggle,
         ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
 
         ttk.Label(box, text="Upload mode:", anchor=tk.W).grid(
-            row=1, column=0, sticky="w", pady=2,
+            row=1,
+            column=0,
+            sticky="w",
+            pady=2,
         )
         current_label = _FEEDBACK_MODE_LABELS.get(
-            model.feedback_loop_upload_mode, _FEEDBACK_MODE_LABELS["Instant"],
+            model.feedback_loop_upload_mode,
+            _FEEDBACK_MODE_LABELS["Instant"],
         )
         self.fb_mode_var = tk.StringVar(value=current_label)
         self.fb_mode_combo = ttk.Combobox(
-            box, state="readonly", width=22, textvariable=self.fb_mode_var,
+            box,
+            state="readonly",
+            width=22,
+            textvariable=self.fb_mode_var,
             values=[_FEEDBACK_MODE_LABELS[m] for m in FEEDBACK_UPLOAD_MODES],
         )
         self.fb_mode_combo.grid(row=1, column=1, sticky="w", pady=2)
 
         # Confidence floor is publisher-controlled: shown, never editable.
         ttk.Label(box, text="Confidence floor:", anchor=tk.W).grid(
-            row=2, column=0, sticky="w", pady=2,
+            row=2,
+            column=0,
+            sticky="w",
+            pady=2,
         )
         ttk.Label(
-            box, text=f"{int(model.feedback_loop_confidence_floor)}%  (set by publisher)",
+            box,
+            text=f"{int(model.feedback_loop_confidence_floor)}%  (set by publisher)",
             style="Muted.TLabel",
         ).grid(row=2, column=1, sticky="w", pady=2)
 
@@ -167,9 +180,7 @@ class ModelEditorDialog(tk.Toplevel):
         return box
 
     def _on_fb_toggle(self) -> None:
-        self.fb_mode_combo.configure(
-            state="readonly" if self.fb_enabled_var.get() else "disabled"
-        )
+        self.fb_mode_combo.configure(state="readonly" if self.fb_enabled_var.get() else "disabled")
 
     def _save(self) -> None:
         name = self.name_var.get().strip()
@@ -211,7 +222,8 @@ class ModelEditorDialog(tk.Toplevel):
                     # Editable: opt-out flag + upload mode. Never the floor.
                     self.existing.feedback_loop_enabled = bool(self.fb_enabled_var.get())
                     self.existing.feedback_loop_upload_mode = _FEEDBACK_MODE_BY_LABEL.get(
-                        self.fb_mode_var.get(), self.existing.feedback_loop_upload_mode,
+                        self.fb_mode_var.get(),
+                        self.existing.feedback_loop_upload_mode,
                     )
                 self.model_repo.update(self.existing)
                 saved_id = self.existing.id

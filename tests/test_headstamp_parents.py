@@ -1,4 +1,5 @@
 """Parent-classification data layer: repo CRUD, unlink-on-delete, migration."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -22,9 +23,7 @@ def _new_db(tmp_path: Path) -> Database:
 
 def _model_with_headstamps(db: Database, names: list[str]) -> int:
     cart_id = CartridgeRepo(db).create("9mm-parents").id
-    model = ModelRepo(db).create(
-        Model(name="m", cartridge_id=cart_id, model_mode="convnext_tiny")
-    )
+    model = ModelRepo(db).create(Model(name="m", cartridge_id=cart_id, model_mode="convnext_tiny"))
     repo = HeadstampRepo(db)
     for n in names:
         repo.add(model.id, n)

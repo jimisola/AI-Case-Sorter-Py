@@ -1,4 +1,5 @@
 """Make `sorter` importable when running pytest from the repo root."""
+
 from __future__ import annotations
 
 import gc

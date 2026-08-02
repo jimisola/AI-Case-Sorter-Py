@@ -2,6 +2,7 @@
 
 Skipped where the GUI stack (tkinter / cv2) isn't importable.
 """
+
 from __future__ import annotations
 
 import pytest

@@ -6,11 +6,11 @@ Install PyTorch dialog), so we can't use torch.cuda.* — we shell out to
 when nvidia-smi fails, or when no installed GPU meets the minimum compute
 capability for the modern CUDA wheels.
 """
+
 from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
-
 
 # RTX 30-series (Ampere) is sm_80+ and is the first generation supported by
 # the cu128 wheel index. Older cards (Turing sm_75 and below) would need a
@@ -37,7 +37,10 @@ def detect_supported_nvidia_gpu(*, timeout: float = 5.0) -> GpuInfo | None:
                 "--query-gpu=name,compute_cap",
                 "--format=csv,noheader",
             ],
-            capture_output=True, text=True, timeout=timeout, check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return None

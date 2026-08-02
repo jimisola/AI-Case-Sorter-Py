@@ -9,6 +9,7 @@ the currently active model.
 The DEFAULTS structure stays here as the canonical fallback when no settings
 row exists yet.
 """
+
 from __future__ import annotations
 
 import copy
@@ -22,7 +23,6 @@ from .repository import (
     SettingsRepo,
     SlotTemplateRepo,
 )
-
 
 DEFAULT_INIT_SETTINGS: dict[str, int | str] = {
     "feedhomingoffset": 0,
@@ -174,13 +174,11 @@ class Config:
         self.templates_repo = SlotTemplateRepo(db)
         self.data: dict[str, Any] = copy.deepcopy(DEFAULTS)
 
-    def load(self) -> "Config":
+    def load(self) -> Config:
         for key in _SECTIONS:
             stored = self.settings.get(key)
             if stored is not None:
-                self.data[key] = _merge_defaults(
-                    copy.deepcopy(DEFAULTS[key]), stored
-                )
+                self.data[key] = _merge_defaults(copy.deepcopy(DEFAULTS[key]), stored)
             else:
                 self.data[key] = copy.deepcopy(DEFAULTS[key])
         return self
@@ -289,10 +287,7 @@ class Config:
         """Replace all headstamps for the active context (model or AI Config)."""
         active_id = self.settings.get_active_model_id()
         if active_id is None:
-            normalised = [
-                {"name": str(e["name"]), "slot": int(e.get("slot", 0))}
-                for e in entries if e.get("name")
-            ]
+            normalised = [{"name": str(e["name"]), "slot": int(e.get("slot", 0))} for e in entries if e.get("name")]
             self._write_ai_headstamps(normalised)
             return
         self.headstamps_repo.replace_for_model(active_id, entries)
@@ -393,10 +388,7 @@ class Config:
         mid = self.settings.get_active_model_id()
         if mid is None:
             return []
-        return [
-            {"id": p.id, "name": p.name, "slot": int(p.slot)}
-            for p in self.parents_repo.list_for_model(mid)
-        ]
+        return [{"id": p.id, "name": p.name, "slot": int(p.slot)} for p in self.parents_repo.list_for_model(mid)]
 
     def headstamps_with_parents(self) -> list[dict[str, Any]]:
         """[{name, slot, parent_id}] for the active model (parent_id None in AI mode)."""
@@ -516,10 +508,7 @@ class Config:
 
     def slots_for_headstamp_package(self, name: str) -> list[int]:
         """Every (non-catch-all) slot the headstamp is assigned to in package mode."""
-        return sorted(
-            s for s, names in self.package_slot_map().items()
-            if s > 0 and name in names
-        )
+        return sorted(s for s, names in self.package_slot_map().items() if s > 0 and name in names)
 
     def set_package_slot_headstamp(self, slot: int, name: str, enabled: bool) -> None:
         """Add/remove a headstamp from a package slot's assignment list.
@@ -579,20 +568,14 @@ class Config:
                 }
             }
         return {
-            "headstamps": {
-                str(e["name"]): int(e.get("slot", 0))
-                for e in self.headstamps
-                if int(e.get("slot", 0)) > 0
-            },
-            "parents": {
-                str(p["name"]): int(p["slot"])
-                for p in self.parents_with_slots()
-                if int(p["slot"]) > 0
-            },
+            "headstamps": {str(e["name"]): int(e.get("slot", 0)) for e in self.headstamps if int(e.get("slot", 0)) > 0},
+            "parents": {str(p["name"]): int(p["slot"]) for p in self.parents_with_slots() if int(p["slot"]) > 0},
         }
 
     def apply_slot_assignments(
-        self, assignments: dict[str, Any] | None, mode: str | None = None,
+        self,
+        assignments: dict[str, Any] | None,
+        mode: str | None = None,
     ) -> None:
         """Write a template payload back onto the live assignments.
 
@@ -658,7 +641,9 @@ class Config:
             return rows
         with self.db.transaction() as _:
             template = self.templates_repo.create(
-                mid, mode, DEFAULT_SLOT_TEMPLATE_NAME,
+                mid,
+                mode,
+                DEFAULT_SLOT_TEMPLATE_NAME,
                 self.capture_slot_assignments(mode),
             )
             self.settings.set(self._active_template_key(mode), template.id)
@@ -688,11 +673,14 @@ class Config:
         mode = self._resolve_template_mode(mode)
         template = self.active_slot_template(mode)
         self.templates_repo.update_assignments(
-            template.id, self.capture_slot_assignments(mode),
+            template.id,
+            self.capture_slot_assignments(mode),
         )
 
     def activate_slot_template(
-        self, template_id: int, mode: str | None = None,
+        self,
+        template_id: int,
+        mode: str | None = None,
     ) -> SlotTemplate | None:
         """Switch to another template: save the outgoing one, load the incoming.
 
@@ -709,7 +697,8 @@ class Config:
             return current
         with self.db.transaction() as _:
             self.templates_repo.update_assignments(
-                current.id, self.capture_slot_assignments(mode),
+                current.id,
+                self.capture_slot_assignments(mode),
             )
             self.apply_slot_assignments(target.assignments, mode)
             self.settings.set(self._active_template_key(mode), target.id)
@@ -739,13 +728,15 @@ class Config:
             raise ValueError(f"A template named “{name}” already exists.")
         current = self.active_slot_template(mode)
         payload = (
-            self.capture_slot_assignments(mode) if copy_current
+            self.capture_slot_assignments(mode)
+            if copy_current
             else ({"slots": {}} if mode == "package" else {"headstamps": {}, "parents": {}})
         )
         with self.db.transaction() as _:
             # Flush the outgoing template first so nothing unsaved is lost.
             self.templates_repo.update_assignments(
-                current.id, self.capture_slot_assignments(mode),
+                current.id,
+                self.capture_slot_assignments(mode),
             )
             template = self.templates_repo.create(mid, mode, name, payload)
             self.apply_slot_assignments(payload, mode)
@@ -780,10 +771,7 @@ class Config:
         if template is None:
             return None
         mode = template.mode
-        remaining = [
-            t for t in self.templates_repo.list_for_scope(template.model_id, mode)
-            if t.id != template.id
-        ]
+        remaining = [t for t in self.templates_repo.list_for_scope(template.model_id, mode) if t.id != template.id]
         if not remaining:
             raise ValueError("A model needs at least one sorting template.")
         key = self._template_key_for(template.model_id, mode)

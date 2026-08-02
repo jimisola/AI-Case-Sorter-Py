@@ -4,6 +4,7 @@ Importing the module is display-free (tkinter only needs a display when a
 root window is actually created), so the static `_format_identity` helper
 can be exercised directly.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -15,8 +16,7 @@ from sorter.ui.tab_community import CommunityTab  # noqa: E402
 
 
 def test_format_identity_name_and_email() -> None:
-    assert CommunityTab._format_identity("Jane Doe", "jane@example.com") == \
-        "Jane Doe (jane@example.com)"
+    assert CommunityTab._format_identity("Jane Doe", "jane@example.com") == "Jane Doe (jane@example.com)"
 
 
 def test_format_identity_name_only() -> None:
@@ -25,8 +25,7 @@ def test_format_identity_name_only() -> None:
 
 
 def test_format_identity_email_only() -> None:
-    assert CommunityTab._format_identity(None, "jane@example.com") == \
-        "jane@example.com"
+    assert CommunityTab._format_identity(None, "jane@example.com") == "jane@example.com"
 
 
 def test_format_identity_neither() -> None:

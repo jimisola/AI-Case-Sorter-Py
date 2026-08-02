@@ -1,4 +1,5 @@
 """Tests for the update check + staging half of the updater."""
+
 from __future__ import annotations
 
 import io
@@ -33,13 +34,13 @@ def _isolated_data_root(monkeypatch, tmp_path: Path):
         ("0.1.0", "0.1.0", False),
         ("0.1.0", "0.2.0", False),
         ("1.0.0", "0.9.9", True),
-        ("0.10.0", "0.9.0", True),        # numeric, not lexicographic
-        ("0.2", "0.2.0", False),          # zero-padded to equal
+        ("0.10.0", "0.9.0", True),  # numeric, not lexicographic
+        ("0.2", "0.2.0", False),  # zero-padded to equal
         ("0.2.1", "0.2", True),
-        ("0.2.0-rc1", "0.1.0", True),     # prerelease still newer than 0.1.0
-        ("0.2.0-rc1", "0.2.0", False),    # ...but older than its own release
+        ("0.2.0-rc1", "0.1.0", True),  # prerelease still newer than 0.1.0
+        ("0.2.0-rc1", "0.2.0", False),  # ...but older than its own release
         ("0.2.0", "0.2.0-rc1", True),
-        ("garbage", "0.1.0", False),      # malformed tag reads as "not newer"
+        ("garbage", "0.1.0", False),  # malformed tag reads as "not newer"
         ("", "0.1.0", False),
     ],
 )
@@ -62,8 +63,7 @@ class _Resp:
 
 
 def _release(tag: str = "v0.9.0", assets=None, body: str = "notes") -> dict:
-    return {"tag_name": tag, "body": body, "assets": assets or [],
-            "published_at": "2026-01-01T00:00:00Z"}
+    return {"tag_name": tag, "body": body, "assets": assets or [], "published_at": "2026-01-01T00:00:00Z"}
 
 
 def test_check_returns_info_when_newer(monkeypatch) -> None:
@@ -80,11 +80,9 @@ def test_check_returns_info_when_newer(monkeypatch) -> None:
 def test_check_prefers_a_published_zip_asset(monkeypatch) -> None:
     assets = [
         {"name": "checksums.txt", "browser_download_url": "https://x/c.txt"},
-        {"name": "casesorter-0.9.0.zip",
-         "browser_download_url": "https://x/app.zip", "size": 4242},
+        {"name": "casesorter-0.9.0.zip", "browser_download_url": "https://x/app.zip", "size": 4242},
     ]
-    monkeypatch.setattr(requests, "get",
-                        lambda *a, **k: _Resp(200, _release(assets=assets)))
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _Resp(200, _release(assets=assets)))
     info = updater.check_for_update(current="0.1.0")
     assert info is not None
     assert info.url == "https://x/app.zip"
@@ -92,8 +90,7 @@ def test_check_prefers_a_published_zip_asset(monkeypatch) -> None:
 
 
 def test_check_returns_none_when_current(monkeypatch) -> None:
-    monkeypatch.setattr(requests, "get",
-                        lambda *a, **k: _Resp(200, _release(tag="v0.1.0")))
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _Resp(200, _release(tag="v0.1.0")))
     assert updater.check_for_update(current="0.1.0") is None
 
 
@@ -139,12 +136,14 @@ def _zip_bytes(entries: dict[str, str]) -> bytes:
 
 
 def _good_archive(prefix: str = "AI-Case-Sorter-Py-v0.9.0/") -> bytes:
-    return _zip_bytes({
-        f"{prefix}main.py": "print('new')\n",
-        f"{prefix}sorter/__init__.py": '__version__ = "0.9.0"\n',
-        f"{prefix}sorter/updater.py": "# new\n",
-        f"{prefix}requirements.txt": "requests\n",
-    })
+    return _zip_bytes(
+        {
+            f"{prefix}main.py": "print('new')\n",
+            f"{prefix}sorter/__init__.py": '__version__ = "0.9.0"\n',
+            f"{prefix}sorter/updater.py": "# new\n",
+            f"{prefix}requirements.txt": "requests\n",
+        }
+    )
 
 
 class _StreamResp:
@@ -157,7 +156,7 @@ class _StreamResp:
 
     def iter_content(self, chunk_size: int = 1):
         for i in range(0, len(self._payload), chunk_size):
-            yield self._payload[i:i + chunk_size]
+            yield self._payload[i : i + chunk_size]
 
     def __enter__(self):
         return self
@@ -208,11 +207,16 @@ def test_stage_reports_progress(monkeypatch) -> None:
 
 
 def test_stage_rejects_traversal_entries(monkeypatch) -> None:
-    _serve(monkeypatch, _zip_bytes({
-        "pkg/main.py": "x",
-        "pkg/sorter/__init__.py": "x",
-        "pkg/../../evil.py": "pwned",
-    }))
+    _serve(
+        monkeypatch,
+        _zip_bytes(
+            {
+                "pkg/main.py": "x",
+                "pkg/sorter/__init__.py": "x",
+                "pkg/../../evil.py": "pwned",
+            }
+        ),
+    )
     with pytest.raises(UpdateError, match="traversal"):
         updater.stage_update(_info())
     assert updater.pending_update() is None

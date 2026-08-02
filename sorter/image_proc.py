@@ -7,6 +7,7 @@ Ports the relevant pieces of the legacy app's image processing: the line-scan
 crop, the HoughCircles crop, the square-to-circle conversion, and the
 clip-to-circle / primer-mask steps.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,7 +15,6 @@ from typing import Any
 
 import cv2
 import numpy as np
-
 
 OUTPUT_SIZE = 480
 
@@ -32,7 +32,7 @@ class HoughParams:
     max_radius: int = 220
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "HoughParams":
+    def from_dict(cls, d: dict[str, Any]) -> HoughParams:
         return cls(
             dp=float(d.get("dp", 2.0)),
             min_dist=int(d.get("min_dist", 200)),
@@ -51,7 +51,7 @@ class LineScanParams:
     bg_cliff: int = 0
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "LineScanParams":
+    def from_dict(cls, d: dict[str, Any]) -> LineScanParams:
         return cls(
             scan_precision=max(1, int(d.get("scan_precision", 1))),
             scan_sensitivity=float(d.get("scan_sensitivity", 5.0)),
@@ -93,9 +93,7 @@ def _clip_to_circle(src: np.ndarray, center: tuple[int, int], radius: int) -> np
 # ----- Hough strategy ----------------------------------------------------------
 
 
-def hough_detect(
-    frame_bgr: np.ndarray, params: HoughParams
-) -> tuple[float, float, float] | None:
+def hough_detect(frame_bgr: np.ndarray, params: HoughParams) -> tuple[float, float, float] | None:
     """Run cv2.HoughCircles and return (cx, cy, r) for the LARGEST circle, or None.
 
     HoughCircles sorts results by accumulator vote count, but for a brass
@@ -151,8 +149,12 @@ def overlay_detection(
     cx, cy, r = detection
     cv2.circle(out, (int(cx), int(cy)), int(r), (0, 0, 255), 3)
     cv2.drawMarker(
-        out, (int(cx), int(cy)),
-        (0, 255, 255), markerType=cv2.MARKER_CROSS, markerSize=20, thickness=2,
+        out,
+        (int(cx), int(cy)),
+        (0, 255, 255),
+        markerType=cv2.MARKER_CROSS,
+        markerSize=20,
+        thickness=2,
     )
     return out
 

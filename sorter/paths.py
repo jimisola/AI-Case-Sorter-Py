@@ -36,6 +36,7 @@ This module is deliberately **stdlib-only and import-light**: the pre-launch
 update step (``main.py --apply-update``) imports it before the virtualenv has
 any third-party packages in it.
 """
+
 from __future__ import annotations
 
 import os

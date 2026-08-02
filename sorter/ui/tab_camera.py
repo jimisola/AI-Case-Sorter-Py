@@ -10,6 +10,7 @@ Two-phase population:
    already in use, this temporarily pauses the live preview and restarts
    it when done.
 """
+
 from __future__ import annotations
 
 import tkinter as tk
@@ -18,7 +19,6 @@ from tkinter import ttk
 from .. import camera as camera_mod
 from ..events import EventBus
 from .widgets import ImagePanel, build_button_row
-
 
 # Startup resolution preference: highest of these the camera supports,
 # falling back to the max resolution it reports if neither is available.
@@ -59,7 +59,7 @@ class CameraTab(ttk.Frame):
         self.config = config
         self.bus = bus
         self.app = app
-        self._detected: list[dict] = []   # filled by quick or full enumeration
+        self._detected: list[dict] = []  # filled by quick or full enumeration
 
         cam_cfg = config.camera
 
@@ -69,7 +69,10 @@ class CameraTab(ttk.Frame):
         ttk.Label(controls, text="Camera").grid(row=0, column=0, padx=6, pady=6, sticky=tk.W)
         self.camera_var = tk.StringVar()
         self.camera_combo = ttk.Combobox(
-            controls, textvariable=self.camera_var, width=40, state="readonly",
+            controls,
+            textvariable=self.camera_var,
+            width=40,
+            state="readonly",
         )
         self.camera_combo.grid(row=0, column=1, padx=6, pady=6, sticky=tk.W)
         self.camera_combo.bind("<<ComboboxSelected>>", self._on_camera_selected)
@@ -77,16 +80,28 @@ class CameraTab(ttk.Frame):
         ttk.Label(controls, text="Resolution").grid(row=1, column=0, padx=6, pady=6, sticky=tk.W)
         self.resolution_var = tk.StringVar()
         self.resolution_combo = ttk.Combobox(
-            controls, textvariable=self.resolution_var, width=20, state="readonly",
+            controls,
+            textvariable=self.resolution_var,
+            width=20,
+            state="readonly",
         )
         self.resolution_combo.grid(row=1, column=1, padx=6, pady=6, sticky=tk.W)
 
-        build_button_row(controls, [
-            ("Detect", self.detect_devices),
-            ("Apply / Start preview", self.apply_and_start),
-            ("Stop preview", self.stop_preview),
-        ], primary="Apply / Start preview").grid(
-            row=2, column=0, columnspan=2, padx=6, pady=4, sticky=tk.W,
+        build_button_row(
+            controls,
+            [
+                ("Detect", self.detect_devices),
+                ("Apply / Start preview", self.apply_and_start),
+                ("Stop preview", self.stop_preview),
+            ],
+            primary="Apply / Start preview",
+        ).grid(
+            row=2,
+            column=0,
+            columnspan=2,
+            padx=6,
+            pady=4,
+            sticky=tk.W,
         )
 
         self.status_label = ttk.Label(controls, text="", style="Muted.TLabel")
@@ -129,10 +144,7 @@ class CameraTab(ttk.Frame):
 
     def _populate_from_names(self, cam_cfg: dict) -> None:
         names = camera_mod.camera_names()
-        cameras = [
-            {"index": idx, "name": name, "resolutions": []}
-            for idx, name in sorted(names.items())
-        ]
+        cameras = [{"index": idx, "name": name, "resolutions": []} for idx, name in sorted(names.items())]
 
         saved_w = int(cam_cfg.get("width", 0))
         saved_h = int(cam_cfg.get("height", 0))
@@ -164,9 +176,7 @@ class CameraTab(ttk.Frame):
             self.resolution_combo["values"] = []
             self.resolution_var.set("")
 
-        self.status_label.config(
-            text="Click Detect to probe supported resolutions (briefly pauses preview)."
-        )
+        self.status_label.config(text="Click Detect to probe supported resolutions (briefly pauses preview).")
 
     # ----- Startup auto-detect (full probe; starts the preview) -------------
 
@@ -202,8 +212,7 @@ class CameraTab(ttk.Frame):
             self.resolution_var.set(_format_resolution(best))
 
         self.status_label.config(
-            text=f"Detected {len(cameras)} camera(s). "
-                 f"Selected {chosen.get('name', '?')} @ {self.resolution_var.get()}."
+            text=f"Detected {len(cameras)} camera(s). Selected {chosen.get('name', '?')} @ {self.resolution_var.get()}."
         )
 
         wh = _parse_resolution(self.resolution_var.get())
@@ -247,10 +256,7 @@ class CameraTab(ttk.Frame):
         self.camera_var.set(_format_camera_choice(chosen))
         self._populate_resolutions(chosen)
 
-        self.status_label.config(
-            text=f"Detected {len(cameras)} camera(s). "
-                 f"Selected {chosen.get('name', '?')}."
-        )
+        self.status_label.config(text=f"Detected {len(cameras)} camera(s). Selected {chosen.get('name', '?')}.")
 
         # Restart preview with the chosen device + resolution. We don't
         # persist — Apply commits.
@@ -311,9 +317,7 @@ class CameraTab(ttk.Frame):
         # count, so resolutions[-1] is the largest.
         saved_w = int(self.config.camera.get("width", 0))
         saved_h = int(self.config.camera.get("height", 0))
-        if (saved_w, saved_h) in resolutions and cam["index"] == int(
-            self.config.camera.get("device_index", 0)
-        ):
+        if (saved_w, saved_h) in resolutions and cam["index"] == int(self.config.camera.get("device_index", 0)):
             self.resolution_var.set(_format_resolution((saved_w, saved_h)))
         else:
             self.resolution_var.set(_format_resolution(resolutions[-1]))
@@ -339,9 +343,7 @@ class CameraTab(ttk.Frame):
             height=wh[1] if wh else None,
         )
         self.status_label.config(
-            text=f"Using {cam.get('name', '?')}"
-                 + (f" @ {self.resolution_var.get()}" if wh else "")
-                 + "."
+            text=f"Using {cam.get('name', '?')}" + (f" @ {self.resolution_var.get()}" if wh else "") + "."
         )
 
     def stop_preview(self) -> None:
