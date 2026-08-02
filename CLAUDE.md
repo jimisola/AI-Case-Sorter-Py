@@ -400,7 +400,7 @@ a separate one, so a built-in is never the thing being written to),
     difference. `normalize_palette` is the gate: it fills gaps from a base
     theme, drops unknown keys and non-colors, and forces `success`/`error`
     back onto `action`/`danger`, so neither a hand-edited settings row nor an
-    imported file can produce a broken palette.
+    imported file can produce a broken palette..
   - **Hue is meaning.** Dark keeps its chrome (window, panels, cards, inputs,
     borders, text, focus/selection tints) **neutral grayscale**, reserving hue
     for action buttons (`action*` green = primary/go, `update*` blue = refresh
