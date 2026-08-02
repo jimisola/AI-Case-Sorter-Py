@@ -3,8 +3,8 @@
     Installs (or updates) the AI Case Sorter on Windows. No git required.
 
 .DESCRIPTION
-    Provisions the two things a non-developer machine is missing — a Python
-    runtime and a copy of the app — then hands off to start.bat, which owns
+    Provisions the two things a non-developer machine is missing - a Python
+    runtime and a copy of the app - then hands off to start.bat, which owns
     the virtualenv and dependency install.
 
     Deliberately git-free. `git pull` over HTTPS and a release ZIP over HTTPS
@@ -12,7 +12,7 @@
     git's delta transfer buys nothing. Not installing a 60 MB dependency to
     deliver a 1 MB update is the whole point.
 
-    Installs per-user to %LOCALAPPDATA%\Programs\CaseSorter — no admin rights,
+    Installs per-user to %LOCALAPPDATA%\Programs\CaseSorter - no admin rights,
     and the folder stays writable so the venv and the in-app updater work.
     User data lives in %LOCALAPPDATA%\CaseSorter, outside the app folder, so
     reinstalling never touches trained models or settings.
@@ -40,6 +40,16 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# StrictMode makes reading an unset variable a terminating error, and
+# $LASTEXITCODE does not exist until some external program has run.
+$LASTEXITCODE = 0
+
+# NOTE: keep this file pure ASCII. Windows PowerShell 5.1 decodes a
+# BOM-less file as the system ANSI codepage, so a UTF-8 em-dash arrives as
+# 'a', 'EUR', and U+201D - and PowerShell treats U+201D as a closing double
+# quote, which silently truncates the enclosing string and misparses
+# everything after it. tests/test_installer_scripts.py enforces this.
 
 $Repo         = 'sjseth/AI-Case-Sorter-Py'
 $PythonWinget = 'Python.Python.3.12'
@@ -71,8 +81,10 @@ function Get-PythonCommand {
     #>
     $candidates = @()
 
-    $cmd = Get-Command python -ErrorAction SilentlyContinue
-    if ($cmd) { $candidates += $cmd.Source }
+    # -CommandType Application so a function or alias named `python` can't
+    # shadow a real interpreter.
+    $cmd = Get-Command python -CommandType Application -ErrorAction SilentlyContinue
+    if ($cmd) { $candidates += @($cmd | ForEach-Object { $_.Source }) }
 
     # The py launcher knows about installs that aren't on PATH.
     if (Get-Command py -ErrorAction SilentlyContinue) {
@@ -91,6 +103,10 @@ function Get-PythonCommand {
 
     foreach ($candidate in ($candidates | Where-Object { $_ } | Select-Object -Unique)) {
         if (-not (Test-Path $candidate)) { continue }
+        # Skip the Microsoft Store "app execution alias" stub. It exists on a
+        # stock Windows install with no Python behind it, and running it opens
+        # the Store instead of an interpreter.
+        if ($candidate -like '*\WindowsApps\*') { continue }
         try {
             $out = & $candidate -c "import sys, tkinter; print('%d.%d' % sys.version_info[:2])" 2>$null
             if ($LASTEXITCODE -ne 0 -or -not $out) { continue }
@@ -126,7 +142,7 @@ function Install-Python {
     Write-Note "Downloading $url"
     Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing
 
-    Write-Note "Running the installer (per-user, silent)…"
+    Write-Note "Running the installer (per-user, silent)..."
     $proc = Start-Process -FilePath $exe -Wait -PassThru -ArgumentList @(
         '/quiet', 'InstallAllUsers=0', 'PrependPath=1',
         'Include_tcltk=1', 'Include_pip=1', 'Include_launcher=1'
@@ -137,7 +153,7 @@ function Install-Python {
     }
 
     # PrependPath only affects *new* processes, so this shell still can't see
-    # it — re-read the user PATH rather than trusting `where python`.
+    # it - re-read the user PATH rather than trusting `where python`.
     $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
                 [Environment]::GetEnvironmentVariable('Path', 'User')
 
@@ -173,10 +189,18 @@ function Get-ReleaseInfo {
     }
 
     # Prefer a purpose-built .zip asset; fall back to the source archive.
-    $asset = $resp.assets | Where-Object { $_.name -like '*.zip' } | Select-Object -First 1
+    # Property access is guarded: Set-StrictMode turns a missing property into
+    # a terminating error, and a release with no assets is perfectly normal.
+    $tag = $resp.PSObject.Properties['tag_name'].Value
+    $asset = $null
+    if ($resp.PSObject.Properties['assets']) {
+        $asset = $resp.assets |
+            Where-Object { $_.PSObject.Properties['name'] -and $_.name -like '*.zip' } |
+            Select-Object -First 1
+    }
     $url = if ($asset) { $asset.browser_download_url }
-           else { "https://github.com/$Repo/archive/refs/tags/$($resp.tag_name).zip" }
-    return [pscustomobject]@{ Tag = $resp.tag_name; Url = $url }
+           else { "https://github.com/$Repo/archive/refs/tags/$tag.zip" }
+    return [pscustomobject]@{ Tag = $tag; Url = $url }
 }
 
 function Install-App {
@@ -186,10 +210,10 @@ function Install-App {
     New-Item -ItemType Directory -Path $work -Force | Out-Null
     try {
         $zip = Join-Path $work 'app.zip'
-        Write-Note "Downloading $Tag…"
+        Write-Note "Downloading $Tag..."
         Invoke-WebRequest -Uri $Url -OutFile $zip -UseBasicParsing
 
-        Write-Note "Extracting…"
+        Write-Note "Extracting..."
         $unpack = Join-Path $work 'unpacked'
         Expand-Archive -Path $zip -DestinationPath $unpack -Force
 
@@ -244,13 +268,15 @@ function New-Shortcuts {
 # ---------------------------------------------------------------------------
 
 Write-Host ""
-Write-Host "  AI Case Sorter — Windows installer" -ForegroundColor White
+Write-Host "  AI Case Sorter - Windows installer" -ForegroundColor White
 Write-Host "  ----------------------------------" -ForegroundColor DarkGray
 Write-Host ""
 
-$existing = Test-Path (Join-Path $InstallDir 'main.py')
-if ($existing) { Write-Step "Updating the existing install at $InstallDir" }
-else           { Write-Step "Installing to $InstallDir" }
+if (Test-Path (Join-Path $InstallDir 'main.py')) {
+    Write-Step "Updating the existing install at $InstallDir"
+} else {
+    Write-Step "Installing to $InstallDir"
+}
 
 Write-Step "Checking for Python $PythonMin or newer (with Tcl/Tk)"
 $python = Get-PythonCommand
@@ -276,7 +302,7 @@ Write-Ok "Your models and settings are kept separately at:"
 Write-Host "      $env:LOCALAPPDATA\CaseSorter"
 Write-Host ""
 Write-Note "First launch installs the Python dependencies and takes a few minutes."
-Write-Note "After that, updates are offered inside the app — no need to re-run this."
+Write-Note "After that, updates are offered inside the app - no need to re-run this."
 Write-Host ""
 
 if (-not $NoLaunch) {
