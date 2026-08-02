@@ -67,6 +67,11 @@ The app can predict a headstamp in one of two modes:
   sort-arm testing, and headstamp-crop tuning (Hough circles + primer mask).
 - **Community** tab *(sign-in required)* — browse, search, and download
   community-published models.
+- **Themes** — pick Dark, Light, Sepia, Midnight Blue, Gothic, or Comic Book
+  from the dropdown in the title bar. The change applies immediately and is
+  remembered. The **gear** beside it opens a theme editor: start from the theme
+  you're on, set any color you like with a live preview, then save, rename, or
+  export it as JSON to share (and import someone else's).
 - A **serial emulator** so you can run and explore the app with no hardware
   attached.
 

@@ -33,7 +33,7 @@ from typing import Callable
 from ..events import EventBus
 from ..feedback import FeedbackService, debug_log, is_feedback_model
 from ..repository import ModelRepo
-from .theme import PALETTE
+from .theme import PALETTE, row_style
 from .widgets import ImagePanel
 
 
@@ -162,7 +162,7 @@ class SlotCard(ttk.Frame):
         )
         self.headstamps_label.pack(anchor=tk.W, pady=(6, 8))
 
-        count_row = ttk.Frame(self, style="Card.TFrame")
+        count_row = ttk.Frame(self, style="CardRow.TFrame")
         count_row.pack(fill=tk.X)
         self.count_caption = ttk.Label(
             count_row, text="Count",
@@ -178,7 +178,7 @@ class SlotCard(ttk.Frame):
         # Live batch-reset (package mode only, never the catch-all). Lets the
         # operator dump a full bin and zero its counter while other slots keep
         # filling. Hidden until set_package_mode(True) is called.
-        self._reset_row = ttk.Frame(self, style="Card.TFrame")
+        self._reset_row = ttk.Frame(self, style="CardRow.TFrame")
         self._reset_btn = ttk.Button(
             self._reset_row, text="⟲ Reset count",
             command=self._reset_clicked, width=16,
@@ -266,11 +266,12 @@ class SlotCard(ttk.Frame):
         self.headstamps_label.configure(style=muted_style)
         self.count_label.configure(style=title_style)
         self.count_caption.configure(style=subtle_style)
-        # The "count" row frame also needs to track the card background.
+        # The "count" row frame also needs to track the card background —
+        # in its flat variant, so only the card itself carries an outline.
         for child in self.winfo_children():
             if isinstance(child, ttk.Frame):
                 try:
-                    child.configure(style=frame_style)
+                    child.configure(style=row_style(frame_style))
                 except tk.TclError:
                     pass
 

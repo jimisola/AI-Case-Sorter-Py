@@ -21,12 +21,31 @@ from .tab_models import ModelsTab
 from .tab_run import RunTab
 from .tab_serial import SerialTab
 from .tab_train import TrainTab
-from .theme import PALETTE, apply_theme, paint_gradient
+from .theme import (
+    PALETTE,
+    SETTING_CUSTOM_THEMES,
+    SETTING_THEME,
+    apply_theme,
+    halftone_ink,
+    load_custom_themes,
+    paint_gradient,
+    paint_halftone,
+    resolve_theme,
+    retheme_widgets,
+    theme_names,
+)
 from .widgets import ScrollableFrame
 
 
 PREVIEW_FPS = 20
 HEADER_HEIGHT = 36
+# Gap between the theme picker and the right edge of the title bar.
+HEADER_PAD = 12
+# Margin around the notebook. A screened theme gets a wider one, since that
+# margin is the canvas its halftone prints on.
+PAGE_MARGIN = 12
+PAGE_MARGIN_TOP = 8
+PAGE_MARGIN_SCREENED = 20
 
 
 class MainWindow:
@@ -39,7 +58,9 @@ class MainWindow:
         self.root.geometry("1024x768")
         self.root.minsize(960, 660)
 
-        self.fonts = apply_theme(self.root)
+        load_custom_themes(self._load_setting(SETTING_CUSTOM_THEMES))
+        self.theme_name = resolve_theme(self._load_setting(SETTING_THEME))
+        self.fonts = apply_theme(self.root, theme=self.theme_name)
 
         self.broker: Any | None = None
         self.camera = Camera(
@@ -60,6 +81,30 @@ class MainWindow:
             borderwidth=0,
         )
         self.header_canvas.pack(side=tk.TOP, fill=tk.X)
+        # Theme picker, parked in the top-right of the title bar. It rides on
+        # the canvas as a window item so it floats over the gradient;
+        # `_repaint_header` keeps it pinned to the right edge on resize.
+        self.theme_var = tk.StringVar(value=self.theme_name)
+        self.theme_combo = ttk.Combobox(
+            self.header_canvas,
+            textvariable=self.theme_var,
+            values=theme_names(),
+            state="readonly",
+            style="Header.TCombobox",
+            width=max(len(name) for name in theme_names()) + 1,
+        )
+        self.theme_combo.bind("<<ComboboxSelected>>", self._on_theme_selected)
+        self._theme_window = self.header_canvas.create_window(
+            0, HEADER_HEIGHT // 2, anchor=tk.E, window=self.theme_combo,
+        )
+        self.theme_new_button = ttk.Button(
+            self.header_canvas, text="\u2699", width=2,
+            style="HeaderIcon.TButton", takefocus=False,
+            command=self.open_theme_editor,
+        )
+        self._theme_new_window = self.header_canvas.create_window(
+            0, HEADER_HEIGHT // 2, anchor=tk.E, window=self.theme_new_button,
+        )
         self.header_canvas.bind("<Configure>", self._repaint_header)
 
         # Status bar (must exist before tabs that call set_status).
@@ -93,11 +138,29 @@ class MainWindow:
         # Pack serial first so it ends up rightmost; camera sits to its left.
         # Each indicator is a [dot][text] pair grouped in a sub-frame so the
         # dot stays glued to its label when the bar resizes.
+        self._serial_connected = False
+        self._camera_connected = False
         self.serial_dot = self._build_status_indicator(status_bar, self.serial_status_var)
         self.camera_dot = self._build_status_indicator(status_bar, self.camera_status_var)
 
-        notebook = ttk.Notebook(self.root)
-        notebook.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=12, pady=(8, 0))
+        # The notebook rides on a backdrop canvas rather than being packed
+        # straight into the root: the canvas owns the margin around it, which
+        # is the one place a theme can print a halftone screen behind the UI
+        # (ttk widgets always fill their own background — nothing shows
+        # through them). `_layout_page` keeps the notebook inset and repaints.
+        self.page = tk.Canvas(
+            self.root,
+            bg=PALETTE["bg_window"],
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        self.page.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        notebook = ttk.Notebook(self.page)
+        self._notebook_window = self.page.create_window(
+            0, 0, window=notebook, anchor=tk.NW,
+        )
+        self._page_size = (0, 0)
+        self.page.bind("<Configure>", self._layout_page)
         # Expose the notebook BEFORE constructing tabs so that tabs that
         # want to bind <<NotebookTabChanged>> on it (e.g. TrainTab) can
         # find it via `app.notebook`.
@@ -386,28 +449,54 @@ class MainWindow:
 
     def _set_camera_indicator(self, message: str, *, connected: bool) -> None:
         self.camera_status_var.set(message)
+        self._camera_connected = connected
         self.camera_dot.config(
             foreground=PALETTE["success" if connected else "error"],
         )
 
     def _set_serial_indicator(self, message: str, *, connected: bool) -> None:
         self.serial_status_var.set(message)
+        self._serial_connected = connected
         self.serial_dot.config(
             foreground=PALETTE["success" if connected else "error"],
         )
 
+    def _refresh_status_indicators(self) -> None:
+        """Re-apply the dot colors from the live palette (after a theme switch).
+
+        The generic re-colouring pass can't tell a red dot from any other red,
+        so the source of truth — connected or not — repaints them here.
+        """
+        for dot, connected in (
+            (self.camera_dot, self._camera_connected),
+            (self.serial_dot, self._serial_connected),
+        ):
+            dot.config(
+                background=PALETTE["bg_window"],
+                foreground=PALETTE["success" if connected else "error"],
+            )
+
     # ----- header gradient ----------------------------------------------------
 
     def _repaint_header(self, _event=None) -> None:
-        """Paint the gradient header and overlay the app title."""
+        """Paint the gradient header, overlay the app title, pin the theme picker."""
         canvas = self.header_canvas
+        canvas.configure(bg=PALETTE["bg_window"])
         paint_gradient(
             canvas,
             color_a=PALETTE["bg_gradient_a"],
             color_b=PALETTE["bg_gradient_b"],
             direction="horizontal",
         )
+        # Themes that ask for it get a halftone screen over the gradient; for
+        # the rest this clears the field and costs nothing. It fades in from
+        # the right so the screen never lands under the app title.
+        paint_halftone(
+            canvas, color=halftone_ink(), fade_from="right",
+            fade_span=max(1, canvas.winfo_width()) * 0.55,
+        )
         canvas.delete("title")
+        self._place_theme_picker()
         title_id = canvas.create_text(
             18, HEADER_HEIGHT // 2,
             anchor=tk.W,
@@ -427,6 +516,134 @@ class MainWindow:
             font=self.fonts["small"],
             tags="title",
         )
+
+    def _place_theme_picker(self) -> None:
+        """Lay out [Theme] [dropdown] [+] against the right edge of the bar."""
+        canvas = self.header_canvas
+        combo = getattr(self, "theme_combo", None)
+        if combo is None:
+            return
+        right = canvas.winfo_width() - HEADER_PAD
+        canvas.coords(self._theme_new_window, right, HEADER_HEIGHT // 2)
+        right -= self.theme_new_button.winfo_reqwidth() + 4
+        canvas.coords(self._theme_window, right, HEADER_HEIGHT // 2)
+        canvas.tag_raise(self._theme_window)
+        canvas.tag_raise(self._theme_new_window)
+        canvas.create_text(
+            right - combo.winfo_reqwidth() - 8,
+            HEADER_HEIGHT // 2,
+            anchor=tk.E,
+            text="Theme",
+            fill=PALETTE["text_muted"],
+            font=self.fonts["small"],
+            tags="title",
+        )
+
+    # ----- page backdrop ------------------------------------------------------
+
+    def _layout_page(self, event=None, *, force: bool = False) -> None:
+        """Inset the notebook in its backdrop and screen the margin.
+
+        The margin is what the halftone prints on, so themes that ask for dots
+        get a wider one — enough to read as a comic panel border rather than
+        padding that happens to have specks in it.
+        """
+        width = self.page.winfo_width()
+        height = self.page.winfo_height()
+        if width < 2 or height < 2:
+            return
+        if not force and (width, height) == self._page_size:
+            return
+        self._page_size = (width, height)
+
+        ink = halftone_ink()
+        margin = PAGE_MARGIN_SCREENED if ink else PAGE_MARGIN
+        top = margin if ink else PAGE_MARGIN_TOP
+        # No bottom margin without dots — the plain themes' notebook has always
+        # run to the status bar, and an empty gap there would just look wrong.
+        bottom = margin if ink else 0
+
+        self.page.coords(self._notebook_window, margin, top)
+        self.page.itemconfigure(
+            self._notebook_window,
+            width=max(1, width - 2 * margin),
+            height=max(1, height - top - bottom),
+        )
+
+        bands = (
+            ((0, 0, margin, height), "left"),
+            ((width - margin, 0, width, height), "right"),
+            ((0, 0, width, top), "top"),
+            ((0, height - bottom, width, height), "bottom"),
+        )
+        for i, (box, edge) in enumerate(bands):
+            paint_halftone(
+                self.page, color=ink, box=box, fade_from=edge,
+                fade_span=margin * 1.4, clear=(i == 0),
+            )
+
+    # ----- theme --------------------------------------------------------------
+
+    def _load_setting(self, key: str):
+        """Read a settings row, or None if there's no DB / it can't be read."""
+        if self.db is None:
+            return None
+        try:
+            from ..repository import SettingsRepo
+
+            return SettingsRepo(self.db).get(key)
+        except Exception:
+            return None
+
+    def _on_theme_selected(self, _event=None) -> None:
+        self.set_theme(self.theme_var.get())
+        # The dropdown keeps focus (and its highlight) after a pick; hand it
+        # back so the title bar settles.
+        self.root.focus_set()
+
+    def set_theme(self, name: str) -> None:
+        """Switch palettes live and remember the choice."""
+        resolved = resolve_theme(name)
+        previous = dict(PALETTE)
+        self.theme_name = resolved
+        self.theme_var.set(resolved)
+        self.fonts = apply_theme(self.root, theme=resolved)
+        # ttk widgets follow the restyled theme on their own; the classic Tk
+        # widgets (and any open dialog's) need their baked-in colors remapped.
+        retheme_widgets(self.root, previous)
+        self._repaint_header()
+        self._layout_page(force=True)
+        self._refresh_status_indicators()
+        self._save_setting(SETTING_THEME, resolved)
+
+    def _save_setting(self, key: str, value) -> None:
+        if self.db is None:
+            return
+        try:
+            from ..repository import SettingsRepo
+
+            SettingsRepo(self.db).set(key, value)
+        except Exception:
+            # A preference that can't be persisted still applies this session.
+            pass
+
+    def open_theme_editor(self) -> None:
+        """Create a new theme from the active one, or edit a saved one."""
+        from .dialog_theme_editor import ThemeEditorDialog
+
+        ThemeEditorDialog(self.root, app=self)
+
+    def refresh_theme_picker(self) -> None:
+        """Re-read the theme list into the dropdown (after an edit or import)."""
+        self.theme_combo.configure(values=theme_names())
+        self.theme_var.set(self.theme_name)
+        self._place_theme_picker()
+
+    def save_custom_themes(self) -> None:
+        """Persist every user-made theme (the editor calls this after a change)."""
+        from .theme import custom_themes_payload
+
+        self._save_setting(SETTING_CUSTOM_THEMES, custom_themes_payload())
 
     # ----- camera -------------------------------------------------------------
 

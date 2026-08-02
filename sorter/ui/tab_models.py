@@ -38,7 +38,7 @@ from ..repository import (
 from .dialog_model_editor import ModelEditorDialog
 from .dialog_model_evaluator import ModelEvaluatorDialog
 from .dialog_model_images import ModelImagesDialog
-from .theme import PALETTE
+from .theme import PALETTE, row_style
 
 
 # Characters disallowed in headstamp / parent names — they would collide with
@@ -81,10 +81,10 @@ class ModelRowCard(ttk.Frame):
         self._on_select = on_select
 
         # Left column — title, subtitle, info grid.
-        left = ttk.Frame(self, style="Card.TFrame")
+        left = ttk.Frame(self, style="CardRow.TFrame")
         left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        title_row = ttk.Frame(left, style="Card.TFrame")
+        title_row = ttk.Frame(left, style="CardRow.TFrame")
         title_row.pack(side=tk.TOP, fill=tk.X)
         self._title_lbl = ttk.Label(
             title_row, text=title, style="CardTitle.TLabel",
@@ -103,18 +103,18 @@ class ModelRowCard(ttk.Frame):
             self._subtitle_lbl.pack(side=tk.TOP, anchor="w", pady=(2, 6))
 
         if info_pairs:
-            grid = ttk.Frame(left, style="Card.TFrame")
+            grid = ttk.Frame(left, style="CardRow.TFrame")
             grid.pack(side=tk.TOP, fill=tk.X, pady=(0, 2))
             for i, (label, value) in enumerate(info_pairs):
                 col = i % 3
                 row = i // 3
-                cell = ttk.Frame(grid, style="Card.TFrame")
+                cell = ttk.Frame(grid, style="CardRow.TFrame")
                 cell.grid(row=row, column=col, sticky="w", padx=(0, 18), pady=1)
                 ttk.Label(cell, text=f"{label}:", style="CardSubtle.TLabel").pack(side=tk.LEFT)
                 ttk.Label(cell, text=value, style="CardMuted.TLabel").pack(side=tk.LEFT, padx=(4, 0))
 
         # Right column — action buttons.
-        right = ttk.Frame(self, style="Card.TFrame")
+        right = ttk.Frame(self, style="CardRow.TFrame")
         right.pack(side=tk.RIGHT)
         for label, cmd in actions:
             style = "Accent.TButton" if label == primary_action else (
@@ -148,7 +148,7 @@ class ModelRowCard(ttk.Frame):
         def _walk(w: tk.Misc) -> None:
             for child in w.winfo_children():
                 if isinstance(child, ttk.Frame):
-                    child.configure(style=frame_style)
+                    child.configure(style=row_style(frame_style))
                     _walk(child)
                 elif isinstance(child, ttk.Label):
                     # Don't restyle the accent active dot.
