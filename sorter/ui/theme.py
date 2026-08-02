@@ -269,6 +269,52 @@ _GOTHIC = {
     "error":         "#e5484d",
 }
 
+# Comic-book ink: black panel gutters, a cobalt title bar, gold and orange
+# on top. The one theme where **gold, not green, is "go"** — an anime/comic
+# palette has no green in it, and `success` tracks `action` by rule, so the
+# connected indicator is gold here and the disconnected one stays red. Gold
+# against red separates further than green against red for the most common
+# form of colour blindness, and both dots sit beside their labels anyway.
+_COMIC = {
+    "bg_window":     "#0e1117",
+    "bg_gradient_a": "#1b56b8",   # cobalt left — the comic panel's sky
+    "bg_gradient_b": "#090c11",
+    "bg_surface":    "#151a23",
+    "bg_card":       "#1e2531",
+    "bg_card_hover": "#29323f",
+    "bg_card_sel":   "#26406d",   # selection lifts toward the cobalt
+    "bg_input":      "#070a0e",
+
+    "border":        "#2c3644",
+    "border_focus":  "#ffd257",
+
+    "text":          "#eef2f8",
+    "text_highlight": "#ffffff",
+    "text_muted":    "#a5b1c1",
+    "text_subtle":   "#6f7c8d",
+    "text_inverse":  "#0b0e13",
+
+    "accent":        "#f2b01e",
+    "accent_hover":  "#ffc74d",
+    "accent_press":  "#cc9014",
+    "accent_dim":    "#232c39",
+
+    "action":        "#ffc219",
+    "action_hover":  "#ffd451",
+    "action_press":  "#e0a300",
+    "update":        "#2f7fe0",
+    "update_hover":  "#559bf0",
+    "update_press":  "#1f63b8",
+    "danger":        "#e5342a",
+    "danger_hover":  "#f4574d",
+    "danger_press":  "#c02318",
+
+    "success":       "#ffc219",
+    "success_dim":   "#3a2f08",
+    "warning":       "#ff8a1f",
+    "error":         "#e5342a",
+}
+
 # Display name → palette. Insertion order drives the picker's order.
 THEMES: dict[str, dict[str, str]] = {
     "Dark": _DARK,
@@ -276,9 +322,24 @@ THEMES: dict[str, dict[str, str]] = {
     "Sepia": _SEPIA,
     "Midnight Blue": _MIDNIGHT_BLUE,
     "Gothic": _GOTHIC,
+    "Comic Book": _COMIC,
 }
 
 DEFAULT_THEME = "Dark"
+
+# Themes whose title bar gets a ben-day dot field printed over the gradient,
+# and the ink to print it in. A theme that isn't listed here gets a plain
+# gradient — the dots are a comic-book device, not a default. Pick an ink
+# close to the gradient's dark end so the field fades out as the background
+# darkens under it.
+HALFTONE_INK = {
+    "Comic Book": "#123a86",
+}
+
+
+def halftone_ink() -> str | None:
+    """Dot colour for the current theme's title bar, or None for no dots."""
+    return HALFTONE_INK.get(_current_theme)
 
 # The live palette. Modules do `from .theme import PALETTE` and index it at
 # call time, so switching themes **mutates this dict in place** — rebinding
@@ -1079,6 +1140,48 @@ def paint_gradient(
                 tags="gradient",
             )
     canvas.tag_lower("gradient")
+
+
+def paint_halftone(
+    canvas: tk.Canvas,
+    *,
+    color: str | None,
+    spacing: int = 7,
+    radius: float = 2.0,
+    fade_end: float = 0.8,
+) -> None:
+    """Print a ben-day dot field across the canvas, replacing any prior one.
+
+    The dots shrink from full size at the left edge to nothing by `fade_end`
+    (a fraction of the width), which is how a comic screens a flat colour into
+    the ink beside it. Rows are offset by half a step so the field reads as a
+    proper halftone screen rather than a grid.
+
+    `color=None` just clears the field, so a caller can hand it whatever
+    ``halftone_ink()`` returns without branching.
+    """
+    canvas.delete("halftone")
+    if color is None:
+        return
+    canvas.update_idletasks()
+    width = canvas.winfo_width()
+    height = canvas.winfo_height()
+    if width < 2 or height < 2:
+        return
+
+    span = max(1.0, width * fade_end)
+    for row in range(int(height / spacing) + 2):
+        y = row * spacing + spacing / 2
+        offset = spacing / 2 if row % 2 else 0.0
+        for col in range(int(width / spacing) + 2):
+            x = col * spacing + offset
+            r = radius * (1.0 - x / span)
+            if r < 0.6:
+                break  # everything further right is smaller still
+            canvas.create_oval(
+                x - r, y - r, x + r, y + r,
+                fill=color, outline="", tags="halftone",
+            )
 
 
 def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:

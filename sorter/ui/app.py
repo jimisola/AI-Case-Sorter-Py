@@ -25,7 +25,9 @@ from .theme import (
     PALETTE,
     SETTING_THEME,
     apply_theme,
+    halftone_ink,
     paint_gradient,
+    paint_halftone,
     resolve_theme,
     retheme_widgets,
     theme_names,
@@ -454,6 +456,9 @@ class MainWindow:
             color_b=PALETTE["bg_gradient_b"],
             direction="horizontal",
         )
+        # Themes that ask for it get a halftone screen over the gradient;
+        # for the rest this clears the field and costs nothing.
+        paint_halftone(canvas, color=halftone_ink())
         canvas.delete("title")
         self._place_theme_picker()
         title_id = canvas.create_text(

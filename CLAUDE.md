@@ -351,9 +351,15 @@ image browser/reclassify/delete), `dialog_share_model` (publish to community),
   - **Themes.** `THEMES` maps a display name to a full palette; the user picks
     one from the dropdown in the title bar and it's stored in the `ui.theme`
     setting (`theme.SETTING_THEME`). Ships with Dark (the original), Light,
-    Sepia, Midnight Blue, and Gothic. **The role of each key is fixed; only
-    its color changes per theme** — a new theme is a copy of `_DARK` with new
-    values, and it must define exactly the same keys.
+    Sepia, Midnight Blue, Gothic, and Comic Book. **The role of each key is
+    fixed; only its color changes per theme** — a new theme is a copy of
+    `_DARK` with new values, and it must define exactly the same keys.
+    `success` mirrors `action` and `error` mirrors `danger`, so a theme with
+    no green (Comic Book) has a gold "connected" indicator, not a green one.
+  - **Title-bar flourishes.** `HALFTONE_INK` names the themes whose title bar
+    gets a ben-day dot field over the gradient, and the ink to print it in
+    (`paint_halftone`, drawn by `app._repaint_header`). A theme not listed
+    there gets a plain gradient — dots are a comic-book device, not a default.
   - **Switching is live**, so it must stay that way: `apply_theme` reloads the
     ttk styles (which every ttk widget follows on its own) and
     `retheme_widgets` walks the widget tree translating the colors baked into

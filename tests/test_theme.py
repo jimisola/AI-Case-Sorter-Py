@@ -19,10 +19,13 @@ from tkinter import ttk  # noqa: E402
 from sorter.ui import theme  # noqa: E402
 from sorter.ui.theme import (  # noqa: E402
     DEFAULT_THEME,
+    HALFTONE_INK,
     PALETTE,
     THEMES,
     apply_theme,
     current_theme,
+    halftone_ink,
+    paint_halftone,
     resolve_theme,
     retheme_widgets,
     set_palette,
@@ -199,6 +202,68 @@ def test_retheme_skips_ttk_widgets_without_error(root) -> None:
     # No exception, and the style (not an instance override) drives the color.
     assert button.cget("style") == ""
     assert entry.winfo_exists()
+
+
+# ----- the halftone field -----------------------------------------------------
+
+
+@pytest.fixture
+def painted_canvas(root):
+    """A canvas with a real, mapped size.
+
+    The paint helpers bail out on a widget Tk hasn't laid out yet (it reports
+    a width of 1), which is why the window has to come up for these.
+    """
+    root.deiconify()
+    canvas = tk.Canvas(root, width=400, height=36, highlightthickness=0)
+    canvas.pack()
+    root.update()
+    yield canvas
+    root.withdraw()
+
+
+def test_halftone_is_opt_in_per_theme() -> None:
+    assert set(HALFTONE_INK) <= set(THEMES)
+
+    set_palette("Comic Book")
+    assert halftone_ink() == HALFTONE_INK["Comic Book"]
+
+    set_palette("Dark")
+    assert halftone_ink() is None
+
+
+def test_painting_dots_replaces_the_previous_field(painted_canvas) -> None:
+    canvas = painted_canvas
+
+    paint_halftone(canvas, color="#123a86")
+    first = canvas.find_withtag("halftone")
+    assert len(first) > 20
+
+    paint_halftone(canvas, color="#123a86")
+    assert len(canvas.find_withtag("halftone")) == len(first)
+
+
+def test_dots_shrink_toward_the_fade_and_stop(painted_canvas) -> None:
+    canvas = painted_canvas
+
+    paint_halftone(canvas, color="#123a86", fade_end=0.5)
+    widths = {}
+    for item in canvas.find_withtag("halftone"):
+        x1, _y1, x2, _y2 = canvas.coords(item)
+        widths[round(x1)] = x2 - x1
+
+    assert max(widths) < 400 * 0.5      # nothing past the fade
+    left, right = min(widths), max(widths)
+    assert widths[left] > widths[right]  # the screen thins out rightwards
+
+
+def test_no_ink_means_no_dots(painted_canvas) -> None:
+    canvas = painted_canvas
+    paint_halftone(canvas, color="#123a86")
+
+    paint_halftone(canvas, color=None)
+
+    assert canvas.find_withtag("halftone") == ()
 
 
 # ----- the title-bar picker ---------------------------------------------------
