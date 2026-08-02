@@ -99,6 +99,7 @@ class MainWindow:
         )
         self.theme_new_button = ttk.Button(
             self.header_canvas, text="\u2699", width=2,
+            style="HeaderIcon.TButton", takefocus=False,
             command=self.open_theme_editor,
         )
         self._theme_new_window = self.header_canvas.create_window(

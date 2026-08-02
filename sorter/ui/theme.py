@@ -1075,6 +1075,36 @@ def apply_theme(root: tk.Tk, theme: str | None = None) -> dict[str, tuple]:
         arrowcolor=[("active", accent)],
     )
 
+    # The gear beside it is an icon, not a control to be noticed: no fill, no
+    # border, no focus ring, and it sits on the gradient's dark end so it
+    # reads as part of the title bar rather than a button parked on it.
+    _header_bg = PALETTE["bg_gradient_b"]
+    style.configure(
+        "HeaderIcon.TButton",
+        background=_header_bg,
+        foreground=PALETTE["text_muted"],
+        bordercolor=_header_bg,
+        darkcolor=_header_bg,
+        lightcolor=_header_bg,
+        focuscolor=_header_bg,
+        borderwidth=0,
+        relief="flat",
+        padding=(3, 0),
+        font=fonts["body"],
+    )
+    _icon_bg = [("pressed", _header_bg), ("active", _header_bg)]
+    style.map(
+        "HeaderIcon.TButton",
+        background=_icon_bg,
+        bordercolor=_icon_bg,
+        darkcolor=_icon_bg,
+        lightcolor=_icon_bg,
+        foreground=[
+            ("pressed", PALETTE["accent_press"]),
+            ("active", PALETTE["text_highlight"]),
+        ],
+    )
+
     # Combobox dropdown list (uses the option database).
     root.option_add("*TCombobox*Listbox.background", PALETTE["bg_card"])
     root.option_add("*TCombobox*Listbox.foreground", text)
