@@ -49,3 +49,44 @@ packages = ["sorter", "sorter.ui", "sorter.training"]
 
 [tool.setuptools.dynamic]
 version = { attr = "sorter.__version__" }
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["build", "dist"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+]
+ignore = [
+    "E501",  # line length is enforced by the formatter, not the linter
+    # Pre-existing findings as of the tool-adoption PR: real, but not a formatting
+    # concern, and fixing them changes behavior (closures, exception chaining,
+    # loop variables). Deferred to a follow-up review pass; see FEEDBACK.md.
+    "F841",  # local variable assigned but never used
+    "F811",  # redefinition of unused name
+    "B023",  # function does not bind loop variable (camera.py closures)
+    "B007",  # unused loop control variable
+    "B017",  # assert-raises-exception too broad
+    "B904",  # raise without `from` inside except
+    "UP042", # str+Enum -> StrEnum (behavior differs subtly; needs its own look)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Must run on whatever ancient interpreter the user's system provides, since
+# its job is to provision a newer one. pyupgrade rewrites would silently
+# break it on exactly the systems it exists to serve.
+"bootstrap.py" = ["UP"]
+# Contains an embedded HTML/JS template as a verbatim port of the legacy
+# WinForms app's report (see CLAUDE.md). Whitespace inside that string is
+# part of the port; don't rewrite it.
+"sorter/eval_report.py" = ["W291", "W293"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["sorter"]
