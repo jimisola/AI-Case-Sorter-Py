@@ -1,0 +1,3 @@
+# Mechanical ruff reformat -- no behavior change. See the commit message.
+# Configure with: git config blame.ignoreRevsFile .git-blame-ignore-revs
+c4b3122b39ee23fa43c2b92f4484ba8290988a90
