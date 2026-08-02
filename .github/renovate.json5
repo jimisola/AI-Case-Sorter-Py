@@ -44,6 +44,12 @@
 
     // =====================================================
     // Version classification labels
+    //
+    // minimumReleaseAge is a supply-chain-attack mitigation, not just noise
+    // reduction: a malicious or compromised package version gets caught and
+    // pulled well within a few days in the common case, so auto-merging a
+    // same-day release means installing it before anyone's had a chance to
+    // notice. Costs nothing for a legitimate release.
     // =====================================================
 
     {
