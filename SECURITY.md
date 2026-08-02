@@ -11,7 +11,7 @@ visible only to the maintainers. (Maintainers: enable this under
 *Settings → Code security and analysis → Private vulnerability reporting*.)
 
 **Alternative:** email the maintainers at
-**[INSERT SECURITY CONTACT EMAIL]**.
+**seth@sjseth.com**.
 
 Please include as much as you can:
 
