@@ -224,38 +224,41 @@ _MIDNIGHT_BLUE = {
     "error":         "#ef4444",
 }
 
-# Near-black with a violet cast; the "update" blue becomes violet so the
-# one cool accent belongs to the palette. Green/red keep their meaning.
+# Black and blood red. The one theme whose accent carries hue: section
+# titles, selection fills and the focus ring are crimson, and the surfaces
+# are near-black with just enough red in them to belong. Green still means
+# go and the danger red stays a step brighter than the accent, so a Stop or
+# a Delete button is still the loudest thing on screen.
 _GOTHIC = {
-    "bg_window":     "#0d0a10",
-    "bg_gradient_a": "#35233f",
-    "bg_gradient_b": "#0a070d",
-    "bg_surface":    "#16111b",
-    "bg_card":       "#211829",
-    "bg_card_hover": "#2c2036",
-    "bg_card_sel":   "#402f4d",
-    "bg_input":      "#0a070e",
+    "bg_window":     "#0c0708",
+    "bg_gradient_a": "#4a1116",
+    "bg_gradient_b": "#080405",
+    "bg_surface":    "#150e10",
+    "bg_card":       "#1f1416",
+    "bg_card_hover": "#2b1a1d",
+    "bg_card_sel":   "#46181e",
+    "bg_input":      "#070303",
 
-    "border":        "#3a2b45",
-    "border_focus":  "#b08bd0",
+    "border":        "#3a2226",
+    "border_focus":  "#c0464e",
 
-    "text":          "#ded3e6",
+    "text":          "#e0d6d7",
     "text_highlight": "#ffffff",
-    "text_muted":    "#a394ae",
-    "text_subtle":   "#766a80",
-    "text_inverse":  "#0c0910",
+    "text_muted":    "#a89597",
+    "text_subtle":   "#7a686a",
+    "text_inverse":  "#0b0607",
 
-    "accent":        "#c9a7e0",
-    "accent_hover":  "#ddc4ee",
-    "accent_press":  "#a684bd",
-    "accent_dim":    "#2b2034",
+    "accent":        "#d13c45",
+    "accent_hover":  "#e85860",
+    "accent_press":  "#a52a31",
+    "accent_dim":    "#2a1518",
 
     "action":        "#3fb950",
     "action_hover":  "#56d364",
     "action_press":  "#2ea043",
-    "update":        "#a78bfa",
-    "update_hover":  "#c4b5fd",
-    "update_press":  "#8b5cf6",
+    "update":        "#5b82c4",
+    "update_hover":  "#7ba0dd",
+    "update_press":  "#45689f",
     "danger":        "#e5484d",
     "danger_hover":  "#ef6b6f",
     "danger_press":  "#c93c41",
