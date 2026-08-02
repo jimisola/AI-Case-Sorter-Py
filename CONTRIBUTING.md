@@ -21,7 +21,7 @@ By participating in this project you agree to abide by our
 
 ## Development setup
 
-Requires **Python 3.10+**.
+Requires **Python 3.12+**.
 
 **Linux / macOS**
 ```bash

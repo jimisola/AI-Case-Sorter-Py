@@ -21,7 +21,7 @@ a safe way to repair a broken install.
 
 | Step | Detail |
 |---|---|
-| Python | Uses an existing Python 3.10+ **with Tcl/Tk** if one is present. Otherwise installs one via `winget`, falling back to a silent per-user python.org install. |
+| Python | Uses an existing Python 3.12+ **with Tcl/Tk** if one is present. Otherwise installs one via `winget`, falling back to a silent per-user python.org install. |
 | App | Downloads the latest GitHub release ZIP over HTTPS and extracts it. **No git.** |
 | Launch | Hands off to `start.bat`, which owns the virtualenv and `pip install`. |
 

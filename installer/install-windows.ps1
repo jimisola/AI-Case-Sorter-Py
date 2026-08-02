@@ -56,7 +56,7 @@ $DefaultBranch = 'main'
 $PythonWinget = 'Python.Python.3.12'
 $PythonMinor  = 12
 # Keep in step with requires-python in pyproject.toml.
-$PythonMin    = [Version]'3.10'
+$PythonMin    = [Version]'3.12'
 
 function Write-Step  { param([string]$m) Write-Host "==> $m" -ForegroundColor Cyan }
 function Write-Note  { param([string]$m) Write-Host "    $m" -ForegroundColor DarkGray }

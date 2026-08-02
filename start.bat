@@ -4,7 +4,7 @@ set ROOT=%~dp0
 
 where python >nul 2>&1
 if errorlevel 1 (
-    echo Python 3.10 or later is required.
+    echo Python 3.12 or later is required.
     echo Install it from https://www.python.org/downloads/ ^(check "Add Python to PATH"^).
     exit /b 1
 )
@@ -12,7 +12,7 @@ if errorlevel 1 (
 python -c "import tkinter" >nul 2>&1
 if errorlevel 1 (
     echo Error: Python is missing tkinter / Tcl-Tk.
-    echo Install Python 3.10+ from https://www.python.org/downloads/ ^(includes Tcl/Tk^)
+    echo Install Python 3.12+ from https://www.python.org/downloads/ ^(includes Tcl/Tk^)
     echo and check "Add Python to PATH" during install.
     exit /b 1
 )

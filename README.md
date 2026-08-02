@@ -79,7 +79,7 @@ The app can predict a headstamp in one of two modes:
 
 ## Requirements
 
-- **Python 3.10+**
+- **Python 3.12+**
 - Core Python dependencies (installed automatically by the launch scripts):
   pyserial, opencv-python, numpy, Pillow, requests, msal, platformdirs
   (+ pygrabber on Windows for friendly camera names).

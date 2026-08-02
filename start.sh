@@ -11,7 +11,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-PYTHON_MIN="3.10"
+PYTHON_MIN="3.12"
 AUTO_INSTALL="${AUTO_INSTALL:-0}"
 FORWARD_ARGS=()
 for arg in "$@"; do
@@ -140,7 +140,7 @@ install_hint() {
 }
 
 # ---------------------------------------------------------------------------
-# 1. Python 3.10+
+# 1. Python 3.12+
 # ---------------------------------------------------------------------------
 if ! command -v python3 >/dev/null 2>&1; then
     warn "python3 is not installed."

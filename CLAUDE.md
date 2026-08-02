@@ -53,7 +53,7 @@ from a legacy `data/config.json` if present), loads `Config`, and launches
 repository, evaluator, model_io, run_controller, serial emulator, auth, etc.).
 There is **no CI configured** — run pytest locally before pushing.
 
-**Python:** 3.10+. **Core deps:** pyserial, opencv-python, numpy, Pillow,
+**Python:** 3.12+. **Core deps:** pyserial, opencv-python, numpy, Pillow,
 requests, msal, platformdirs (+ `pygrabber` on Windows). **Optional ML deps:**
 torch, torchvision.
 
