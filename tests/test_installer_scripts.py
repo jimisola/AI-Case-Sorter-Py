@@ -59,9 +59,21 @@ def test_powershell_script_has_no_unpaired_quotes_per_line() -> None:
     """
     text = (INSTALLER / "install-windows.ps1").read_text(encoding="ascii")
     in_block_comment = False
+    in_here_string = False
     bad: list[int] = []
     for n, line in enumerate(text.splitlines(), 1):
         stripped = line.strip()
+
+        # Here-strings (@"..."@) legitimately carry a lone quote on the
+        # opening and closing lines, and arbitrary text between them.
+        if in_here_string:
+            if stripped == '"@':
+                in_here_string = False
+            continue
+        if stripped.endswith('@"'):
+            in_here_string = True
+            continue
+
         if stripped.startswith("<#"):
             in_block_comment = True
         if in_block_comment:

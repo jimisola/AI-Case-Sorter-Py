@@ -484,6 +484,11 @@ sorter.apply_update          backup → copy over app dir → prune → clear pe
   same commit you tag a release, and keep the tag and that value in step.
   `/releases/latest` excludes pre-releases, so tagging an rc won't reach
   stable users.
+- **The distribution path assumes a public repo.** The installer and updater
+  both fetch anonymously over HTTPS; against a private repo every request
+  404s and there is no in-band way to tell that apart from "no releases yet"
+  (the API returns 404 for both). If the repo must stay private, distribution
+  has to move off GitHub — see `installer/README.md`.
 - **No CI yet.** Run `pytest` before pushing. Most UI modules need a display —
   `xvfb-run -a python -m pytest` covers them on a headless box; without
   tkinter installed those modules skip rather than fail.
