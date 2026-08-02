@@ -33,7 +33,13 @@ from typing import Callable
 from ..events import EventBus
 from ..feedback import FeedbackService, debug_log, is_feedback_model
 from ..repository import ModelRepo
-from .theme import PALETTE
+from .theme import (
+    PALETTE,
+    halftone_ink,
+    paint_halftone,
+    register_halftone,
+    row_style,
+)
 from .widgets import ImagePanel
 
 
@@ -54,6 +60,10 @@ _STORE_IMAGES_LABELS = {
     "all": "All Images",
 }
 _STORE_IMAGES_BY_LABEL = {label: mode for mode, label in _STORE_IMAGES_LABELS.items()}
+
+# How far the slot-details backdrop screen reaches, in pixels from the top of
+# the panel's canvas (see SlotDetailsPanel._screen_backdrop).
+_BACKDROP_SCREEN_DEPTH = 260
 
 
 # ----- Flow-layout container --------------------------------------------------
@@ -162,7 +172,7 @@ class SlotCard(ttk.Frame):
         )
         self.headstamps_label.pack(anchor=tk.W, pady=(6, 8))
 
-        count_row = ttk.Frame(self, style="Card.TFrame")
+        count_row = ttk.Frame(self, style="CardRow.TFrame")
         count_row.pack(fill=tk.X)
         self.count_caption = ttk.Label(
             count_row, text="Count",
@@ -178,7 +188,7 @@ class SlotCard(ttk.Frame):
         # Live batch-reset (package mode only, never the catch-all). Lets the
         # operator dump a full bin and zero its counter while other slots keep
         # filling. Hidden until set_package_mode(True) is called.
-        self._reset_row = ttk.Frame(self, style="Card.TFrame")
+        self._reset_row = ttk.Frame(self, style="CardRow.TFrame")
         self._reset_btn = ttk.Button(
             self._reset_row, text="⟲ Reset count",
             command=self._reset_clicked, width=16,
@@ -266,11 +276,12 @@ class SlotCard(ttk.Frame):
         self.headstamps_label.configure(style=muted_style)
         self.count_label.configure(style=title_style)
         self.count_caption.configure(style=subtle_style)
-        # The "count" row frame also needs to track the card background.
+        # The "count" row frame also needs to track the card background —
+        # in its flat variant, so only the card itself carries an outline.
         for child in self.winfo_children():
             if isinstance(child, ttk.Frame):
                 try:
-                    child.configure(style=frame_style)
+                    child.configure(style=row_style(frame_style))
                 except tk.TclError:
                     pass
 
@@ -395,10 +406,12 @@ class SlotDetailsPanel(ttk.LabelFrame):
             "<Configure>",
             lambda _e: self._canvas.configure(scrollregion=self._canvas.bbox("all")),
         )
-        self._canvas.bind(
-            "<Configure>",
-            lambda e: self._canvas.itemconfigure(self._inner_id, width=e.width),
-        )
+        self._canvas.bind("<Configure>", self._on_canvas_configure)
+        # The panel's empty lower half is one of the few places in the app
+        # where a backdrop is actually visible, so themes that print a
+        # halftone get to screen it (see theme.HALFTONE_INK).
+        self._screened_width = -1
+        register_halftone(self._canvas, self._screen_backdrop)
 
         # Per-label counters: counters[slot][label] = int (label = predicted
         # headstamp name). A parent cell sums its children's counters.
@@ -407,6 +420,31 @@ class SlotDetailsPanel(ttk.LabelFrame):
         self._cells_by_source: dict[str, list[HeadstampCell]] = defaultdict(list)
         # Parent names whose group is collapsed (grouped mode only).
         self._collapsed: set[str] = set()
+
+    # ----- backdrop -----------------------------------------------------------
+
+    def _on_canvas_configure(self, event: tk.Event) -> None:
+        self._canvas.itemconfigure(self._inner_id, width=event.width)
+        # A drag-resize fires this continuously; the screen only depends on
+        # the width, so repaint the (few thousand) dots when that changes.
+        if event.width != self._screened_width:
+            self._screened_width = event.width
+            self._screen_backdrop()
+
+    def _screen_backdrop(self) -> None:
+        """Fade a dot screen down the panel's backdrop, if themed for it.
+
+        Only what the checkbox grid doesn't cover shows — the grid is an
+        embedded window, and Tk always draws those over the canvas's own
+        items. The band is anchored to the top and measured in pixels rather
+        than a fraction of the canvas: this canvas is as tall as the whole
+        (scrollable) tab, so a proportional fade would land off-screen.
+        """
+        paint_halftone(
+            self._canvas, color=halftone_ink(), fade_from="top",
+            box=(0, 0, self._canvas.winfo_width(), _BACKDROP_SCREEN_DEPTH),
+            fade_span=_BACKDROP_SCREEN_DEPTH, spacing=10, radius=2.4,
+        )
 
     # ----- render -------------------------------------------------------------
 

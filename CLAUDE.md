@@ -311,8 +311,8 @@ between them from the Run tab's template dropdown.
 
 `MainWindow` (`app.py`) is the shell: gradient title bar (with the theme picker
 parked at its right edge), a `ttk.Notebook` of tabs (each wrapped in a
-`ScrollableFrame` for small displays), and a status bar with connection
-indicators + sign-in. It owns the `EventBus`, `SerialBroker`,
+`ScrollableFrame` for small displays, and hosted on a backdrop canvas that owns
+the margin around it), and a status bar with connection indicators + sign-in. It owns the `EventBus`, `SerialBroker`,
 `Camera`, `RunController`, and `AuthManager`, auto-connects serial/camera on
 startup, and runs the bus drain loop. `run_worker(fn, on_done, on_error)` is the
 standard helper for offloading blocking work to a thread and marshaling the
@@ -355,11 +355,25 @@ image browser/reclassify/delete), `dialog_share_model` (publish to community),
     fixed; only its color changes per theme** — a new theme is a copy of
     `_DARK` with new values, and it must define exactly the same keys.
     `success` mirrors `action` and `error` mirrors `danger`, so a theme with
-    no green (Comic Book) has a gold "connected" indicator, not a green one.
-  - **Title-bar flourishes.** `HALFTONE_INK` names the themes whose title bar
-    gets a ben-day dot field over the gradient, and the ink to print it in
-    (`paint_halftone`, drawn by `app._repaint_header`). A theme not listed
-    there gets a plain gradient — dots are a comic-book device, not a default.
+    no green (Comic Book, where blue is "go") has a blue "connected"
+    indicator, not a green one.
+  - **Halftone screens.** `HALFTONE_INK` names the themes that print a
+    ben-day dot field, and the ink to print it in; `paint_halftone` prints
+    one over any box of a canvas, fading in from whichever edge you name.
+    Only canvases can carry it — ttk widgets always fill their own
+    background, so nothing shows through them. Three places screen
+    themselves: the title bar (`app._repaint_header`), the margin around the
+    notebook (`app._layout_page` — the notebook rides on a backdrop canvas
+    for exactly this reason), and the Run tab's slot-details backdrop. A new
+    one calls `register_halftone(canvas, repaint)` so `repaint_halftone_fields`
+    re-runs it on a theme switch, without app.py having to know about it.
+  - **Ink outlines.** `INK_OUTLINE` names the themes that draw comic-book
+    borders and how many pixels wide; everything else stays flat and
+    borderless. `apply_theme` reads it for panels, cards, buttons and fields.
+    A card's outline belongs to the card, not to the layout rows inside it —
+    those use `row_style(card_style)` (`Card.TFrame` → `CardRow.TFrame`),
+    which shares the fill but never the border. Cards that restyle their
+    children on hover/selection must map through `row_style` too.
   - **Switching is live**, so it must stay that way: `apply_theme` reloads the
     ttk styles (which every ttk widget follows on its own) and
     `retheme_widgets` walks the widget tree translating the colors baked into

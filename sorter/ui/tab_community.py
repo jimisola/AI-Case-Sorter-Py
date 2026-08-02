@@ -79,11 +79,11 @@ class CommunityModelCard(ttk.Frame):
         ).pack(side=tk.TOP, anchor="w")
 
         # Info grid (3 columns × 3 rows)
-        grid = ttk.Frame(self, style="Card.TFrame")
+        grid = ttk.Frame(self, style="CardRow.TFrame")
         grid.pack(side=tk.TOP, fill=tk.X, pady=(8, 6))
 
         def _cell(row: int, col: int, label: str, value: str) -> None:
-            f = ttk.Frame(grid, style="Card.TFrame")
+            f = ttk.Frame(grid, style="CardRow.TFrame")
             f.grid(row=row, column=col, sticky="w", padx=(0, 32), pady=2)
             ttk.Label(f, text=f"{label}:", style="CardSubtle.TLabel").pack(side=tk.LEFT)
             ttk.Label(f, text=value, style="CardMuted.TLabel").pack(side=tk.LEFT, padx=(6, 0))
@@ -105,9 +105,9 @@ class CommunityModelCard(ttk.Frame):
             ).pack(side=tk.TOP, anchor="w", pady=(2, 8), fill=tk.X)
 
         # Action button (right-aligned)
-        action_row = ttk.Frame(self, style="Card.TFrame")
+        action_row = ttk.Frame(self, style="CardRow.TFrame")
         action_row.pack(side=tk.TOP, fill=tk.X)
-        ttk.Frame(action_row, style="Card.TFrame").pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Frame(action_row, style="CardRow.TFrame").pack(side=tk.LEFT, fill=tk.X, expand=True)
         if installed_state == "installed":
             btn = ttk.Button(action_row, text="Already Installed",
                              state=tk.DISABLED)

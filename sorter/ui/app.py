@@ -28,6 +28,7 @@ from .theme import (
     halftone_ink,
     paint_gradient,
     paint_halftone,
+    repaint_halftone_fields,
     resolve_theme,
     retheme_widgets,
     theme_names,
@@ -39,6 +40,11 @@ PREVIEW_FPS = 20
 HEADER_HEIGHT = 36
 # Gap between the theme picker and the right edge of the title bar.
 HEADER_PAD = 12
+# Margin around the notebook. A screened theme gets a wider one, since that
+# margin is the canvas its halftone prints on.
+PAGE_MARGIN = 12
+PAGE_MARGIN_TOP = 8
+PAGE_MARGIN_SCREENED = 20
 
 
 class MainWindow:
@@ -127,8 +133,24 @@ class MainWindow:
         self.serial_dot = self._build_status_indicator(status_bar, self.serial_status_var)
         self.camera_dot = self._build_status_indicator(status_bar, self.camera_status_var)
 
-        notebook = ttk.Notebook(self.root)
-        notebook.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=12, pady=(8, 0))
+        # The notebook rides on a backdrop canvas rather than being packed
+        # straight into the root: the canvas owns the margin around it, which
+        # is the one place a theme can print a halftone screen behind the UI
+        # (ttk widgets always fill their own background — nothing shows
+        # through them). `_layout_page` keeps the notebook inset and repaints.
+        self.page = tk.Canvas(
+            self.root,
+            bg=PALETTE["bg_window"],
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        self.page.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        notebook = ttk.Notebook(self.page)
+        self._notebook_window = self.page.create_window(
+            0, 0, window=notebook, anchor=tk.NW,
+        )
+        self._page_size = (0, 0)
+        self.page.bind("<Configure>", self._layout_page)
         # Expose the notebook BEFORE constructing tabs so that tabs that
         # want to bind <<NotebookTabChanged>> on it (e.g. TrainTab) can
         # find it via `app.notebook`.
@@ -456,9 +478,13 @@ class MainWindow:
             color_b=PALETTE["bg_gradient_b"],
             direction="horizontal",
         )
-        # Themes that ask for it get a halftone screen over the gradient;
-        # for the rest this clears the field and costs nothing.
-        paint_halftone(canvas, color=halftone_ink())
+        # Themes that ask for it get a halftone screen over the gradient; for
+        # the rest this clears the field and costs nothing. It fades in from
+        # the right so the screen never lands under the app title.
+        paint_halftone(
+            canvas, color=halftone_ink(), fade_from="right",
+            fade_span=max(1, canvas.winfo_width()) * 0.55,
+        )
         canvas.delete("title")
         self._place_theme_picker()
         title_id = canvas.create_text(
@@ -500,6 +526,49 @@ class MainWindow:
             tags="title",
         )
 
+    # ----- page backdrop ------------------------------------------------------
+
+    def _layout_page(self, event=None, *, force: bool = False) -> None:
+        """Inset the notebook in its backdrop and screen the margin.
+
+        The margin is what the halftone prints on, so themes that ask for dots
+        get a wider one — enough to read as a comic panel border rather than
+        padding that happens to have specks in it.
+        """
+        width = self.page.winfo_width()
+        height = self.page.winfo_height()
+        if width < 2 or height < 2:
+            return
+        if not force and (width, height) == self._page_size:
+            return
+        self._page_size = (width, height)
+
+        ink = halftone_ink()
+        margin = PAGE_MARGIN_SCREENED if ink else PAGE_MARGIN
+        top = margin if ink else PAGE_MARGIN_TOP
+        # No bottom margin without dots — the plain themes' notebook has always
+        # run to the status bar, and an empty gap there would just look wrong.
+        bottom = margin if ink else 0
+
+        self.page.coords(self._notebook_window, margin, top)
+        self.page.itemconfigure(
+            self._notebook_window,
+            width=max(1, width - 2 * margin),
+            height=max(1, height - top - bottom),
+        )
+
+        bands = (
+            ((0, 0, margin, height), "left"),
+            ((width - margin, 0, width, height), "right"),
+            ((0, 0, width, top), "top"),
+            ((0, height - bottom, width, height), "bottom"),
+        )
+        for i, (box, edge) in enumerate(bands):
+            paint_halftone(
+                self.page, color=ink, box=box, fade_from=edge,
+                fade_span=margin * 1.4, clear=(i == 0),
+            )
+
     # ----- theme --------------------------------------------------------------
 
     def _load_saved_theme(self) -> str | None:
@@ -530,6 +599,9 @@ class MainWindow:
         # widgets (and any open dialog's) need their baked-in colors remapped.
         retheme_widgets(self.root, previous)
         self._repaint_header()
+        self._layout_page(force=True)
+        # Backdrops elsewhere in the tree (see theme.register_halftone).
+        repaint_halftone_fields(self.root)
         self._refresh_status_indicators()
         self._save_theme(resolved)
         self.set_status(f"Theme: {resolved}.")

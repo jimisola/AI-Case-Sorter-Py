@@ -20,14 +20,19 @@ from sorter.ui import theme  # noqa: E402
 from sorter.ui.theme import (  # noqa: E402
     DEFAULT_THEME,
     HALFTONE_INK,
+    INK_OUTLINE,
     PALETTE,
     THEMES,
     apply_theme,
     current_theme,
     halftone_ink,
+    ink_outline,
     paint_halftone,
+    register_halftone,
+    repaint_halftone_fields,
     resolve_theme,
     retheme_widgets,
+    row_style,
     set_palette,
     theme_names,
 )
@@ -246,13 +251,13 @@ def test_painting_dots_replaces_the_previous_field(painted_canvas) -> None:
 def test_dots_shrink_toward_the_fade_and_stop(painted_canvas) -> None:
     canvas = painted_canvas
 
-    paint_halftone(canvas, color="#123a86", fade_end=0.5)
+    paint_halftone(canvas, color="#123a86", fade_span=200)
     widths = {}
     for item in canvas.find_withtag("halftone"):
         x1, _y1, x2, _y2 = canvas.coords(item)
         widths[round(x1)] = x2 - x1
 
-    assert max(widths) < 400 * 0.5      # nothing past the fade
+    assert max(widths) < 200            # nothing past the fade
     left, right = min(widths), max(widths)
     assert widths[left] > widths[right]  # the screen thins out rightwards
 
@@ -264,6 +269,70 @@ def test_no_ink_means_no_dots(painted_canvas) -> None:
     paint_halftone(canvas, color=None)
 
     assert canvas.find_withtag("halftone") == ()
+
+
+def test_registered_backdrops_repaint_on_a_theme_switch(painted_canvas) -> None:
+    calls = []
+    register_halftone(painted_canvas, lambda: calls.append(current_theme()))
+
+    set_palette("Comic Book")
+    repaint_halftone_fields(painted_canvas.master)
+
+    assert calls == ["Comic Book"]
+
+
+def test_a_failed_repaint_does_not_stop_the_walk(root) -> None:
+    # A dialog can be torn down between the switch and the walk.
+    dead = tk.Canvas(root)
+    register_halftone(dead, lambda: (_ for _ in ()).throw(tk.TclError("gone")))
+    survivor = tk.Canvas(root)
+    calls = []
+    register_halftone(survivor, lambda: calls.append(1))
+
+    repaint_halftone_fields(root)
+
+    assert calls == [1]
+
+
+# ----- ink outlines -----------------------------------------------------------
+
+
+def test_ink_outline_is_opt_in_per_theme() -> None:
+    assert set(INK_OUTLINE) <= set(THEMES)
+
+    set_palette("Comic Book")
+    assert ink_outline() == INK_OUTLINE["Comic Book"] > 0
+
+    set_palette("Dark")
+    assert ink_outline() == 0
+
+
+def test_outlined_theme_draws_cards_in_ink(root) -> None:
+    apply_theme(root, theme="Comic Book")
+    style = ttk.Style(root)
+
+    assert int(style.lookup("Card.TFrame", "borderwidth")) == INK_OUTLINE["Comic Book"]
+    assert style.lookup("Card.TFrame", "bordercolor") == THEMES["Comic Book"]["border"]
+
+
+def test_flat_theme_keeps_its_borderless_cards(root) -> None:
+    apply_theme(root, theme="Dark")
+    style = ttk.Style(root)
+
+    assert int(style.lookup("Card.TFrame", "borderwidth") or 0) == 0
+
+
+@pytest.mark.parametrize("card", ["Card.TFrame", "CardHover.TFrame", "CardSel.TFrame"])
+def test_card_rows_share_the_fill_but_never_the_outline(root, card: str) -> None:
+    # Layout rows inside a card are restyled to the row variant, so only the
+    # card itself draws a box.
+    apply_theme(root, theme="Comic Book")
+    style = ttk.Style(root)
+    row = row_style(card)
+
+    assert row != card
+    assert style.lookup(row, "background") == style.lookup(card, "background")
+    assert int(style.lookup(row, "borderwidth") or 0) == 0
 
 
 # ----- the title-bar picker ---------------------------------------------------
@@ -285,6 +354,7 @@ def _stub_window(root, db=None):
     from sorter.ui.app import HEADER_HEIGHT, MainWindow
 
     class _StubWindow:
+        _layout_page = MainWindow._layout_page
         _load_saved_theme = MainWindow._load_saved_theme
         _save_theme = MainWindow._save_theme
         _on_theme_selected = MainWindow._on_theme_selected
@@ -302,6 +372,12 @@ def _stub_window(root, db=None):
             self.theme_var = tk.StringVar(value=self.theme_name)
             self.header_canvas = tk.Canvas(root, height=HEADER_HEIGHT)
             self.header_canvas.pack(fill=tk.X)
+            self.page = tk.Canvas(root, height=120)
+            self.page.pack(fill=tk.BOTH, expand=True)
+            self._notebook_window = self.page.create_window(
+                0, 0, window=ttk.Frame(self.page), anchor=tk.NW,
+            )
+            self._page_size = (0, 0)
             self.theme_combo = ttk.Combobox(
                 self.header_canvas, textvariable=self.theme_var,
                 values=theme_names(), state="readonly", style="Header.TCombobox",

@@ -27,10 +27,14 @@ Exported helpers:
   Tk widgets that baked their colors in at construction time.
 * ``paint_gradient(canvas, ...)`` — paint a vertical/horizontal linear
   gradient across the canvas. Used for the title bar.
+* ``paint_halftone(canvas, ...)`` — print a ben-day dot screen over part of
+  a canvas, for the themes that ask for one (``HALFTONE_INK``). Register the
+  paint with ``register_halftone`` so it survives a theme switch.
 """
 from __future__ import annotations
 
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import font as tkfont
 from tkinter import ttk
 
@@ -269,50 +273,49 @@ _GOTHIC = {
     "error":         "#e5484d",
 }
 
-# Comic-book ink: black panel gutters, a cobalt title bar, gold and orange
-# on top. The one theme where **gold, not green, is "go"** — an anime/comic
-# palette has no green in it, and `success` tracks `action` by rule, so the
-# connected indicator is gold here and the disconnected one stays red. Gold
-# against red separates further than green against red for the most common
-# form of colour blindness, and both dots sit beside their labels anyway.
+# A comic page: yellow newsprint, white panels, black ink outlines, and the
+# two comic inks — red for headings and stops, blue for go. The one theme
+# where **blue, not green, means go**: a comic palette has no green in it,
+# and `success` tracks `action` by rule, so the connected indicator is blue
+# here while the disconnected one stays red.
 _COMIC = {
-    "bg_window":     "#0e1117",
-    "bg_gradient_a": "#1b56b8",   # cobalt left — the comic panel's sky
-    "bg_gradient_b": "#090c11",
-    "bg_surface":    "#151a23",
-    "bg_card":       "#1e2531",
-    "bg_card_hover": "#29323f",
-    "bg_card_sel":   "#26406d",   # selection lifts toward the cobalt
-    "bg_input":      "#070a0e",
+    "bg_window":     "#f2b800",   # the page's darker edge, behind the tabs
+    "bg_gradient_a": "#ffe14d",   # title bar left — bright newsprint yellow
+    "bg_gradient_b": "#ffb61f",
+    "bg_surface":    "#ffd21f",   # the page itself
+    "bg_card":       "#ffffff",   # white panels sit on it
+    "bg_card_hover": "#eef4ff",
+    "bg_card_sel":   "#9ec5ff",   # selection goes comic blue
+    "bg_input":      "#fffdf2",
 
-    "border":        "#2c3644",
-    "border_focus":  "#ffd257",
+    "border":        "#111318",   # ink — every outline in this theme
+    "border_focus":  "#2352cc",
 
-    "text":          "#eef2f8",
-    "text_highlight": "#ffffff",
-    "text_muted":    "#a5b1c1",
-    "text_subtle":   "#6f7c8d",
-    "text_inverse":  "#0b0e13",
+    "text":          "#14161c",
+    "text_highlight": "#000000",
+    "text_muted":    "#4b4740",
+    "text_subtle":   "#7d7566",
+    "text_inverse":  "#fefefe",   # white, but not the panels' white
 
-    "accent":        "#f2b01e",
-    "accent_hover":  "#ffc74d",
-    "accent_press":  "#cc9014",
-    "accent_dim":    "#232c39",
+    "accent":        "#cf1b1b",   # headings, selection fills, the caret
+    "accent_hover":  "#ea2a2a",
+    "accent_press":  "#a41313",
+    "accent_dim":    "#ffe58f",
 
-    "action":        "#ffc219",
-    "action_hover":  "#ffd451",
-    "action_press":  "#e0a300",
-    "update":        "#2f7fe0",
-    "update_hover":  "#559bf0",
-    "update_press":  "#1f63b8",
-    "danger":        "#e5342a",
-    "danger_hover":  "#f4574d",
-    "danger_press":  "#c02318",
+    "action":        "#1a4fc4",
+    "action_hover":  "#2f66e0",
+    "action_press":  "#123a96",
+    "update":        "#1f2530",
+    "update_hover":  "#333c4d",
+    "update_press":  "#12171f",
+    "danger":        "#e8302a",
+    "danger_hover":  "#f65046",
+    "danger_press":  "#bf1f1a",
 
-    "success":       "#ffc219",
-    "success_dim":   "#3a2f08",
-    "warning":       "#ff8a1f",
-    "error":         "#e5342a",
+    "success":       "#1a4fc4",
+    "success_dim":   "#cfe0ff",
+    "warning":       "#e07a00",
+    "error":         "#e8302a",
 }
 
 # Display name → palette. Insertion order drives the picker's order.
@@ -333,13 +336,25 @@ DEFAULT_THEME = "Dark"
 # close to the gradient's dark end so the field fades out as the background
 # darkens under it.
 HALFTONE_INK = {
-    "Comic Book": "#123a86",
+    "Comic Book": "#1b1e24",
+}
+
+# Themes drawn with comic-book ink outlines: how many pixels of border to put
+# around panels, cards, buttons and fields. 0 (the default) keeps the flat,
+# borderless look the other themes are built on.
+INK_OUTLINE = {
+    "Comic Book": 2,
 }
 
 
 def halftone_ink() -> str | None:
-    """Dot colour for the current theme's title bar, or None for no dots."""
+    """Dot colour for the current theme's backdrops, or None for no dots."""
     return HALFTONE_INK.get(_current_theme)
+
+
+def ink_outline() -> int:
+    """Border width for the current theme's panels and controls (0 = flat)."""
+    return INK_OUTLINE.get(_current_theme, 0)
 
 # The live palette. Modules do `from .theme import PALETTE` and index it at
 # call time, so switching themes **mutates this dict in place** — rebinding
@@ -380,6 +395,11 @@ def set_palette(name: str | None) -> dict[str, str]:
     PALETTE.clear()
     PALETTE.update(THEMES[_current_theme])
     return previous
+
+
+def row_style(card_style: str) -> str:
+    """The flat, outline-free variant of a card frame style."""
+    return card_style.replace(".TFrame", "Row.TFrame")
 
 
 def _pick_font(
@@ -438,15 +458,19 @@ def _colored_button(
     """Configure a solid-fill action button (the app's only colored controls).
 
     clam draws a button's edge from bordercolor/darkcolor/lightcolor, so all
-    three track the fill or the button reads as outlined.
+    three track the fill or the button reads as outlined — except in an
+    ink-outline theme, where an outline is exactly what we want.
     """
+    ink = ink_outline()
+    edge = PALETTE["border"] if ink else rest
     style.configure(
         name,
         background=rest,
         foreground=PALETTE["text_inverse"],
-        bordercolor=rest,
-        darkcolor=rest,
-        lightcolor=rest,
+        bordercolor=edge,
+        darkcolor=edge,
+        lightcolor=edge,
+        borderwidth=ink,
         focuscolor=PALETTE["text_inverse"],
         font=fonts["bold"],
     )
@@ -455,12 +479,13 @@ def _colored_button(
         ("active", hover),
         ("disabled", PALETTE["bg_surface"]),
     ]
+    edges = [("!disabled", edge)] if ink else fill
     style.map(
         name,
         background=fill,
-        bordercolor=fill,
-        darkcolor=fill,
-        lightcolor=fill,
+        bordercolor=edges,
+        darkcolor=edges,
+        lightcolor=edges,
         foreground=[("disabled", PALETTE["text_subtle"])],
     )
 
@@ -507,14 +532,36 @@ def apply_theme(root: tk.Tk, theme: str | None = None) -> dict[str, tuple]:
     bg = PALETTE["bg_surface"]
     text = PALETTE["text"]
     accent = PALETTE["accent"]
+    # Comic-book themes outline everything in ink; the rest stay borderless.
+    ink = ink_outline()
+    ink_edge = PALETTE["border"]
+
+    def _outlined(name: str, fill: str) -> None:
+        """A surface that carries an ink outline in the themes that use one."""
+        style.configure(
+            name,
+            background=fill,
+            bordercolor=ink_edge if ink else fill,
+            darkcolor=ink_edge if ink else fill,
+            lightcolor=ink_edge if ink else fill,
+            borderwidth=ink,
+            relief="solid" if ink else "flat",
+        )
 
     # ----- Frames ------------------------------------------------------------
     style.configure("TFrame", background=bg)
     style.configure("Window.TFrame", background=PALETTE["bg_window"])
-    style.configure("Card.TFrame", background=PALETTE["bg_card"])
-    style.configure("CardHover.TFrame", background=PALETTE["bg_card_hover"])
-    style.configure("CardSel.TFrame", background=PALETTE["bg_card_sel"])
     style.configure("StatusBar.TFrame", background=PALETTE["bg_window"])
+    # A card is outlined; the rows *inside* it share its fill but never its
+    # outline, or every layout row in a card would draw its own box. Cards
+    # restyle their children through `row_style` to keep the two in step.
+    for card, fill in (
+        ("Card.TFrame", PALETTE["bg_card"]),
+        ("CardHover.TFrame", PALETTE["bg_card_hover"]),
+        ("CardSel.TFrame", PALETTE["bg_card_sel"]),
+    ):
+        _outlined(card, fill)
+        style.configure(row_style(card), background=fill)
 
     # ----- Labels ------------------------------------------------------------
     style.configure(
@@ -637,15 +684,7 @@ def apply_theme(root: tk.Tk, theme: str | None = None) -> dict[str, tuple]:
     # ----- LabelFrame --------------------------------------------------------
     # Borderless — the colored label and bg-surface contrast against the
     # window already separate sections visually, no outline needed.
-    style.configure(
-        "TLabelframe",
-        background=bg,
-        bordercolor=bg,
-        darkcolor=bg,
-        lightcolor=bg,
-        borderwidth=0,
-        relief="flat",
-    )
+    _outlined("TLabelframe", bg)
     style.configure(
         "TLabelframe.Label",
         background=bg,
@@ -677,15 +716,20 @@ def apply_theme(root: tk.Tk, theme: str | None = None) -> dict[str, tuple]:
         "TNotebook.Tab",
         background=PALETTE["bg_card"],
         foreground=PALETTE["text_muted"],
-        bordercolor=PALETTE["bg_card"],
-        darkcolor=PALETTE["bg_card"],
-        lightcolor=PALETTE["bg_card"],
+        bordercolor=ink_edge if ink else PALETTE["bg_card"],
+        darkcolor=ink_edge if ink else PALETTE["bg_card"],
+        lightcolor=ink_edge if ink else PALETTE["bg_card"],
         padding=(16, 8),
-        borderwidth=0,
+        borderwidth=ink,
         font=fonts["bold"],
     )
     # Selected tab is visually elevated: extra padding, blue-tinted bg,
-    # bumped font. Hovered tab gets a subtle lift.
+    # bumped font. Hovered tab gets a subtle lift. Under an ink outline the
+    # edge stays ink whatever the fill does.
+    _tab_edges = [("selected", ink_edge), ("active", ink_edge)] if ink else [
+        ("selected", PALETTE["bg_card_sel"]),
+        ("active", PALETTE["bg_card_hover"]),
+    ]
     style.map(
         "TNotebook.Tab",
         background=[
@@ -696,18 +740,9 @@ def apply_theme(root: tk.Tk, theme: str | None = None) -> dict[str, tuple]:
             ("selected", PALETTE["text"]),
             ("active", PALETTE["text"]),
         ],
-        bordercolor=[
-            ("selected", PALETTE["bg_card_sel"]),
-            ("active", PALETTE["bg_card_hover"]),
-        ],
-        lightcolor=[
-            ("selected", PALETTE["bg_card_sel"]),
-            ("active", PALETTE["bg_card_hover"]),
-        ],
-        darkcolor=[
-            ("selected", PALETTE["bg_card_sel"]),
-            ("active", PALETTE["bg_card_hover"]),
-        ],
+        bordercolor=_tab_edges,
+        lightcolor=_tab_edges,
+        darkcolor=_tab_edges,
         padding=[
             ("selected", (22, 12)),
         ],
@@ -727,13 +762,15 @@ def apply_theme(root: tk.Tk, theme: str | None = None) -> dict[str, tuple]:
         "TButton",
         background=PALETTE["accent_dim"],
         foreground=text,
-        bordercolor=PALETTE["accent_dim"],
-        darkcolor=PALETTE["accent_dim"],
-        lightcolor=PALETTE["accent_dim"],
+        bordercolor=ink_edge if ink else PALETTE["accent_dim"],
+        darkcolor=ink_edge if ink else PALETTE["accent_dim"],
+        lightcolor=ink_edge if ink else PALETTE["accent_dim"],
         focuscolor=PALETTE["border_focus"],
-        borderwidth=0,
-        relief="flat",
-        padding=(14, 7),
+        borderwidth=ink,
+        relief="solid" if ink else "flat",
+        # The outline eats into the button, so give the padding back — button
+        # rows elsewhere are packed to fit and would otherwise clip.
+        padding=(14 - 2 * ink, 7 - ink),
         font=fonts["body"],
     )
     _button_fill = [
@@ -741,12 +778,13 @@ def apply_theme(root: tk.Tk, theme: str | None = None) -> dict[str, tuple]:
         ("active", PALETTE["bg_card_hover"]),
         ("disabled", PALETTE["bg_surface"]),
     ]
+    _button_edge = [("!disabled", ink_edge)] if ink else _button_fill
     style.map(
         "TButton",
         background=_button_fill,
-        bordercolor=_button_fill,
-        darkcolor=_button_fill,
-        lightcolor=_button_fill,
+        bordercolor=_button_edge,
+        darkcolor=_button_edge,
+        lightcolor=_button_edge,
         foreground=[
             ("disabled", PALETTE["text_subtle"]),
             ("active", PALETTE["text_highlight"]),
@@ -788,6 +826,7 @@ def apply_theme(root: tk.Tk, theme: str | None = None) -> dict[str, tuple]:
             bordercolor=PALETTE["border"],
             darkcolor=PALETTE["border"],
             lightcolor=PALETTE["border"],
+            borderwidth=ink or 1,
             insertcolor=accent,
             arrowcolor=PALETTE["text_muted"],
             padding=4,
@@ -1146,42 +1185,101 @@ def paint_halftone(
     canvas: tk.Canvas,
     *,
     color: str | None,
+    box: tuple[float, float, float, float] | None = None,
+    fade_from: str = "left",
+    fade_span: float | None = None,
     spacing: int = 7,
     radius: float = 2.0,
-    fade_end: float = 0.8,
+    clear: bool = True,
+    tag: str = "halftone",
 ) -> None:
-    """Print a ben-day dot field across the canvas, replacing any prior one.
+    """Print a ben-day dot field over `box`, replacing any prior field.
 
-    The dots shrink from full size at the left edge to nothing by `fade_end`
-    (a fraction of the width), which is how a comic screens a flat colour into
-    the ink beside it. Rows are offset by half a step so the field reads as a
-    proper halftone screen rather than a grid.
+    The dots start full size along the `fade_from` edge and shrink to nothing
+    `fade_span` pixels in, which is how a comic screens a flat colour away
+    into the paper beside it. Rows are offset by half a step so the field
+    reads as a halftone screen rather than a grid. `fade_span` defaults to
+    80% of the box across the fade's axis.
+
+    `box` defaults to the whole canvas. `clear=False` adds a band to the field
+    already painted under `tag` instead of replacing it — that's how a caller
+    screens several edges of one canvas in a single pass.
 
     `color=None` just clears the field, so a caller can hand it whatever
     ``halftone_ink()`` returns without branching.
     """
-    canvas.delete("halftone")
+    if clear:
+        canvas.delete(tag)
     if color is None:
         return
-    canvas.update_idletasks()
-    width = canvas.winfo_width()
-    height = canvas.winfo_height()
+    # Deliberately no update_idletasks() here: this runs from <Configure>
+    # handlers and during widget construction, where re-entering the event
+    # loop would fire half-built widgets' callbacks.
+    if box is None:
+        box = (0, 0, canvas.winfo_width(), canvas.winfo_height())
+    x0, y0, x1, y1 = box
+    width, height = x1 - x0, y1 - y0
     if width < 2 or height < 2:
         return
 
-    span = max(1.0, width * fade_end)
+    horizontal = fade_from in ("left", "right")
+    if fade_span is None:
+        fade_span = (width if horizontal else height) * 0.8
+    span = max(1.0, fade_span)
+
     for row in range(int(height / spacing) + 2):
-        y = row * spacing + spacing / 2
+        y = y0 + row * spacing + spacing / 2
+        if y - radius > y1:
+            break
         offset = spacing / 2 if row % 2 else 0.0
         for col in range(int(width / spacing) + 2):
-            x = col * spacing + offset
-            r = radius * (1.0 - x / span)
+            x = x0 + col * spacing + offset
+            if x - radius > x1:
+                break
+            if fade_from == "left":
+                depth = x - x0
+            elif fade_from == "right":
+                depth = x1 - x
+            elif fade_from == "top":
+                depth = y - y0
+            else:
+                depth = y1 - y
+            r = radius * (1.0 - depth / span)
             if r < 0.6:
-                break  # everything further right is smaller still
+                if horizontal and fade_from == "left":
+                    break  # everything further in is smaller still
+                continue
             canvas.create_oval(
                 x - r, y - r, x + r, y + r,
-                fill=color, outline="", tags="halftone",
+                fill=color, outline="", tags=tag,
             )
+
+
+def register_halftone(canvas: tk.Canvas, repaint: "Callable[[], None]") -> None:
+    """Have `repaint` re-run whenever the theme changes.
+
+    A canvas that screens part of itself paints with sizes and fade edges only
+    it knows, so a theme switch can't repaint it generically. Registering the
+    callback here means a new backdrop anywhere in the app starts following
+    theme changes without app.py having to learn about it.
+    """
+    canvas._halftone_repaint = repaint  # type: ignore[attr-defined]
+
+
+def repaint_halftone_fields(widget: tk.Misc) -> None:
+    """Re-run every halftone registered under `widget` (after a theme switch)."""
+    repaint = getattr(widget, "_halftone_repaint", None)
+    if callable(repaint):
+        try:
+            repaint()
+        except tk.TclError:
+            pass
+    try:
+        children = widget.winfo_children()
+    except tk.TclError:
+        return
+    for child in children:
+        repaint_halftone_fields(child)
 
 
 def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
