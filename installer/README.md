@@ -62,6 +62,24 @@ explicitly.
 
 ## Notes for maintainers
 
+- **The repository must be publicly readable.** Both the installer and the
+  in-app updater download over HTTPS with no credentials, so a private repo
+  makes every request 404 — the release check falls back to the branch
+  archive, and that 404s too:
+
+  ```
+  No published release found (the repo may have none yet).
+  Invoke-WebRequest : Not Found
+  ```
+
+  If you need the repo to stay private, distribution has to move off GitHub
+  (host the ZIP plus a version manifest on your own server and repoint
+  `$Repo` / `updater.DEFAULT_REPO`) — a token is not a workable answer for
+  the audience this installer targets.
+- **Cut a release before relying on the update path.** With no releases,
+  `/releases/latest` 404s: the installer falls back to the default branch
+  and the in-app updater reports "up to date" forever. Tag `v0.1.0`,
+  matching `__version__` in `sorter/__init__.py`.
 - The installer is unsigned, so SmartScreen will warn on first run. Signing
   (Azure Trusted Signing, or an OV/EV certificate) is the fix; until then,
   expect a "More info → Run anyway" step.

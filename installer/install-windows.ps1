@@ -51,7 +51,8 @@ $LASTEXITCODE = 0
 # quote, which silently truncates the enclosing string and misparses
 # everything after it. tests/test_installer_scripts.py enforces this.
 
-$Repo         = 'sjseth/AI-Case-Sorter-Py'
+$Repo          = 'sjseth/AI-Case-Sorter-Py'
+$DefaultBranch = 'main'
 $PythonWinget = 'Python.Python.3.12'
 $PythonMinor  = 12
 # Keep in step with requires-python in pyproject.toml.
@@ -181,10 +182,15 @@ function Get-ReleaseInfo {
         $resp = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" `
             -Headers @{ 'User-Agent' = 'CaseSorter-Installer' } -UseBasicParsing
     } catch {
-        Write-Warn2 "No published release found; installing the current main branch."
+        # A 404 here means either "no releases published yet" or "this repo is
+        # not publicly readable" - the API gives an anonymous caller the same
+        # answer for both. Say so, rather than reporting only the happy-path
+        # guess and letting the download fail with a bare "Not Found".
+        Write-Warn2 "No published release found (the repo may have none yet)."
+        Write-Note  "Falling back to the current $DefaultBranch branch."
         return [pscustomobject]@{
-            Tag = 'main'
-            Url = "https://github.com/$Repo/archive/refs/heads/main.zip"
+            Tag = $DefaultBranch
+            Url = "https://github.com/$Repo/archive/refs/heads/$DefaultBranch.zip"
         }
     }
 
@@ -211,7 +217,31 @@ function Install-App {
     try {
         $zip = Join-Path $work 'app.zip'
         Write-Note "Downloading $Tag..."
-        Invoke-WebRequest -Uri $Url -OutFile $zip -UseBasicParsing
+        try {
+            Invoke-WebRequest -Uri $Url -OutFile $zip -UseBasicParsing
+        } catch {
+            $status = $null
+            if ($_.Exception.PSObject.Properties['Response'] -and $_.Exception.Response) {
+                $status = [int]$_.Exception.Response.StatusCode
+            }
+            if ($status -eq 404) {
+                # The overwhelmingly common cause, and invisible from the bare
+                # "Not Found" that Invoke-WebRequest reports on its own.
+                throw @"
+Could not download the app (HTTP 404).
+
+  $Url
+
+The most likely reason is that the repository is private, or the release tag
+does not exist. An anonymous download - which is all this installer does -
+needs the repository to be publicly readable.
+
+If you are the maintainer: make the repository public, or publish a release
+whose tag matches what you asked for.
+"@
+            }
+            throw "Could not download the app from $Url : $($_.Exception.Message)"
+        }
 
         Write-Note "Extracting..."
         $unpack = Join-Path $work 'unpacked'
