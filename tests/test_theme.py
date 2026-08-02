@@ -28,8 +28,6 @@ from sorter.ui.theme import (  # noqa: E402
     halftone_ink,
     ink_outline,
     paint_halftone,
-    register_halftone,
-    repaint_halftone_fields,
     resolve_theme,
     retheme_widgets,
     row_style,
@@ -269,29 +267,6 @@ def test_no_ink_means_no_dots(painted_canvas) -> None:
     paint_halftone(canvas, color=None)
 
     assert canvas.find_withtag("halftone") == ()
-
-
-def test_registered_backdrops_repaint_on_a_theme_switch(painted_canvas) -> None:
-    calls = []
-    register_halftone(painted_canvas, lambda: calls.append(current_theme()))
-
-    set_palette("Comic Book")
-    repaint_halftone_fields(painted_canvas.master)
-
-    assert calls == ["Comic Book"]
-
-
-def test_a_failed_repaint_does_not_stop_the_walk(root) -> None:
-    # A dialog can be torn down between the switch and the walk.
-    dead = tk.Canvas(root)
-    register_halftone(dead, lambda: (_ for _ in ()).throw(tk.TclError("gone")))
-    survivor = tk.Canvas(root)
-    calls = []
-    register_halftone(survivor, lambda: calls.append(1))
-
-    repaint_halftone_fields(root)
-
-    assert calls == [1]
 
 
 # ----- ink outlines -----------------------------------------------------------

@@ -28,13 +28,11 @@ Exported helpers:
 * ``paint_gradient(canvas, ...)`` — paint a vertical/horizontal linear
   gradient across the canvas. Used for the title bar.
 * ``paint_halftone(canvas, ...)`` — print a ben-day dot screen over part of
-  a canvas, for the themes that ask for one (``HALFTONE_INK``). Register the
-  paint with ``register_halftone`` so it survives a theme switch.
+  a canvas, for the themes that ask for one (``HALFTONE_INK``).
 """
 from __future__ import annotations
 
 import tkinter as tk
-from collections.abc import Callable
 from tkinter import font as tkfont
 from tkinter import ttk
 
@@ -1253,33 +1251,6 @@ def paint_halftone(
                 x - r, y - r, x + r, y + r,
                 fill=color, outline="", tags=tag,
             )
-
-
-def register_halftone(canvas: tk.Canvas, repaint: "Callable[[], None]") -> None:
-    """Have `repaint` re-run whenever the theme changes.
-
-    A canvas that screens part of itself paints with sizes and fade edges only
-    it knows, so a theme switch can't repaint it generically. Registering the
-    callback here means a new backdrop anywhere in the app starts following
-    theme changes without app.py having to learn about it.
-    """
-    canvas._halftone_repaint = repaint  # type: ignore[attr-defined]
-
-
-def repaint_halftone_fields(widget: tk.Misc) -> None:
-    """Re-run every halftone registered under `widget` (after a theme switch)."""
-    repaint = getattr(widget, "_halftone_repaint", None)
-    if callable(repaint):
-        try:
-            repaint()
-        except tk.TclError:
-            pass
-    try:
-        children = widget.winfo_children()
-    except tk.TclError:
-        return
-    for child in children:
-        repaint_halftone_fields(child)
 
 
 def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:

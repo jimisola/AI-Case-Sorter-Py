@@ -28,7 +28,6 @@ from .theme import (
     halftone_ink,
     paint_gradient,
     paint_halftone,
-    repaint_halftone_fields,
     resolve_theme,
     retheme_widgets,
     theme_names,
@@ -600,8 +599,6 @@ class MainWindow:
         retheme_widgets(self.root, previous)
         self._repaint_header()
         self._layout_page(force=True)
-        # Backdrops elsewhere in the tree (see theme.register_halftone).
-        repaint_halftone_fields(self.root)
         self._refresh_status_indicators()
         self._save_theme(resolved)
         self.set_status(f"Theme: {resolved}.")

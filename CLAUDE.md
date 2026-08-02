@@ -361,12 +361,11 @@ image browser/reclassify/delete), `dialog_share_model` (publish to community),
     ben-day dot field, and the ink to print it in; `paint_halftone` prints
     one over any box of a canvas, fading in from whichever edge you name.
     Only canvases can carry it — ttk widgets always fill their own
-    background, so nothing shows through them. Three places screen
-    themselves: the title bar (`app._repaint_header`), the margin around the
-    notebook (`app._layout_page` — the notebook rides on a backdrop canvas
-    for exactly this reason), and the Run tab's slot-details backdrop. A new
-    one calls `register_halftone(canvas, repaint)` so `repaint_halftone_fields`
-    re-runs it on a theme switch, without app.py having to know about it.
+    background, so nothing shows through them. Two places screen themselves,
+    both app chrome: the title bar (`app._repaint_header`) and the margin
+    around the notebook (`app._layout_page` — the notebook rides on a
+    backdrop canvas for exactly this reason). Keep it to the chrome: a screen
+    behind the working area of a tab is noise, not decoration.
   - **Ink outlines.** `INK_OUTLINE` names the themes that draw comic-book
     borders and how many pixels wide; everything else stays flat and
     borderless. `apply_theme` reads it for panels, cards, buttons and fields.
