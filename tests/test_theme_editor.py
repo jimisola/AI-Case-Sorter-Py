@@ -22,6 +22,7 @@ from sorter.ui.theme import (  # noqa: E402
     DEFAULT_THEME,
     HALFTONE_INK,
     INK_OUTLINE,
+    MAX_THEME_NAME,
     THEMES,
     custom_theme_payload,
     custom_themes_payload,
@@ -30,6 +31,7 @@ from sorter.ui.theme import (  # noqa: E402
     load_custom_themes,
     normalize_palette,
     register_custom_theme,
+    rename_custom_theme,
     resolve_theme,
     set_palette,
     theme_names,
@@ -129,6 +131,47 @@ def test_a_deleted_theme_falls_back_to_the_default_when_selected() -> None:
     set_palette("Doomed")
 
     assert theme.current_theme() == DEFAULT_THEME
+
+
+def test_renaming_moves_a_theme_rather_than_copying_it() -> None:
+    register_custom_theme(
+        "Mine", _palette(action="#123456"), halftone="#101010", outline=2,
+        base="Gothic",
+    )
+
+    rename_custom_theme("Mine", "Yours")
+
+    assert "Mine" not in theme_names()
+    assert THEMES["Yours"]["action"] == "#123456"
+    assert HALFTONE_INK["Yours"] == "#101010"        # options came along
+    assert "Mine" not in HALFTONE_INK
+    assert custom_theme_payload("Yours")["based_on"] == "Gothic"
+
+
+def test_a_rejected_rename_leaves_the_original_alone() -> None:
+    register_custom_theme("Mine", _palette(action="#123456"))
+
+    with pytest.raises(ValueError):
+        rename_custom_theme("Mine", "Dark")             # a built-in
+    with pytest.raises(ValueError):
+        rename_custom_theme("Mine", "x" * (MAX_THEME_NAME + 1))
+    with pytest.raises(ValueError):
+        rename_custom_theme("Sepia", "Mine")            # not renameable
+
+    assert THEMES["Mine"]["action"] == "#123456"
+    assert THEMES["Dark"] == BUILTIN_THEMES["Dark"]
+
+
+def test_names_are_capped_to_fit_the_picker() -> None:
+    long_name = "A very long theme name"
+
+    assert len(unique_theme_name(long_name)) <= MAX_THEME_NAME
+    with pytest.raises(ValueError):
+        register_custom_theme(long_name, _palette())
+
+    register_custom_theme(unique_theme_name(long_name), _palette())
+    # …and a collision-avoiding suffix still fits.
+    assert len(unique_theme_name(long_name)) <= MAX_THEME_NAME
 
 
 def test_unique_theme_name_avoids_collisions() -> None:
@@ -271,7 +314,7 @@ def test_editor_starts_as_a_copy_of_the_active_theme(root) -> None:
 
     assert dlg.base == "Gothic"
     assert dlg.editing is False
-    assert dlg.name_var.get() == "Gothic copy"
+    assert dlg.name_var.get() == "My theme"
     assert dlg.values == THEMES["Gothic"]
 
 
@@ -338,6 +381,66 @@ def test_editing_a_custom_theme_offers_delete(root) -> None:
     assert "Mine" not in theme_names()
     assert app.theme_name == "Sepia"         # falls back to what it was made from
     assert app.saved == {}
+
+
+def test_renaming_in_the_editor_updates_the_theme_in_place(root) -> None:
+    register_custom_theme("Mine", _palette(action="#123456"), base="Sepia")
+    set_palette("Mine")
+    app = _StubApp()
+    dlg = _editor(root, app)
+
+    dlg.name_var.set("Renamed")
+    dlg._save()
+
+    assert "Mine" not in theme_names()
+    assert THEMES["Renamed"]["action"] == "#123456"
+    assert app.theme_name == "Renamed"
+    assert list(app.saved or {}) == ["Renamed"]
+
+
+def test_create_new_keeps_the_theme_it_started_from(root, monkeypatch) -> None:
+    register_custom_theme("Mine", _palette(action="#123456"), base="Sepia")
+    set_palette("Mine")
+    app = _StubApp()
+    dlg = _editor(root, app)
+    monkeypatch.setattr(type(dlg), "_prompt_name", lambda _self: "Second")
+
+    dlg._set_color("action", "#abcdef")
+    dlg._create_new()
+
+    assert THEMES["Mine"]["action"] == "#123456"      # untouched
+    assert THEMES["Second"]["action"] == "#abcdef"
+    assert app.theme_name == "Second"
+
+
+def test_create_new_backing_out_changes_nothing(root, monkeypatch) -> None:
+    app = _StubApp()
+    dlg = _editor(root, app)
+    monkeypatch.setattr(type(dlg), "_prompt_name", lambda _self: None)
+
+    dlg._create_new()
+
+    assert app.saved is None
+    assert custom_themes_payload() == {}
+
+
+def test_editor_refuses_an_over_long_name(root, monkeypatch) -> None:
+    from sorter.ui import dialog_theme_editor as mod
+
+    warned: list[str] = []
+    monkeypatch.setattr(
+        mod.messagebox, "showwarning", lambda *a, **k: warned.append(a[0]),
+    )
+    app = _StubApp()
+    dlg = _editor(root, app)
+    # The entry blocks typing past the limit; the check is the backstop.
+    assert mod._within_limit("x" * MAX_THEME_NAME) is True
+    assert mod._within_limit("x" * (MAX_THEME_NAME + 1)) is False
+
+    dlg.name_var.set("x" * (MAX_THEME_NAME + 1))
+    dlg._save()
+
+    assert warned and app.saved is None
 
 
 def test_typed_hex_updates_the_working_palette(root) -> None:

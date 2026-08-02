@@ -344,7 +344,9 @@ image browser/reclassify/delete), `dialog_share_model` (publish to community),
 `dialog_slot_template` (new / rename / delete a sorting template),
 `dialog_theme_editor` (build a theme from the active one: a color picker per
 palette role, a canvas preview of a miniature app, and JSON export/import —
-reached from the `+` beside the title-bar theme picker),
+reached from the gear beside the title-bar theme picker; "Save & apply"
+writes back to a saved theme, rename included, and "Create new…" always makes
+a separate one, so a built-in is never the thing being written to),
 `dialog_update` (release notes → download progress → "Restart to update"; §7).
 
 ### Shared UI infrastructure
@@ -388,9 +390,12 @@ reached from the `+` beside the title-bar theme picker),
   - **User-made themes.** `BUILTIN_THEMES` is what ships; `THEMES` is the live
     registry — built-ins plus whatever the theme editor has saved.
     `register_custom_theme` adds one (and its halftone/outline options),
-    `custom_themes_payload` is what the app persists to the
-    `ui.custom_themes` setting, and `load_custom_themes` re-registers them at
-    startup, before the saved theme name is resolved. From then on a user
+    `rename_custom_theme` moves one (a rename is not copy-and-delete — the
+    theme keeps its place and options), `custom_themes_payload` is what the
+    app persists to the `ui.custom_themes` setting, and `load_custom_themes`
+    re-registers them at startup, before the saved theme name is resolved.
+    Names are capped at `MAX_THEME_NAME` because the picker is sized to the
+    longest of them. From then on a user
     palette is an ordinary entry in `THEMES` — nothing downstream knows the
     difference. `normalize_palette` is the gate: it fills gaps from a base
     theme, drops unknown keys and non-colors, and forces `success`/`error`

@@ -1,9 +1,13 @@
 """Theme editor — build your own palette from one of the shipped themes.
 
-Opened by the ``+`` beside the title-bar theme picker. It starts as a copy of
-the active theme, so a user only has to change the handful of colours they
-care about; everything else keeps working because a theme is always a *full*
+Opened by the gear beside the title-bar theme picker. It starts from the
+active theme, so a user only has to change the handful of colours they care
+about; everything else keeps working because a theme is always a *full*
 palette (see ``theme.normalize_palette``).
+
+On a saved theme, **Save & apply** writes back to it — renaming included.
+**Create new…** always makes a separate theme, so a built-in is never the
+thing being written to.
 
 Saved themes live in the ``ui.custom_themes`` setting and are registered into
 ``theme.THEMES`` at startup, which is all it takes for them to appear in the
@@ -23,6 +27,7 @@ from .theme import (
     CUSTOM_THEME_VERSION,
     HALFTONE_INK,
     INK_OUTLINE,
+    MAX_THEME_NAME,
     PALETTE,
     THEMES,
     current_theme,
@@ -33,6 +38,7 @@ from .theme import (
     paint_gradient,
     paint_halftone,
     register_custom_theme,
+    rename_custom_theme,
     unique_theme_name,
     unregister_custom_theme,
 )
@@ -123,13 +129,17 @@ class ThemeEditorDialog(tk.Toplevel):
 
         self.title("Edit Theme" if self.editing else "New Theme")
         self.transient(parent)
-        self.resizable(False, False)
+        self.resizable(True, True)
+        self.minsize(LIST_W + PREVIEW_W + 70, 420)
         self.configure(bg=PALETTE["bg_surface"])
 
         # Working copy — nothing here touches the live palette until Save.
         self.values: dict[str, str] = dict(THEMES[self.base])
+        # A new theme gets a short, free name rather than "<base> copy" —
+        # names are capped for the picker's sake, and the header line below
+        # already says which theme this started from.
         self.name_var = tk.StringVar(
-            value=self.base if self.editing else unique_theme_name(f"{self.base} copy")
+            value=self.base if self.editing else unique_theme_name("My theme")
         )
         self.outline_var = tk.BooleanVar(value=bool(INK_OUTLINE.get(self.base)))
         self.halftone_var = tk.BooleanVar(value=bool(HALFTONE_INK.get(self.base)))
@@ -157,7 +167,11 @@ class ThemeEditorDialog(tk.Toplevel):
         row = ttk.Frame(parent)
         row.pack(fill=tk.X)
         ttk.Label(row, text="Name", style="Subtitle.TLabel").pack(side=tk.LEFT)
-        entry = ttk.Entry(row, textvariable=self.name_var, width=26)
+        entry = ttk.Entry(
+            row, textvariable=self.name_var, width=MAX_THEME_NAME + 2,
+            validate="key",
+            validatecommand=(self.register(_within_limit), "%P"),
+        )
         entry.pack(side=tk.LEFT, padx=(8, 16))
         entry.focus_set()
 
@@ -176,8 +190,11 @@ class ThemeEditorDialog(tk.Toplevel):
         ttk.Label(
             parent,
             text=(
-                f"Starting from “{self.base}”. Saving under a new name adds a "
-                "theme; keeping the name replaces it."
+                f"Editing “{self.base}” — Save & apply writes back to it, "
+                "including a rename."
+                if self.editing else
+                f"Starting from the built-in “{self.base}”, which can't be "
+                "changed. Save & apply keeps this as a new theme."
             ),
             style="Subtle.TLabel",
         ).pack(anchor=tk.W, pady=(6, 0))
@@ -246,6 +263,8 @@ class ThemeEditorDialog(tk.Toplevel):
         ttk.Button(
             bar, text="Save & apply", style="Accent.TButton", command=self._save,
         ).pack(side=tk.RIGHT)
+        ttk.Button(bar, text="Create new…", command=self._create_new)\
+            .pack(side=tk.RIGHT, padx=(0, 8))
 
     # ----- editing ------------------------------------------------------------
 
@@ -402,6 +421,11 @@ class ThemeEditorDialog(tk.Toplevel):
 
     # ----- save / delete ------------------------------------------------------
 
+    def _payload_named(self, name: str) -> dict:
+        payload = self._payload()
+        payload["name"] = name
+        return payload
+
     def _payload(self) -> dict:
         return {
             "version": CUSTOM_THEME_VERSION,
@@ -413,24 +437,71 @@ class ThemeEditorDialog(tk.Toplevel):
         }
 
     def _save(self) -> None:
-        payload = self._payload()
-        name = payload["name"]
+        """Write the edits back to the theme being edited, or create it.
+
+        On a built-in there is nothing to write back to, so this creates a
+        theme under the name in the box (that's what the box is prefilled
+        with). On a saved theme it updates it in place — including a rename,
+        which keeps the theme rather than leaving the old name behind.
+        """
+        name = self.name_var.get().strip()
+        if not self._name_is_usable(name):
+            return
+        if self.editing and name != self.base:
+            try:
+                rename_custom_theme(self.base, name)
+            except ValueError as exc:
+                messagebox.showwarning("Can't rename", str(exc), parent=self)
+                return
+            self.base = name
+        elif not self.editing and name in THEMES and not messagebox.askyesno(
+            "Replace theme", f"Replace the saved theme “{name}”?", parent=self,
+        ):
+            return
+        self._register_and_apply(self._payload_named(name))
+        self.destroy()
+
+    def _create_new(self) -> None:
+        """Save these colours as a separate theme, under a name of its own."""
+        name = self._prompt_name()
+        if name is None:
+            return
+        name = name.strip()
+        if not self._name_is_usable(name) or (
+            name in THEMES and not messagebox.askyesno(
+                "Replace theme", f"Replace the saved theme “{name}”?", parent=self,
+            )
+        ):
+            return
+        self._register_and_apply(self._payload_named(name))
+        self.destroy()
+
+    def _name_is_usable(self, name: str) -> bool:
+        """Complain (and return False) if `name` can't be a theme."""
         if not name:
             messagebox.showwarning("Name needed", "Give the theme a name.", parent=self)
-            return
+            return False
+        if len(name) > MAX_THEME_NAME:
+            messagebox.showwarning(
+                "Name too long",
+                f"Theme names are at most {MAX_THEME_NAME} characters.",
+                parent=self,
+            )
+            return False
         if name in BUILTIN_THEMES:
             messagebox.showwarning(
                 "Built-in theme",
                 f"“{name}” is a built-in theme. Pick a different name.",
                 parent=self,
             )
-            return
-        if name != self.base and name in THEMES and not messagebox.askyesno(
-            "Replace theme", f"Replace the saved theme “{name}”?", parent=self,
-        ):
-            return
-        self._register_and_apply(payload)
-        self.destroy()
+            return False
+        return True
+
+    def _prompt_name(self) -> str | None:
+        """Ask for a name for a new theme. None if the user backs out."""
+        return _NameDialog(
+            self, initial=unique_theme_name(self.name_var.get() or self.base),
+        ).result
 
     def _register_and_apply(self, payload: dict) -> None:
         register_custom_theme(
@@ -519,6 +590,56 @@ class ThemeEditorDialog(tk.Toplevel):
             "outline": payload.get("outline", 0),
             "palette": normalize_palette(payload.get("palette")),
         })
+
+
+def _within_limit(proposed: str) -> bool:
+    """Entry validator: keep theme names inside the picker's width."""
+    return len(proposed) <= MAX_THEME_NAME
+
+
+class _NameDialog(tk.Toplevel):
+    """Ask for a new theme's name. `result` is None if the user backs out."""
+
+    def __init__(self, parent: tk.Misc, *, initial: str) -> None:
+        super().__init__(parent)
+        self.result: str | None = None
+        self.title("New Theme")
+        self.transient(parent)
+        self.resizable(False, False)
+
+        body = ttk.Frame(self, padding=(14, 12, 14, 8))
+        body.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(body, text="Name for the new theme", style="Muted.TLabel")\
+            .pack(anchor=tk.W)
+        self._var = tk.StringVar(value=initial)
+        entry = ttk.Entry(
+            body, textvariable=self._var, width=MAX_THEME_NAME + 4,
+            validate="key", validatecommand=(self.register(_within_limit), "%P"),
+        )
+        entry.pack(fill=tk.X, pady=(3, 0))
+        entry.selection_range(0, tk.END)
+        entry.focus_set()
+        ttk.Label(
+            body, text=f"Up to {MAX_THEME_NAME} characters.", style="Subtle.TLabel",
+        ).pack(anchor=tk.W, pady=(4, 0))
+
+        buttons = ttk.Frame(self, padding=(14, 0, 14, 12))
+        buttons.pack(fill=tk.X)
+        ttk.Button(buttons, text="Cancel", command=self.destroy)\
+            .pack(side=tk.RIGHT, padx=(8, 0))
+        ttk.Button(
+            buttons, text="Create", style="Accent.TButton", command=self._accept,
+        ).pack(side=tk.RIGHT)
+
+        entry.bind("<Return>", lambda _e: self._accept())
+        self.bind("<Escape>", lambda _e: self.destroy())
+        # Modal: the caller reads `result` as soon as this returns.
+        self.grab_set()
+        self.wait_window(self)
+
+    def _accept(self) -> None:
+        self.result = self._var.get()
+        self.destroy()
 
 
 def _describe_bad_theme(payload) -> str | None:

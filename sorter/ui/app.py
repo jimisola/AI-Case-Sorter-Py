@@ -98,7 +98,8 @@ class MainWindow:
             0, HEADER_HEIGHT // 2, anchor=tk.E, window=self.theme_combo,
         )
         self.theme_new_button = ttk.Button(
-            self.header_canvas, text="+", width=2, command=self.open_theme_editor,
+            self.header_canvas, text="\u2699", width=2,
+            command=self.open_theme_editor,
         )
         self._theme_new_window = self.header_canvas.create_window(
             0, HEADER_HEIGHT // 2, anchor=tk.E, window=self.theme_new_button,

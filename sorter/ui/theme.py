@@ -338,6 +338,9 @@ DEFAULT_THEME = "Dark"
 SETTING_CUSTOM_THEMES = "ui.custom_themes"
 # Bumped if the payload shape ever changes; import refuses anything newer.
 CUSTOM_THEME_VERSION = 1
+# Theme names ride in the title-bar dropdown, which is sized to the longest of
+# them — so they stay short enough not to crowd the title out.
+MAX_THEME_NAME = 12
 
 # Themes whose title bar gets a ben-day dot field printed over the gradient,
 # and the ink to print it in. A theme that isn't listed here gets a plain
@@ -463,12 +466,13 @@ def _is_hex_color(value: str) -> bool:
 
 
 def unique_theme_name(name: str) -> str:
-    """A name that doesn't collide with an existing theme (adds " (2)", …)."""
-    stem = (name or "").strip() or "My theme"
+    """A free theme name within the length limit (adds " (2)", … as needed)."""
+    stem = (name or "").strip()[:MAX_THEME_NAME].strip() or "My theme"
     candidate, n = stem, 2
     existing = {known.casefold() for known in THEMES}
     while candidate.casefold() in existing:
-        candidate = f"{stem} ({n})"
+        suffix = f" ({n})"
+        candidate = f"{stem[:MAX_THEME_NAME - len(suffix)].strip()}{suffix}"
         n += 1
     return candidate
 
@@ -485,6 +489,8 @@ def register_custom_theme(
     name = (name or "").strip()
     if not name:
         raise ValueError("A theme needs a name.")
+    if len(name) > MAX_THEME_NAME:
+        raise ValueError(f"Theme names are at most {MAX_THEME_NAME} characters.")
     if name in BUILTIN_THEMES:
         raise ValueError(f"{name!r} is a built-in theme — pick another name.")
     THEMES[name] = normalize_palette(palette)
@@ -503,6 +509,29 @@ def register_custom_theme(
     else:
         INK_OUTLINE.pop(name, None)
     return name
+
+
+def rename_custom_theme(old: str, new: str) -> str:
+    """Rename a user-made theme in place. Returns the new name.
+
+    A rename is not "save a copy and delete the original": the theme keeps its
+    position in the picker and its options, and only the key changes.
+    """
+    if old not in _custom_themes:
+        raise ValueError(f"{old!r} isn't a theme you can rename.")
+    new = (new or "").strip()
+    if new == old:
+        return old
+    meta = _custom_themes[old]
+    palette = dict(THEMES[old])
+    # Register first: a bad new name must leave the original untouched.
+    register_custom_theme(
+        new, palette,
+        halftone=meta.get("halftone"), outline=meta.get("outline", 0),
+        base=meta.get("based_on"),
+    )
+    unregister_custom_theme(old)
+    return new
 
 
 def unregister_custom_theme(name: str) -> None:
