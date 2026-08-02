@@ -1,0 +1,99 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: pytest (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.python-version == '3.14' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          allow-prereleases: true
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk libgl1 libglib2.0-0 xvfb
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      # opencv-python's cp314 wheels aren't reliably published yet; a resolution
+      # failure here is expected until they land, hence continue-on-error above
+      # rather than a hard skip -- the matrix leg still reports what's true today.
+
+      - name: Run tests (Linux, headless display)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python -m pytest -q --junitxml=build/junit.xml
+
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
+        run: python -m pytest -q --junitxml=build/junit.xml
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: junit-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: build/junit.xml
+
+  windows-launcher-smoke:
+    name: start.bat actually bootstraps on Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      # main.py has no headless flag, so a full run would block on the Tk main
+      # loop. This exercises the bootstrap phase only -- venv creation and
+      # dependency install -- by starting the launcher, giving it a generous
+      # window to finish installing, then killing it and checking it actually
+      # got through setup. It is not a substitute for an interactive run.
+      - name: Launch start.bat and verify it completed dependency install
+        shell: pwsh
+        run: |
+          $proc = Start-Process -FilePath ".\start.bat" -PassThru -WindowStyle Hidden
+          $deadline = (Get-Date).AddMinutes(5)
+          while ((Get-Date) -lt $deadline) {
+            if (Test-Path ".installed") { break }
+            if ($proc.HasExited) { break }
+            Start-Sleep -Seconds 5
+          }
+          $installed = Test-Path ".installed"
+          if (-not $proc.HasExited) {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          }
+          if (-not (Test-Path ".venv")) {
+            Write-Error "start.bat did not create .venv"
+            exit 1
+          }
+          if (-not $installed) {
+            Write-Error "start.bat did not finish installing dependencies within 5 minutes (exited early: $($proc.HasExited))"
+            exit 1
+          }
+          Write-Host "start.bat created .venv and finished installing dependencies -- bootstrap phase succeeded."
