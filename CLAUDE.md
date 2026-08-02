@@ -342,6 +342,9 @@ opt-in), `dialog_install_torch` (pip-installs torch/torchvision into the venv),
 HTML report + history), `dialog_model_images` + `dialog_image_preview` (training
 image browser/reclassify/delete), `dialog_share_model` (publish to community),
 `dialog_slot_template` (new / rename / delete a sorting template),
+`dialog_theme_editor` (build a theme from the active one: a color picker per
+palette role, a canvas preview of a miniature app, and JSON export/import —
+reached from the `+` beside the title-bar theme picker),
 `dialog_update` (release notes → download progress → "Restart to update"; §7).
 
 ### Shared UI infrastructure
@@ -382,6 +385,17 @@ image browser/reclassify/delete), `dialog_share_model` (publish to community),
     `action`/`danger` (`tests/test_theme.py` enforces both rules).
   - **`PALETTE` is mutated in place** on a switch. Read it at call time
     (`PALETTE["bg_card"]`); never copy a color into a module-level constant.
+  - **User-made themes.** `BUILTIN_THEMES` is what ships; `THEMES` is the live
+    registry — built-ins plus whatever the theme editor has saved.
+    `register_custom_theme` adds one (and its halftone/outline options),
+    `custom_themes_payload` is what the app persists to the
+    `ui.custom_themes` setting, and `load_custom_themes` re-registers them at
+    startup, before the saved theme name is resolved. From then on a user
+    palette is an ordinary entry in `THEMES` — nothing downstream knows the
+    difference. `normalize_palette` is the gate: it fills gaps from a base
+    theme, drops unknown keys and non-colors, and forces `success`/`error`
+    back onto `action`/`danger`, so neither a hand-edited settings row nor an
+    imported file can produce a broken palette.
   - **Hue is meaning.** Dark keeps its chrome (window, panels, cards, inputs,
     borders, text, focus/selection tints) **neutral grayscale**, reserving hue
     for action buttons (`action*` green = primary/go, `update*` blue = refresh
@@ -389,7 +403,8 @@ image browser/reclassify/delete), `dialog_share_model` (publish to community),
     The tinted themes keep the same discipline internally: their surfaces are
     one low-saturation family so the action buttons stay the most saturated
     thing on screen. Don't add a saturated surface to any theme.
-- **`widgets.py`** — `ScrollableFrame`, `ImagePanel` (shows BGR numpy frames),
+- **`widgets.py`** — `ScrollableFrame` (pass `viewport=(w, h)` to fix how much
+  is visible and let the rest scroll), `ImagePanel` (shows BGR numpy frames),
   `NumericField`, labeled-entry/button-row helpers.
 - **`monitor.py`** — detachable history window: ring buffer of recent
   classifications with a color "snake" trailing the latest. Subscribes `run/history`.

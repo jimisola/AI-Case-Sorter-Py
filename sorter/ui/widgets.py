@@ -50,7 +50,9 @@ class NumericField(ttk.Frame):
 class ScrollableFrame(ttk.Frame):
     """ttk.Frame whose content is a vertically scrollable inner frame.
 
-    Add the actual tab content to ``self.body``. The body is sized to match
+    Add the actual tab content to ``self.body``. Pass ``viewport=(w, h)``
+    to fix how much of it is visible at once; without it the frame is as big
+    as its content and scrolling only kicks in when the window is too small. The body is sized to match
     the canvas width (so ``fill=X`` children get the right size) and grows
     to at least the canvas height (so ``expand=True`` children still fill
     available space). When the content's natural height exceeds the
@@ -58,7 +60,13 @@ class ScrollableFrame(ttk.Frame):
     displays reach controls that would otherwise be clipped.
     """
 
-    def __init__(self, parent: tk.Misc, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        parent: tk.Misc,
+        *,
+        viewport: tuple[int, int] | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(parent, **kwargs)
         self._canvas = tk.Canvas(
             self,
@@ -66,6 +74,11 @@ class ScrollableFrame(ttk.Frame):
             bg=PALETTE["bg_surface"],
             borderwidth=0,
         )
+        if viewport is not None:
+            # Size the *canvas*, not the frame: sizing the frame and turning
+            # off propagation would let the canvas (packed to expand) eat the
+            # scrollbar's width.
+            self._canvas.configure(width=viewport[0], height=viewport[1])
         self._scrollbar = ttk.Scrollbar(
             self, orient=tk.VERTICAL, command=self._canvas.yview,
         )

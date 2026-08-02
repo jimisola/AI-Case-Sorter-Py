@@ -69,7 +69,9 @@ The app can predict a headstamp in one of two modes:
   community-published models.
 - **Themes** — pick Dark, Light, Sepia, Midnight Blue, Gothic, or Comic Book
   from the dropdown in the title bar. The change applies immediately and is
-  remembered.
+  remembered. The **+** beside it opens a theme editor: start from the theme
+  you're on, set any color you like with a live preview, and export or import
+  your themes as JSON to share them.
 - A **serial emulator** so you can run and explore the app with no hardware
   attached.
 

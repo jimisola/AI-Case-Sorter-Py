@@ -19,6 +19,7 @@ from tkinter import ttk  # noqa: E402
 from sorter.ui import theme  # noqa: E402
 from sorter.ui.theme import (  # noqa: E402
     DEFAULT_THEME,
+    SETTING_THEME,
     HALFTONE_INK,
     INK_OUTLINE,
     PALETTE,
@@ -330,8 +331,8 @@ def _stub_window(root, db=None):
 
     class _StubWindow:
         _layout_page = MainWindow._layout_page
-        _load_saved_theme = MainWindow._load_saved_theme
-        _save_theme = MainWindow._save_theme
+        _load_setting = MainWindow._load_setting
+        _save_setting = MainWindow._save_setting
         _on_theme_selected = MainWindow._on_theme_selected
         _place_theme_picker = MainWindow._place_theme_picker
         _refresh_status_indicators = MainWindow._refresh_status_indicators
@@ -342,7 +343,7 @@ def _stub_window(root, db=None):
             self.root = root
             self.db = db
             self.status = ""
-            self.fonts = apply_theme(root, theme=self._load_saved_theme())
+            self.fonts = apply_theme(root, theme=self._load_setting(SETTING_THEME))
             self.theme_name = current_theme()
             self.theme_var = tk.StringVar(value=self.theme_name)
             self.header_canvas = tk.Canvas(root, height=HEADER_HEIGHT)
@@ -359,6 +360,10 @@ def _stub_window(root, db=None):
             )
             self._theme_window = self.header_canvas.create_window(
                 0, HEADER_HEIGHT // 2, anchor=tk.E, window=self.theme_combo,
+            )
+            self.theme_new_button = ttk.Button(self.header_canvas, text="+", width=2)
+            self._theme_new_window = self.header_canvas.create_window(
+                0, HEADER_HEIGHT // 2, anchor=tk.E, window=self.theme_new_button,
             )
             self._camera_connected = False
             self._serial_connected = True
@@ -411,7 +416,6 @@ def test_theme_choice_round_trips_through_settings(root) -> None:
     pytest.importorskip("cv2")
     from sorter.db import Database
     from sorter.repository import SettingsRepo
-    from sorter.ui.theme import SETTING_THEME
 
     db = Database()
     db.ensure_initialized()

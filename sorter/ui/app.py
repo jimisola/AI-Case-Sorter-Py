@@ -23,9 +23,11 @@ from .tab_serial import SerialTab
 from .tab_train import TrainTab
 from .theme import (
     PALETTE,
+    SETTING_CUSTOM_THEMES,
     SETTING_THEME,
     apply_theme,
     halftone_ink,
+    load_custom_themes,
     paint_gradient,
     paint_halftone,
     resolve_theme,
@@ -56,7 +58,8 @@ class MainWindow:
         self.root.geometry("1024x768")
         self.root.minsize(960, 660)
 
-        self.theme_name = resolve_theme(self._load_saved_theme())
+        load_custom_themes(self._load_setting(SETTING_CUSTOM_THEMES))
+        self.theme_name = resolve_theme(self._load_setting(SETTING_THEME))
         self.fonts = apply_theme(self.root, theme=self.theme_name)
 
         self.broker: Any | None = None
@@ -93,6 +96,12 @@ class MainWindow:
         self.theme_combo.bind("<<ComboboxSelected>>", self._on_theme_selected)
         self._theme_window = self.header_canvas.create_window(
             0, HEADER_HEIGHT // 2, anchor=tk.E, window=self.theme_combo,
+        )
+        self.theme_new_button = ttk.Button(
+            self.header_canvas, text="+", width=2, command=self.open_theme_editor,
+        )
+        self._theme_new_window = self.header_canvas.create_window(
+            0, HEADER_HEIGHT // 2, anchor=tk.E, window=self.theme_new_button,
         )
         self.header_canvas.bind("<Configure>", self._repaint_header)
 
@@ -507,16 +516,19 @@ class MainWindow:
         )
 
     def _place_theme_picker(self) -> None:
-        """Right-align the theme dropdown and label it, after a paint or resize."""
+        """Lay out [Theme] [dropdown] [+] against the right edge of the bar."""
         canvas = self.header_canvas
         combo = getattr(self, "theme_combo", None)
         if combo is None:
             return
-        width = canvas.winfo_width()
-        canvas.coords(self._theme_window, width - HEADER_PAD, HEADER_HEIGHT // 2)
+        right = canvas.winfo_width() - HEADER_PAD
+        canvas.coords(self._theme_new_window, right, HEADER_HEIGHT // 2)
+        right -= self.theme_new_button.winfo_reqwidth() + 4
+        canvas.coords(self._theme_window, right, HEADER_HEIGHT // 2)
         canvas.tag_raise(self._theme_window)
+        canvas.tag_raise(self._theme_new_window)
         canvas.create_text(
-            width - HEADER_PAD - combo.winfo_reqwidth() - 8,
+            right - combo.winfo_reqwidth() - 8,
             HEADER_HEIGHT // 2,
             anchor=tk.E,
             text="Theme",
@@ -570,14 +582,14 @@ class MainWindow:
 
     # ----- theme --------------------------------------------------------------
 
-    def _load_saved_theme(self) -> str | None:
-        """Theme name persisted from a previous session, if any."""
+    def _load_setting(self, key: str):
+        """Read a settings row, or None if there's no DB / it can't be read."""
         if self.db is None:
             return None
         try:
             from ..repository import SettingsRepo
 
-            return SettingsRepo(self.db).get(SETTING_THEME)
+            return SettingsRepo(self.db).get(key)
         except Exception:
             return None
 
@@ -600,19 +612,36 @@ class MainWindow:
         self._repaint_header()
         self._layout_page(force=True)
         self._refresh_status_indicators()
-        self._save_theme(resolved)
-        self.set_status(f"Theme: {resolved}.")
+        self._save_setting(SETTING_THEME, resolved)
 
-    def _save_theme(self, name: str) -> None:
+    def _save_setting(self, key: str, value) -> None:
         if self.db is None:
             return
         try:
             from ..repository import SettingsRepo
 
-            SettingsRepo(self.db).set(SETTING_THEME, name)
+            SettingsRepo(self.db).set(key, value)
         except Exception:
-            # A theme that can't be persisted still applies for this session.
+            # A preference that can't be persisted still applies this session.
             pass
+
+    def open_theme_editor(self) -> None:
+        """Create a new theme from the active one, or edit a saved one."""
+        from .dialog_theme_editor import ThemeEditorDialog
+
+        ThemeEditorDialog(self.root, app=self)
+
+    def refresh_theme_picker(self) -> None:
+        """Re-read the theme list into the dropdown (after an edit or import)."""
+        self.theme_combo.configure(values=theme_names())
+        self.theme_var.set(self.theme_name)
+        self._place_theme_picker()
+
+    def save_custom_themes(self) -> None:
+        """Persist every user-made theme (the editor calls this after a change)."""
+        from .theme import custom_themes_payload
+
+        self._save_setting(SETTING_CUSTOM_THEMES, custom_themes_payload())
 
     # ----- camera -------------------------------------------------------------
 

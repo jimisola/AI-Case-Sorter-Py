@@ -317,7 +317,7 @@ _COMIC = {
 }
 
 # Display name → palette. Insertion order drives the picker's order.
-THEMES: dict[str, dict[str, str]] = {
+BUILTIN_THEMES: dict[str, dict[str, str]] = {
     "Dark": _DARK,
     "Light": _LIGHT,
     "Sepia": _SEPIA,
@@ -326,7 +326,18 @@ THEMES: dict[str, dict[str, str]] = {
     "Comic Book": _COMIC,
 }
 
+# The live registry: the built-ins above plus whatever the user has saved in
+# the theme editor, appended in load order. Mutated in place by
+# `register_custom_theme` (the module is imported all over the UI).
+THEMES: dict[str, dict[str, str]] = dict(BUILTIN_THEMES)
+
 DEFAULT_THEME = "Dark"
+
+# Settings key holding the user's saved themes: {name: payload}, where the
+# payload is what `custom_theme_payload` returns.
+SETTING_CUSTOM_THEMES = "ui.custom_themes"
+# Bumped if the payload shape ever changes; import refuses anything newer.
+CUSTOM_THEME_VERSION = 1
 
 # Themes whose title bar gets a ben-day dot field printed over the gradient,
 # and the ink to print it in. A theme that isn't listed here gets a plain
@@ -393,6 +404,162 @@ def set_palette(name: str | None) -> dict[str, str]:
     PALETTE.clear()
     PALETTE.update(THEMES[_current_theme])
     return previous
+
+
+# ----- user-made themes -------------------------------------------------------
+#
+# The editor (ui/dialog_theme_editor.py) builds these from an existing theme,
+# and the app registers whatever the settings store holds at startup. They are
+# ordinary entries in THEMES from then on — nothing downstream knows or cares
+# that a palette was made by a user.
+
+# Roles the editor never asks about because they mirror another one. Keeping
+# them derived is what lets `retheme_widgets` resolve a colour to one role.
+DERIVED_ROLES = {"success": "action", "error": "danger"}
+
+_custom_themes: dict[str, dict] = {}
+
+
+def is_custom_theme(name: str) -> bool:
+    return name in _custom_themes
+
+
+def custom_theme_names() -> list[str]:
+    return list(_custom_themes)
+
+
+def editable_roles() -> list[str]:
+    """Palette roles a user can set; the rest are derived from these."""
+    return [key for key in _DARK if key not in DERIVED_ROLES]
+
+
+def normalize_palette(
+    values: "dict | None", base: dict[str, str] | None = None
+) -> dict[str, str]:
+    """Coerce arbitrary input into a full, well-formed palette.
+
+    Unknown keys are dropped, missing ones come from `base` (the default theme
+    if not given), non-colours are ignored, and the derived roles are forced
+    back into step with the ones they mirror. An imported file can therefore be
+    partial or slightly wrong without the app ever seeing a broken palette.
+    """
+    palette = dict(base or _DARK)
+    for key, value in (values or {}).items():
+        if key in palette and isinstance(value, str) and _is_hex_color(value):
+            palette[key] = value.lower()
+    for derived, source in DERIVED_ROLES.items():
+        palette[derived] = palette[source]
+    return palette
+
+
+def _is_hex_color(value: str) -> bool:
+    if not isinstance(value, str) or len(value) != 7 or not value.startswith("#"):
+        return False
+    try:
+        int(value[1:], 16)
+    except ValueError:
+        return False
+    return True
+
+
+def unique_theme_name(name: str) -> str:
+    """A name that doesn't collide with an existing theme (adds " (2)", …)."""
+    stem = (name or "").strip() or "My theme"
+    candidate, n = stem, 2
+    existing = {known.casefold() for known in THEMES}
+    while candidate.casefold() in existing:
+        candidate = f"{stem} ({n})"
+        n += 1
+    return candidate
+
+
+def register_custom_theme(
+    name: str,
+    palette: dict[str, str],
+    *,
+    halftone: str | None = None,
+    outline: int = 0,
+    base: str | None = None,
+) -> str:
+    """Add (or replace) a user-made theme. Returns the name it registered under."""
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("A theme needs a name.")
+    if name in BUILTIN_THEMES:
+        raise ValueError(f"{name!r} is a built-in theme — pick another name.")
+    THEMES[name] = normalize_palette(palette)
+    _custom_themes[name] = {
+        "version": CUSTOM_THEME_VERSION,
+        "based_on": base,
+        "halftone": halftone if (halftone and _is_hex_color(halftone)) else None,
+        "outline": max(0, min(4, int(outline or 0))),
+    }
+    if _custom_themes[name]["halftone"]:
+        HALFTONE_INK[name] = _custom_themes[name]["halftone"]
+    else:
+        HALFTONE_INK.pop(name, None)
+    if _custom_themes[name]["outline"]:
+        INK_OUTLINE[name] = _custom_themes[name]["outline"]
+    else:
+        INK_OUTLINE.pop(name, None)
+    return name
+
+
+def unregister_custom_theme(name: str) -> None:
+    """Forget a user-made theme. Built-ins are left alone."""
+    if name not in _custom_themes:
+        return
+    _custom_themes.pop(name, None)
+    THEMES.pop(name, None)
+    HALFTONE_INK.pop(name, None)
+    INK_OUTLINE.pop(name, None)
+
+
+def custom_theme_payload(name: str) -> dict:
+    """The storable / exportable form of a user-made theme."""
+    meta = _custom_themes[name]
+    return {
+        "version": CUSTOM_THEME_VERSION,
+        "name": name,
+        "based_on": meta.get("based_on"),
+        "halftone": meta.get("halftone"),
+        "outline": meta.get("outline", 0),
+        "palette": dict(THEMES[name]),
+    }
+
+
+def custom_themes_payload() -> dict[str, dict]:
+    """Every user-made theme, keyed by name — what the app persists."""
+    return {name: custom_theme_payload(name) for name in _custom_themes}
+
+
+def load_custom_themes(stored: "dict | None") -> list[str]:
+    """Replace the registered custom themes with `stored`. Returns their names.
+
+    Anything unreadable is skipped rather than raising: a corrupt settings row
+    must not stop the app from starting.
+    """
+    for name in list(_custom_themes):
+        unregister_custom_theme(name)
+    loaded: list[str] = []
+    if not isinstance(stored, dict):
+        return loaded
+    for key, payload in stored.items():
+        if not isinstance(payload, dict):
+            continue
+        try:
+            loaded.append(
+                register_custom_theme(
+                    payload.get("name") or key,
+                    normalize_palette(payload.get("palette")),
+                    halftone=payload.get("halftone"),
+                    outline=payload.get("outline", 0),
+                    base=payload.get("based_on"),
+                )
+            )
+        except (ValueError, TypeError):
+            continue
+    return loaded
 
 
 def row_style(card_style: str) -> str:
