@@ -1,0 +1,33 @@
+[changelog]
+header = ""
+body = """
+{% for group, commits in commits | group_by(attribute="group") %}\
+### {{ group | upper_first }}
+{% for commit in commits %}\
+- {{ commit.message | upper_first }}{% if commit.remote.pr_number %} (#{{ commit.remote.pr_number }}){% endif %}
+
+{% endfor %}\
+{% endfor %}\
+"""
+trim = true
+footer = ""
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+commit_parsers = [
+  { message = "^feat", group = "Features" },
+  { message = "^fix", group = "Bug Fixes" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Refactoring" },
+  { message = "^chore", group = "Miscellaneous" },
+  { message = "^docs", group = "Documentation" },
+  { message = "^test", group = "Testing" },
+  { message = "^security", group = "Security" },
+  { message = "^style", group = "Style" },
+  { message = "^ci", group = "CI/CD", skip = true },
+  { message = "^build", group = "Build", skip = true },
+]
+filter_commits = false
+tag_pattern = "[0-9].*"
+sort_commits = "newest"

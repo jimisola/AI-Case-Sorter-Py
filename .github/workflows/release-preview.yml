@@ -1,0 +1,80 @@
+name: Release Preview
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Get latest tag
+        id: latest
+        run: |
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "(no tags yet)")
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Compute next version via git-cliff
+        id: next
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
+        with:
+          config: cliff.toml
+          args: --bumped-version
+        env:
+          OUTPUT: /dev/null
+
+      - name: Generate draft release notes
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
+        with:
+          config: cliff.toml
+          args: --latest --unreleased --strip all
+        env:
+          OUTPUT: NOTES.md
+
+      - name: List commits since latest tag
+        id: commits
+        run: |
+          LATEST="${{ steps.latest.outputs.tag }}"
+          if [ "$LATEST" = "(no tags yet)" ]; then
+            COMMITS=$(git log --format="- %h %s" | head -20)
+          else
+            COMMITS=$(git log "${LATEST}..HEAD" --format="- %h %s")
+          fi
+          {
+            echo "COMMITS<<EOF"
+            echo "$COMMITS"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Write job summary
+        run: |
+          LATEST="${{ steps.latest.outputs.tag }}"
+          NEXT="${{ steps.next.outputs.version }}"
+          REPO="${{ github.server_url }}/${{ github.repository }}"
+
+          {
+            echo "## Release Preview"
+            echo ""
+            echo "| | Value |"
+            echo "|---|---|"
+            echo "| Latest tag | \`${LATEST}\` |"
+            echo "| Next version (git-cliff) | \`${NEXT}\` |"
+            echo ""
+            echo "### Commits since \`${LATEST}\`"
+            echo ""
+            echo "$COMMITS"
+            echo ""
+            echo "### Draft release notes"
+            echo ""
+            cat NOTES.md
+            echo ""
+            echo "[-> GitHub Releases page](${REPO}/releases)"
+          } >> "$GITHUB_STEP_SUMMARY"

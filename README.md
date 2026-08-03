@@ -254,6 +254,7 @@ and point `CASESORTER_API_CA_BUNDLE` at it.
   changes.
 - [`CLAUDE.md`](CLAUDE.md) — architecture map for contributors and AI coding
   assistants (layers, event bus, module reference, UI tabs, data layout).
+- [`RELEASING.md`](RELEASING.md) — how a release gets cut, for maintainers.
 
 ---
 
