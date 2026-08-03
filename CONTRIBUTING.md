@@ -21,7 +21,12 @@ By participating in this project you agree to abide by our
 
 ## Development setup
 
-Requires **Python 3.12+**.
+Requires **some Python 3** already on your machine — new enough to run
+`bootstrap.py` itself, which is not a strict requirement, since its whole job
+is to provision the app's *actual* interpreter separately via
+[uv](https://docs.astral.sh/uv/). If you don't have uv yet, the launch
+scripts install it automatically (into a project-local `.uv/`, not
+system-wide) on first run.
 
 **Linux / macOS**
 ```bash
@@ -30,15 +35,19 @@ cd AI-Case-Sorter-Py
 ./start.sh
 ```
 
-**Windows:** run `start.bat`. Or manage your own environment:
+**Windows:** run `start.bat`.
+
+**Prefer to drive `uv` yourself?**
 ```bash
-pip install -r requirements.txt pytest
-python main.py
+uv sync              # dependencies + dev tools (pytest, ruff) from uv.lock
+uv run python main.py
 ```
+`uv sync`/`uv run` resolve against the committed `uv.lock`, so this is
+deterministic — no separate "install deps" step to remember or forget.
 
 Local training/inference additionally needs PyTorch (optional):
 ```bash
-pip install ".[ml]"      # torch + torchvision
+uv sync --extra ml      # torch + torchvision
 ```
 
 ### No hardware? Use the emulator
@@ -49,13 +58,15 @@ and the UI without a physical sorter attached.
 ## Running the tests
 
 ```bash
-pytest
+uv run pytest
 ```
 
-Around 200 tests cover the non-UI logic; please run them before opening a PR. The
-torch-dependent tests skip automatically when PyTorch isn't installed. The UI
-itself is not covered by automated tests, so smoke-test UI changes by running the
-app.
+Around 500 tests cover the non-UI logic; please run them before opening a PR.
+The torch-dependent tests skip automatically when PyTorch isn't installed. The
+UI itself is not covered by automated tests, so smoke-test UI changes by
+running the app. CI (`.github/workflows/build.yml`) runs the same suite across
+a Python version matrix on every push and PR — treat a red CI run the same as
+a local test failure, not as something to wait out.
 
 ## Coding guidelines
 
@@ -63,11 +74,18 @@ app.
   threading model, persistence, UI tabs). **Keep it current:** if you add a tab,
   change the data model, or move a subsystem boundary, update `CLAUDE.md` in the
   same change.
-- Match the style of the surrounding code — naming, type hints, comment density.
+- **Lint and format with [ruff](https://docs.astral.sh/ruff/)** before pushing:
+  ```bash
+  uv run ruff check .            # lint
+  uv run ruff format .           # format
+  ```
+  CI runs both (`.github/workflows/lint.yml`) and fails the PR check if either
+  would change anything. Match the style of the surrounding code beyond what
+  ruff enforces too — naming, type hints, comment density.
 - **Threading rule:** never touch Tk widgets off the main thread. Do blocking
   work in a worker/daemon thread and post results through the event bus.
-- **PyTorch is optional and lazily imported** — guard any torch use and don't add
-  it to `requirements.txt` (it's the `[ml]` extra).
+- **PyTorch is optional and lazily imported** — guard any torch use and add it
+  under `[project.optional-dependencies] ml`, not the base dependency list.
 - Keep SQL **parameterized**; never build SQL by string interpolation.
 - Never commit anything under `data/` (it's gitignored and holds local state,
   including credentials).
@@ -78,8 +96,25 @@ app.
 
 1. Branch off `main`.
 2. Keep PRs focused and write clear commit messages.
-3. Run `pytest` (and smoke-test UI changes) before opening the PR.
+3. Run `uv run pytest` and `uv run ruff check .` (and smoke-test UI changes)
+   before opening the PR — CI runs both, but catching it locally is faster.
 4. Describe what changed and why in the PR.
+
+### Commit messages and PR titles: Conventional Commits
+
+Both commit subjects and the PR title must follow
+[Conventional Commits](https://www.conventionalcommits.org/):
+`type(optional-scope): summary`, e.g. `fix(camera): handle missing device on
+enumerate`. A GitHub Action checks the PR title on every push
+(`.github/workflows/check-semantic-pr.yml`); allowed types are `feat`, `fix`,
+`refactor`, `chore`, `security`, `revert`, `test`, `docs`, `perf`, `style`,
+`ci`, `build`. Use `type!:` or a `BREAKING CHANGE:` footer for a breaking
+change.
+
+This isn't just a style preference: commit type drives the automated
+changelog and — once release automation lands — the version number itself.
+A `fix:` that reads like a `feat:` (or vice versa) produces a wrong changelog
+entry and, later, a wrong version bump.
 
 ## Contributions & licensing (DCO)
 
