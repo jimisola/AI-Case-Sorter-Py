@@ -16,6 +16,20 @@
 #
 # Without an app installed, FEEDBACK.md §6 remains the manual fallback.
 #
+# THIS FILE IS IN repository-settings/app FORMAT, not safe-settings format --
+# they look similar but are not interchangeable. Verified against
+# reqstool/.github-private/safe-settings/settings.yml; two concrete differences
+# if this ever moves to safe-settings (which would also mean moving the file
+# into an admin repo, since safe-settings reads from there, not from here):
+#
+#   1. labels: safe-settings nests them under `labels: { include: [...] }`
+#      (and supports `exclude:`); this format takes a flat `labels: [...]`.
+#   2. security: safe-settings has a `repository.security` block with
+#      `enableVulnerabilityAlerts` / `enableAutomatedSecurityFixes`. There is
+#      no equivalent here, so those two stay manual -- see FEEDBACK.md §6.
+#      (For this project the wanted state is alerts ON, automated fixes OFF,
+#      because Renovate owns dependency PRs -- see D13.)
+#
 # NOTE ON BRANCH PROTECTION: the `branches:` block below is commented out on
 # purpose. Requiring an approving review makes it impossible to merge your own
 # PR (GitHub won't let you approve your own), which locks a solo maintainer or
