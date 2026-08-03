@@ -12,13 +12,17 @@ every test controls its own inputs via sys.modules and monkeypatch.
 from __future__ import annotations
 
 import importlib
+import re
 import sys
 from importlib.metadata import PackageNotFoundError
+from pathlib import Path
 from types import ModuleType
 
 import pytest
 
 import sorter
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture(autouse=True)
@@ -63,3 +67,22 @@ def test_falls_back_to_a_literal_placeholder_when_nothing_is_available(monkeypat
     importlib.reload(sorter)
 
     assert sorter.__version__ == "0.0.0+unknown"
+
+
+def test_window_title_is_not_a_hardcoded_version() -> None:
+    """The window title said "v2.0.1" for who knows how long -- a literal
+    unconnected to sorter.__version__ (which was 0.1.0 at the time), to any
+    git tag (there were none), or to pyproject.toml. Users saw one number
+    while the in-app updater compared a completely different one. Deriving
+    the version from git tags is pointless if a string literal in the UI can
+    still drift away from it, so this guards the one place that did."""
+    source = (ROOT / "sorter" / "ui" / "app.py").read_text(encoding="utf-8")
+    title_calls = re.findall(r"self\.root\.title\((.*?)\)", source)
+
+    assert title_calls, "expected a self.root.title(...) call in app.py"
+    for call in title_calls:
+        assert "__version__" in call, (
+            f"window title {call!r} does not derive from __version__ -- "
+            "hardcoding a version here is exactly the drift hatch-vcs exists to remove"
+        )
+        assert not re.search(r"\bv?\d+\.\d+\.\d+\b", call), f"window title {call!r} contains a hardcoded version number"
