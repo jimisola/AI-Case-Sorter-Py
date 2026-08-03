@@ -1,12 +1,20 @@
 [changelog]
 header = ""
+# `striptags` removes the `<!-- N -->` sort prefixes from group names.
+# git-cliff orders groups by their raw string, so without a prefix they come
+# out alphabetical -- which buried Features mid-list behind Bug Fixes and
+# Documentation. The prefix is an HTML comment, so it stays invisible in
+# rendered markdown even for a consumer that doesn't strip it.
+#
+# `commit.breaking` is what surfaces a breaking change. Without it a `feat!:`
+# renders identically to an ordinary `feat:` -- the single most important line
+# in a release note, silently indistinguishable from the rest.
 body = """
 {% for group, commits in commits | group_by(attribute="group") %}\
-### {{ group | upper_first }}
+### {{ group | striptags | trim | upper_first }}
 {% for commit in commits %}\
-- {{ commit.message | upper_first }}{% if commit.remote.pr_number %} (#{{ commit.remote.pr_number }}){% endif %}
-
-{% endfor %}\
+- {% if commit.breaking %}**BREAKING** {% endif %}{{ commit.message | upper_first }}{% if commit.remote.pr_number %} (#{{ commit.remote.pr_number }}){% endif %}
+{% endfor %}
 {% endfor %}\
 """
 trim = true
@@ -15,24 +23,38 @@ footer = ""
 [git]
 conventional_commits = true
 filter_unconventional = true
+
+# Order is deliberate, not alphabetical: Security first because for an app with
+# an auto-updater and a community backend, "is there a fix I need urgently?"
+# outranks "what's new?". Then Features and Bug Fixes, then the rest.
 commit_parsers = [
-  { message = "^feat", group = "Features" },
-  { message = "^fix", group = "Bug Fixes" },
-  { message = "^perf", group = "Performance" },
-  { message = "^refactor", group = "Refactoring" },
-  { message = "^chore", group = "Miscellaneous" },
-  { message = "^docs", group = "Documentation" },
-  { message = "^test", group = "Testing" },
-  { message = "^security", group = "Security" },
-  # `revert` is an allowed PR type (check-semantic-pr.yml) and git-cliff
-  # already auto-derives a "Revert" section from the type without this line
-  # -- verified, not assumed. Stated explicitly anyway so every allowed type
-  # is accounted for here rather than some relying on inference.
-  { message = "^revert", group = "Reverts" },
-  { message = "^style", group = "Style" },
+  { message = "^security", group = "<!-- 0 -->Security" },
+  { message = "^feat", group = "<!-- 1 -->Features" },
+  { message = "^fix", group = "<!-- 2 -->Bug Fixes" },
+  { message = "^perf", group = "<!-- 3 -->Performance" },
+  { message = "^refactor", group = "<!-- 4 -->Refactoring" },
+  { message = "^docs", group = "<!-- 5 -->Documentation" },
+  { message = "^test", group = "<!-- 6 -->Testing" },
+  { message = "^style", group = "<!-- 7 -->Style" },
+  # `revert` is an allowed PR type (check-semantic-pr.yml). git-cliff would
+  # auto-derive a Revert section without this line -- verified -- but it's
+  # stated so all twelve allowed types are accounted for here explicitly.
+  { message = "^revert", group = "<!-- 8 -->Reverts" },
+  { message = "^chore", group = "<!-- 9 -->Miscellaneous" },
+  # Skipped: release notes are for people running the app, not for its build
+  # system. A non-breaking workflow tweak or dependency bump isn't news.
+  # But see protect_breaking_commits below -- `build!:` is very much news.
   { message = "^ci", group = "CI/CD", skip = true },
   { message = "^build", group = "Build", skip = true },
 ]
+
+# Overrides the skips above for breaking changes only. This is load-bearing,
+# not a nicety: this project's own `build!: require Python 3.12` would
+# otherwise be dropped from the release notes entirely, so users upgrading
+# would get no warning that their Python is now too old to run the app.
+protect_breaking_commits = true
+
 filter_commits = false
+# PEP 440, no `v` prefix (0.2.0, 0.2.0rc1) -- see RELEASING.md.
 tag_pattern = "[0-9].*"
 sort_commits = "newest"
