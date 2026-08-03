@@ -1,0 +1,124 @@
+# Repository settings as code.
+#
+# Read by either of two GitHub Apps -- neither is installed by default, and
+# **this file does nothing until one is**:
+#
+#   * repository-settings/app ("Settings")  -- per-repo, works on a personal
+#     repo, reads exactly this path. https://github.com/repository-settings/app
+#   * github/safe-settings                  -- org-scale successor, reads from
+#     an admin repo and needs a GitHub App + an org.
+#     https://github.com/github/safe-settings
+#
+# Kept here regardless, for two reasons: it's the same checklist FEEDBACK.md §6
+# spells out in prose, but declarative and diffable -- settings drift becomes a
+# reviewable change rather than something someone silently clicked; and if an
+# app is ever installed, it applies without being rewritten first.
+#
+# Without an app installed, FEEDBACK.md §6 remains the manual fallback.
+#
+# NOTE ON BRANCH PROTECTION: the `branches:` block below is commented out on
+# purpose. Requiring an approving review makes it impossible to merge your own
+# PR (GitHub won't let you approve your own), which locks a solo maintainer or
+# a fork owner out of their own repo. Uncomment it upstream, where PRs get an
+# actual second pair of eyes -- see the comment on that block.
+
+repository:
+  has_issues: true
+  has_wiki: false
+  has_projects: false
+  has_discussions: true # the issue templates route support questions here
+
+  # Squash-only. Merge commits and rebase both produce histories that break the
+  # one assumption everything else here depends on: that each commit on main is
+  # a Conventional Commits subject git-cliff can derive a version from.
+  allow_squash_merge: true
+  allow_merge_commit: false
+  allow_rebase_merge: false
+
+  # PR_TITLE, not COMMIT_OR_PR_TITLE (GitHub's default). The default uses the
+  # commit subject when a PR has exactly one commit -- so a PR whose title was
+  # checked by check-semantic-pr.yml can still land with an unchecked subject
+  # line. PR_TITLE means the thing that was validated is the thing that lands.
+  squash_merge_commit_title: PR_TITLE
+  squash_merge_commit_message: COMMIT_MESSAGES
+
+  delete_branch_on_merge: true
+  allow_auto_merge: true
+  allow_update_branch: true
+
+# Referenced by .github/labeler.yml, which auto-applies them by changed path.
+# actions/labeler does NOT create labels -- it errors on any that don't exist,
+# so these have to be created before that workflow can work.
+labels:
+  # Subsystem labels, mapped to CLAUDE.md's architecture boundaries.
+  - name: ui
+    color: "1d76db"
+    description: "Tkinter UI: tabs, dialogs, theme"
+  - name: training
+    color: "6f42c1"
+    description: "Model training, local inference, evaluation"
+  - name: hardware
+    color: "b60205"
+    description: "Serial board, camera, image processing"
+  - name: community
+    color: "0e8a16"
+    description: "Community backend, auth, feedback loop"
+  - name: updater
+    color: "fbca04"
+    description: "In-app updater and the Windows installer"
+  - name: launcher
+    color: "d4c5f9"
+    description: "bootstrap.py and the start.sh/start.bat shims"
+  - name: tests
+    color: "c2e0c6"
+    description: "Test suite"
+  - name: ci
+    color: "000000"
+    description: "CI/CD workflows and repo tooling"
+  - name: dependencies
+    color: "0366d6"
+    description: "Dependency updates"
+
+  # GitHub's defaults, restated so this file is the whole picture rather than a
+  # diff against whatever a repo happened to start with.
+  - name: bug
+    color: "d73a4a"
+    description: "Something isn't working"
+  - name: documentation
+    color: "0075ca"
+    description: "Improvements or additions to documentation"
+  - name: enhancement
+    color: "a2eeef"
+    description: "New feature or request"
+  - name: "good first issue"
+    color: "7057ff"
+    description: "Good for newcomers"
+  - name: "help wanted"
+    color: "008672"
+    description: "Extra attention is needed"
+  - name: question
+    color: "d876e3"
+    description: "Further information is requested"
+
+# Uncomment upstream. Deliberately inactive by default -- see the note at the
+# top: required_approving_review_count: 1 prevents a solo maintainer from
+# merging their own PR at all.
+#
+# branches:
+#   - name: main
+#     protection:
+#       required_pull_request_reviews:
+#         required_approving_review_count: 1
+#         dismiss_stale_reviews: true
+#         require_code_owner_reviews: false
+#       required_status_checks:
+#         strict: true
+#         contexts:
+#           - "ruff (check + format)"
+#           - "lint the workflows themselves"
+#           - "pytest (ubuntu-latest, py3.12)"
+#           - "pytest (windows-latest, py3.12)"
+#           - "Validate PR title"
+#       required_conversation_resolution: true
+#       enforce_admins: false
+#       restrictions: null
