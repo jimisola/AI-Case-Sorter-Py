@@ -1,0 +1,114 @@
+name: Publish
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Where to publish (manual runs only)"
+        required: false
+        type: choice
+        options: [testpypi, pypi]
+        default: testpypi
+
+permissions:
+  contents: read
+
+jobs:
+  # Always runs -- on every push to main, not just on a release -- so the
+  # packaging path stays continuously exercised even while PyPI publishing
+  # itself is switched off below. A build that only gets tried once a
+  # release is cut is a build nobody has actually run in weeks by the time
+  # it matters.
+  package:
+    name: Build and check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # only used by the release-upload step below
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      # Caching disabled deliberately: this job's output can end up on PyPI
+      # (via the publish jobs below), so a cache-poisoning risk here is a
+      # supply-chain concern, not just a speed tradeoff -- unlike the routine
+      # test matrix in build.yml, which has no publish step downstream.
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: false
+
+      - name: Build
+        run: uv build
+
+      - name: Check package metadata
+        run: pipx run twine check --strict dist/*
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist
+          path: dist/
+
+      # Attaches the wheel + sdist to the release that triggered this run --
+      # a real "pre-built download" story with zero PyPI dependency, live
+      # regardless of whether publish-to-pypi below is ever turned on.
+      - name: Attach artifacts to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" dist/*
+
+  # Gated behind a repo variable, unset = off, so merging this workflow
+  # changes nothing until a maintainer deliberately opts in (Settings ->
+  # Actions -> Variables -> PYPI_PUBLISH_ENABLED = true). A skipped job
+  # reports as skipped, not failed, and nothing here is in any other job's
+  # `needs:`, so a disabled or failing publish can never block a release.
+  publish-to-testpypi:
+    name: Publish to TestPyPI
+    needs: package
+    if: |
+      (github.event_name == 'release' && vars.PYPI_PUBLISH_ENABLED == 'true') ||
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi')
+    runs-on: ubuntu-latest
+    environment:
+      name: test
+      url: https://test.pypi.org/p/ai-case-sorter-py
+    permissions:
+      id-token: write # required for trusted publishing (OIDC) -- no API token stored
+    steps:
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  publish-to-pypi:
+    name: Publish to PyPI
+    needs: package
+    if: |
+      (github.event_name == 'release' && vars.PYPI_PUBLISH_ENABLED == 'true') ||
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+    runs-on: ubuntu-latest
+    environment:
+      name: prod
+      url: https://pypi.org/p/ai-case-sorter-py
+    permissions:
+      id-token: write # required for trusted publishing (OIDC) -- no API token stored
+    steps:
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          skip-existing: true

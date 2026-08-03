@@ -77,16 +77,47 @@ def test_check_returns_info_when_newer(monkeypatch) -> None:
     assert info.url.endswith("/archive/refs/tags/v0.9.0.zip")
 
 
-def test_check_prefers_a_published_zip_asset(monkeypatch) -> None:
+def test_check_prefers_the_named_app_asset(monkeypatch) -> None:
     assets = [
         {"name": "checksums.txt", "browser_download_url": "https://x/c.txt"},
-        {"name": "casesorter-0.9.0.zip", "browser_download_url": "https://x/app.zip", "size": 4242},
+        {"name": "ai-case-sorter-py-0.9.0.zip", "browser_download_url": "https://x/app.zip", "size": 4242},
     ]
     monkeypatch.setattr(requests, "get", lambda *a, **k: _Resp(200, _release(assets=assets)))
     info = updater.check_for_update(current="0.1.0")
     assert info is not None
     assert info.url == "https://x/app.zip"
     assert info.size == 4242
+
+
+def test_check_ignores_a_stray_zip_asset(monkeypatch) -> None:
+    """A wheel/sdist-publishing release also carries other .zip-ish files
+    (e.g. a Windows packaging artifact, or just an unrelated attachment).
+    Only the exact expected app-archive name should ever be picked -- "first
+    asset ending in .zip" would let any of these silently become the tree
+    unpacked over the app folder."""
+    assets = [
+        {"name": "some-unrelated-thing.zip", "browser_download_url": "https://x/bogus.zip", "size": 999},
+    ]
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _Resp(200, _release(assets=assets)))
+    info = updater.check_for_update(current="0.1.0")
+    assert info is not None
+    # Falls through to the tag source archive, not the stray zip.
+    assert info.url.endswith("/archive/refs/tags/v0.9.0.zip")
+
+
+def test_check_ignores_the_wheel_and_sdist(monkeypatch) -> None:
+    """Confirms the real-world case this hardening exists for: a release
+    with a wheel and sdist (attached by the publish workflow) but no
+    purpose-built app archive falls back correctly, exactly as a release
+    with no assets at all always has."""
+    assets = [
+        {"name": "ai_case_sorter_py-0.9.0-py3-none-any.whl", "browser_download_url": "https://x/w.whl"},
+        {"name": "ai_case_sorter_py-0.9.0.tar.gz", "browser_download_url": "https://x/s.tar.gz"},
+    ]
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _Resp(200, _release(assets=assets)))
+    info = updater.check_for_update(current="0.1.0")
+    assert info is not None
+    assert info.url.endswith("/archive/refs/tags/v0.9.0.zip")
 
 
 def test_check_returns_none_when_current(monkeypatch) -> None:

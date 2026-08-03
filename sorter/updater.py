@@ -11,10 +11,10 @@ The flow is **stage now, apply at next launch**:
 
 Staging never touches the app folder. Windows keeps the venv's ``.pyd``/
 ``.dll`` files (opencv, numpy) locked while the app is running, so replacing
-files in-place is unreliable by construction; the launcher applies the staged
-tree before Python loads anything. That also means a staged update's own
-``requirements.txt`` is in place before the launcher's dependency check runs,
-so dependency changes install on the same restart.
+files in-place is unreliable by construction; bootstrap.py applies the staged
+tree before ``uv sync`` runs. That also means a staged update's own
+``pyproject.toml``/``uv.lock`` are in place before the sync, so dependency
+changes install on the same restart.
 
 Everything in the ``updates/`` tree lives under the data root, which is
 outside the app folder (see ``sorter/paths.py``).
@@ -161,17 +161,27 @@ def _api_base() -> str:
     return (os.environ.get("CASESORTER_UPDATE_API_BASE") or DEFAULT_API_BASE).rstrip("/")
 
 
-def _pick_asset(release: dict[str, Any], tag: str) -> tuple[str, int | None]:
-    """Prefer a published ``.zip`` asset; fall back to the tag source archive.
+def _expected_asset_name(tag: str) -> str:
+    return f"ai-case-sorter-py-{tag.lstrip('vV')}.zip"
 
-    A purpose-built asset lets the maintainer ship a trimmed archive (no tests,
-    no CI config); the source archive means a release with no assets still
-    updates correctly.
+
+def _pick_asset(release: dict[str, Any], tag: str) -> tuple[str, int | None]:
+    """Match the purpose-built app archive by its exact name, not "any .zip".
+
+    A release also carries a wheel and an sdist (see the publish workflow) --
+    neither matches this, since a wheel ends in ``.whl`` and an sdist in
+    ``.tar.gz``. But "the first .zip asset" was never a safe rule on its own:
+    the day anyone attached an unrelated ``.zip`` to a release, in upload
+    order ahead of the real one, it would have silently become the tree
+    unpacked over the app folder. Falls back to the tag source archive if the
+    named asset isn't published, same as before -- a release with no assets
+    still updates correctly.
     """
+    expected = _expected_asset_name(tag)
     for asset in release.get("assets") or []:
         name = str(asset.get("name") or "")
         url = asset.get("browser_download_url")
-        if name.lower().endswith(".zip") and url:
+        if name == expected and url:
             size = asset.get("size")
             return str(url), int(size) if isinstance(size, int) else None
     repo = update_repo()
