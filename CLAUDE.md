@@ -96,28 +96,32 @@ The data root lives **outside** the repo by default — see §6.
 The app separates **hardware I/O**, **control logic**, **persistence**, and
 **UI** into independent, testable layers, glued by a thread-safe event bus.
 
-```
-        ┌───────────────────────── UI (Tkinter, main thread) ─────────────────────────┐
-        │  app.MainWindow  ·  ttk.Notebook of tabs  ·  modal dialogs  ·  theme         │
-        └───────▲───────────────────────────────────────────────────────────▲─────────┘
-                │ subscribes (drained on main thread)        run_worker(fn)  │ spawns
-        ┌───────┴─────────── events.EventBus (Queue-backed pub/sub) ─────────┴─────────┐
-        │  post() from any worker thread → drain() pumps handlers on the Tk main loop  │
-        └───────▲──────────────▲───────────────▲────────────────▲─────────────────────┘
-                │              │               │                │
-        run_controller   serial_broker     camera          training.manager
-        (sort loop,      (UART protocol,   (cv2 grab        (subprocess +
-         daemon thread)   reader+ping       thread)          stdout JSON markers)
-                │         threads)              │                │
-                ▼                               ▼                ▼
-        classifier ──► local_inference (torch)  image_proc    train_convnext.py
-                  └──► api_client (HTTP)         (Hough crop)  (ConvNeXt, separate proc)
+```mermaid
+flowchart TB
+    UI["UI — Tkinter, main thread<br/>app.MainWindow · ttk.Notebook tabs · modal dialogs · theme"]
+    Bus["events.EventBus<br/>Queue-backed pub/sub"]
 
-        Persistence:  config.Config ──► repository.*Repo ──► db.Database (SQLite, WAL)
-        Filesystem:   paths.* defines data/ layout;  model_io (ZIP import/export)
-        Community:    auth.AuthManager (MSAL) ──► community_api.CommunityApi (HTTPS)
-                      feedback.FeedbackService (below-threshold image queue)
+    UI -- "subscribes (drained on main thread)" --> Bus
+    Bus -- "run_worker(fn) spawns" --> UI
+
+    Bus --> RC["run_controller<br/>sort loop, daemon thread"]
+    Bus --> SB["serial_broker<br/>UART protocol, reader+ping threads"]
+    Bus --> CAM["camera<br/>cv2 grab thread"]
+    Bus --> TM["training.manager<br/>subprocess + stdout JSON markers"]
+
+    RC --> CLF["classifier"]
+    CLF --> LI["local_inference (torch)"]
+    CLF --> API["api_client (HTTP)"]
+
+    CAM --> IP["image_proc<br/>Hough crop"]
+
+    TM --> TC["train_convnext.py<br/>ConvNeXt, separate process"]
 ```
+
+- **Persistence:** `config.Config` → `repository.*Repo` → `db.Database` (SQLite, WAL)
+- **Filesystem:** `paths.*` defines the `data/` layout; `model_io` handles ZIP import/export
+- **Community:** `auth.AuthManager` (MSAL) → `community_api.CommunityApi` (HTTPS);
+  `feedback.FeedbackService` owns the below-threshold image queue
 
 ### The event bus (`sorter/events.py`)
 A single `EventBus` with a thread-safe `Queue`. Workers call `bus.post(topic,
@@ -490,16 +494,15 @@ a release** — otherwise the updater re-offers a release users already have.
 
 **The flow is stage now, apply at next launch:**
 
-```
-updater.check_for_update()   GET /releases/latest, compare tags   [needs requests]
-        ↓
-updater.stage_update()       download → verify → <data>/updates/pending/
-        ↓                    (the app folder is NOT touched)
-     [restart]
-        ↓
-main.py --apply-update       run by bootstrap.py BEFORE `uv sync`   [stdlib ONLY]
-        ↓
-sorter.apply_update          backup → copy over app dir → prune → clear pending
+```mermaid
+flowchart TD
+    A["updater.check_for_update()<br/>GET /releases/latest, compare tags — needs requests"]
+    B["updater.stage_update()<br/>download → verify → &lt;data&gt;/updates/pending/<br/>(the app folder is NOT touched)"]
+    C(["restart"])
+    D["main.py --apply-update<br/>run by bootstrap.py BEFORE uv sync — stdlib ONLY"]
+    E["sorter.apply_update<br/>backup → copy over app dir → prune → clear pending"]
+
+    A --> B --> C --> D --> E
 ```
 
 - **`updater.py`** — check/download/stage. Traversal-safe extraction (same
@@ -566,8 +569,12 @@ sorter.apply_update          backup → copy over app dir → prune → clear pe
   404s and there is no in-band way to tell that apart from "no releases yet"
   (the API returns 404 for both). If the repo must stay private, distribution
   has to move off GitHub — see `installer/README.md`.
-- **No CI yet.** Run `pytest` before pushing. Most UI modules need a display —
-  `xvfb-run -a python -m pytest` covers them on a headless box; without
-  tkinter installed those modules skip rather than fail.
+- **CI** (`.github/workflows/build.yml`) runs `pytest` across a
+  [3.12, 3.13, 3.14] × [Linux, Windows] matrix on every push and PR, plus a
+  `launcher-smoke` job that actually runs `start.sh`/`start.bat` end to end.
+  Still run `pytest` locally before pushing — faster feedback than waiting on
+  CI. Most UI modules need a display — `xvfb-run -a pytest` covers them on a
+  headless box; without tkinter installed those modules skip rather than
+  fail.
 - See **`OPEN_SOURCE_READINESS.md`** for the open-source readiness assessment and
   **`CONTRIBUTING.md`** for how to set up and contribute.
