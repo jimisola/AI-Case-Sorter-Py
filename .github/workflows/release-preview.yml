@@ -22,14 +22,22 @@ jobs:
           TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "(no tags yet)")
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
+      # Installed directly rather than via orhun/git-cliff-action for this
+      # step: the action's own `version` output is not "the version --args
+      # computed" -- it always re-runs git-cliff --context and reports
+      # .[0].version from that (the latest *existing* release), ignoring
+      # whatever args were passed. Confirmed the hard way: this repo has no
+      # tags yet, so that came back empty. --bumped-version's own stdout is
+      # what's actually wanted, captured directly.
+      - name: Install git-cliff
+        run: |
+          curl -fsSL https://github.com/orhun/git-cliff/releases/download/v2.13.1/git-cliff-2.13.1-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz --strip-components=1 -C /usr/local/bin git-cliff-2.13.1/git-cliff
+
       - name: Compute next version via git-cliff
         id: next
-        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
-        with:
-          config: cliff.toml
-          args: --bumped-version
-        env:
-          OUTPUT: /dev/null
+        run: |
+          echo "version=$(git-cliff --config cliff.toml --bumped-version)" >> "$GITHUB_OUTPUT"
 
       - name: Generate draft release notes
         uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
@@ -41,8 +49,9 @@ jobs:
 
       - name: List commits since latest tag
         id: commits
+        env:
+          LATEST: ${{ steps.latest.outputs.tag }}
         run: |
-          LATEST="${{ steps.latest.outputs.tag }}"
           if [ "$LATEST" = "(no tags yet)" ]; then
             COMMITS=$(git log --format="- %h %s" | head -20)
           else
@@ -55,11 +64,11 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Write job summary
+        env:
+          LATEST: ${{ steps.latest.outputs.tag }}
+          NEXT: ${{ steps.next.outputs.version }}
+          REPO: ${{ github.server_url }}/${{ github.repository }}
         run: |
-          LATEST="${{ steps.latest.outputs.tag }}"
-          NEXT="${{ steps.next.outputs.version }}"
-          REPO="${{ github.server_url }}/${{ github.repository }}"
-
           {
             echo "## Release Preview"
             echo ""
