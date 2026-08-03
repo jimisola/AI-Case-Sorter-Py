@@ -31,11 +31,18 @@ What it does, in order:
      only now there's no hash-based marker at all, because `uv sync`
      reconciles against the venv's actual contents rather than trusting a
      proxy for them.
-  4. `uv sync --frozen` -- takes the committed uv.lock as-is and never
-     re-resolves on a user's machine, so launches stay deterministic and
-     offline-safe. (CI uses `--locked` instead, which fails if the lock has
-     drifted from pyproject.toml -- see .github/workflows/build.yml.)
-  5. Launch the app: `uv run --frozen python main.py <forwarded args>`.
+  4. `uv sync --frozen --no-install-project` -- --frozen takes the committed
+     uv.lock as-is and never re-resolves on a user's machine, so launches
+     stay deterministic and offline-safe (CI uses `--locked` instead, which
+     fails if the lock has drifted from pyproject.toml -- see
+     .github/workflows/build.yml). --no-install-project skips building the
+     sorter package itself: main.py imports it straight from the source
+     tree, so it was never needed for that, and building it is actively
+     harmful when there's no .git to derive a version from (see
+     pyproject.toml's [tool.hatch.version] and sorter/__init__.py).
+  5. Launch the app: `uv run --no-sync python main.py <forwarded args>`.
+     --no-sync, not --frozen: `uv run` syncs implicitly by default even with
+     --frozen, which would redo the very build step 4 skipped.
 """
 
 from __future__ import annotations
@@ -195,7 +202,7 @@ def ensure_linux_runtime_libs(uv: str, auto_install: bool) -> None:
         return
 
     probe = subprocess.run(
-        [uv, "run", "--frozen", "python", "-c", "import cv2"],
+        [uv, "run", "--no-sync", "python", "-c", "import cv2"],
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -250,11 +257,25 @@ def main(argv: list[str] | None = None) -> int:
     apply_pending_update()
 
     log("Syncing dependencies with uv ...")
-    subprocess.run([uv, "sync", "--frozen"], cwd=ROOT, check=True)
+    # --no-install-project: don't build/install the sorter package itself as
+    # part of the sync. main.py imports it straight from the source tree
+    # (sys.path.insert), so it was never needed for that -- and building it
+    # is actively harmful in exactly the context this matters most: a
+    # downloaded release has no .git, and hatch-vcs's build hook (see
+    # pyproject.toml) errors out without one unless a fallback is
+    # configured, in which case it *overwrites* sorter/_version.py with that
+    # fallback -- clobbering the real version the release workflow baked in.
+    # Verified this exact failure mode against a real git-less copy of this
+    # repo before adding the flag, not assumed.
+    subprocess.run([uv, "sync", "--frozen", "--no-install-project"], cwd=ROOT, check=True)
 
     ensure_linux_runtime_libs(uv, auto_install)
 
-    result = subprocess.run([uv, "run", "--frozen", "python", "main.py", *forward_args], cwd=ROOT)
+    # --no-sync, not --frozen: `uv run` syncs implicitly by default even with
+    # --frozen (frozen only constrains *how* it syncs, not whether), which
+    # would silently redo the project build this function just went out of
+    # its way to skip. --no-sync trusts the sync above and skips its own.
+    result = subprocess.run([uv, "run", "--no-sync", "python", "main.py", *forward_args], cwd=ROOT)
     return result.returncode
 
 

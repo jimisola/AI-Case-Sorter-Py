@@ -487,10 +487,32 @@ There is no git dependency anywhere in this path: a release ZIP over HTTPS has
 the same trust anchor as `git pull` over HTTPS, and the source tree is ~1 MB, so
 delta transfer buys nothing.
 
-**Version:** `sorter/__init__.py.__version__` is the single source.
-`pyproject.toml` reads it via `[tool.hatch.version]`, and the updater
-compares it against the latest release tag. **Bump it in the same commit you tag
-a release** — otherwise the updater re-offers a release users already have.
+**Version:** derived from the git tag at build time (`pyproject.toml`'s
+`[tool.hatch.version] source = "vcs"`, via hatch-vcs), not hand-bumped —
+removes the old "forgot to bump `__version__` in the release commit" footgun
+entirely; the manual step just doesn't exist anymore. hatch-vcs's build hook
+writes `sorter/_version.py` (gitignored, generated), which `sorter/__init__.py`
+imports as its first choice, falling back to `importlib.metadata` (an
+actual pip/uv install from a wheel) and finally a literal placeholder if
+neither is available — see that file's comments for why each tier exists.
+
+Two things this makes load-bearing that weren't before:
+
+- **hatch-vcs needs `.git` to derive a version, and a downloaded release has
+  none.** `bootstrap.py`'s `uv sync`/`uv run` therefore run with
+  `--no-install-project`/`--no-sync` specifically so the build hook never
+  fires for an end user at all — confirmed empirically that running it
+  without `.git` either hard-crashes the build, or (with a
+  `fallback-version` configured) silently *overwrites* an already-correct
+  `sorter/_version.py` with that fallback. See `bootstrap.py`'s docstring.
+- **The version has to reach the user some other way, then.** `publish.yml`
+  builds the app archive `updater.py`'s `_pick_asset` looks for by exact
+  name (`ai-case-sorter-py-<tag>.zip`) from a real `git archive` of the
+  tagged commit, with the `sorter/_version.py` that same CI run's `uv build`
+  step generated (real `.git` present there) copied in explicitly, since
+  `git archive` never includes untracked files. That's what makes a
+  downloaded release able to report its own version correctly with no `.git`
+  anywhere in it.
 
 **The flow is stage now, apply at next launch:**
 

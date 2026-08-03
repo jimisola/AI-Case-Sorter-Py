@@ -1,7 +1,8 @@
 [project]
 name = "ai-case-sorter-py"
-# Single-sourced from sorter/__init__.py so the packaged version, the version
-# the in-app updater compares against, and the release tag can't drift apart.
+# Derived from the git tag at build time (hatch-vcs, below) so the packaged
+# version and the release tag can never drift apart -- see sorter/__init__.py
+# for how the running app resolves this without needing .git itself.
 dynamic = ["version"]
 description ="Cross-platform desktop app that sorts spent brass cartridge casings by headstamp using a camera, an image classifier, and a serial-connected sorting machine."
 readme = "README.md"
@@ -44,11 +45,26 @@ Issues = "https://github.com/sjseth/AI-Case-Sorter-Py/issues"
 ml = ["torch>=2.2", "torchvision>=0.17"]
 
 [build-system]
-requires = ["hatchling>=1.27"]
+requires = ["hatchling>=1.27", "hatch-vcs>=0.4"]
 build-backend = "hatchling.build"
 
+# Version comes from the git tag at build time -- only ever meaningful when
+# .git is actually present (CI, a real clone). fallback-version keeps a
+# git-less build (an extracted release archive with no .git) from hard
+# erroring; bootstrap.py's `--no-install-project`/`--no-sync` flags exist
+# specifically so this hook never runs at all for an end user, since running
+# it with no .git would silently overwrite a correctly pre-baked
+# sorter/_version.py with this fallback -- verified that failure mode
+# directly before choosing this design; see bootstrap.py's docstring.
 [tool.hatch.version]
-path = "sorter/__init__.py"
+source = "vcs"
+fallback-version = "0.0.0"
+
+[tool.hatch.version.raw-options]
+local_scheme = "no-local-version"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "sorter/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["sorter"]
