@@ -101,3 +101,8 @@ addopts = "-ra"
 # garbage collected on a worker thread calls into Tcl from the wrong thread
 # and can hang or abort the process. Do not add pytest-xdist or any plugin
 # that parallelizes or reorders test execution.
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
