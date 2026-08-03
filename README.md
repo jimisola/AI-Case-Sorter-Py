@@ -228,9 +228,9 @@ lives) from the committed lockfile before running, so there's no separate
 install step. CI (`.github/workflows/build.yml`) runs the same suite across a
 Python version matrix on every push and PR.
 
-Please run `pytest` before opening a PR. The UI itself is not covered by
-automated tests. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup and
-guidelines, and [`SECURITY.md`](SECURITY.md) to report a vulnerability.
+Please run `pytest` before opening a PR. Most of the UI isn't covered by automated
+tests — smoke-test UI changes by running the app. See [`CONTRIBUTING.md`](CONTRIBUTING.md)
+for setup and guidelines, and [`SECURITY.md`](SECURITY.md) to report a vulnerability.
 
 ### Pointing at a local community backend
 

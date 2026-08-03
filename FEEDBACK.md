@@ -254,17 +254,34 @@ listed here. Ranked roughly by how much it matters, not by count.
 5. **An OpenAPI spec for the community backend** (reloadingrecipes.com) would help, but that
    service is a separate, closed-source repo — not something this repo or PR can add. Worth
    raising with whoever owns that project, not actionable here.
-6. **A core/UI split enabling a web-based frontend** was asked about directly — see the
-   session for the full answer. Short version: the non-UI code already doesn't import
-   `tkinter` anywhere, so a real boundary exists structurally, but the event bus assumes an
-   in-process Tk consumer, camera frames would need encoding for network transport, and — most
-   importantly — this app commands real motors, so remote reachability is a safety/security
-   question to answer deliberately, not a side effect of a refactor. A legitimate long-term
-   idea, not a near-term task.
+6. **A formal core/UI split** was asked about directly (prompted by "could this support a
+   web frontend"), and it's worth separating into two independent questions rather than one:
+   - **As architecture/testability, on its own merits:** genuinely worth doing regardless of
+     any web UI. The non-UI code already doesn't import `tkinter` anywhere — the boundary
+     exists structurally, just not formally enforced (no package split, no import-linter rule
+     stopping `sorter/*.py` from reaching into `sorter/ui/`). Formalizing it would make the
+     non-UI layer more independently testable and harder to accidentally couple to Tk.
+   - **As a web UI specifically:** a much bigger, separate question. The event bus assumes an
+     in-process Tk consumer, camera frames would need encoding for network transport, and —
+     most importantly — this app commands real motors, so remote reachability is a
+     safety/security question to answer deliberately, not a side effect of a refactor.
+   The first is a reasonable near-term follow-up; the second is a legitimate long-term idea
+   that depends on the first but shouldn't be assumed to follow from it.
 7. **Test coverage measurement.** Nothing currently reports what fraction of the non-UI code
    the suite actually exercises; `pytest-cov` in CI (per-module floor, not a global number —
    a global one would be dominated by the untestable UI modules and say nothing useful) would
    turn "the suite covers the non-UI logic" from a claim into a number.
+8. **`installer/install-windows.ps1`'s tkinter-discovery is now stricter than it needs to be.**
+   `Find-SuitablePython` (~line 78-113) searches for a Python that has both the version floor
+   *and* a working `tkinter` import — necessary before this PR, since the venv `start.bat`
+   built was made from whatever system Python it found. Now that `bootstrap.py` provisions the
+   app's own interpreter via uv (which bundles Tcl/Tk itself, verified in this PR), the
+   installer only needs *some* qualifying Python, not one with tkinter specifically. A Python
+   with tkinter still satisfies the current check — nothing is broken — it's just doing more
+   work than necessary. Deliberately **not** touched in this PR: `.ps1` changes can't be
+   verified without a real Windows machine, and this file already has one documented
+   past failure mode from an unverified edit (`tests/test_installer_scripts.py`'s ASCII/CRLF
+   guards exist because of it).
 
 ### From an independent review pass (fresh subagent, codebase only — not shown this session's
 work, so it couldn't just agree with the above)

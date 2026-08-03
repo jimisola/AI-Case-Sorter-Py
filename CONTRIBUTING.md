@@ -62,9 +62,14 @@ uv run pytest
 ```
 
 Around 500 tests cover the non-UI logic; please run them before opening a PR.
-The torch-dependent tests skip automatically when PyTorch isn't installed. The
-UI itself is not covered by automated tests, so smoke-test UI changes by
-running the app. CI (`.github/workflows/build.yml`) runs the same suite across
+The torch-dependent tests skip automatically when PyTorch isn't installed. A
+handful of tests do exercise real Tk widgets in-process (`test_tab_train_sort.py`,
+`test_feedback_ui.py`, `test_dialog_install_torch.py`) — driving them with direct
+calls and asserting resulting state, not through any external UI-automation tool
+(there isn't a Playwright equivalent for Tkinter; a browser exposes a
+remote-debugging protocol an external driver attaches to, Tkinter doesn't). Most
+of the UI is not covered this way, though, so smoke-test UI changes by running the
+app. CI (`.github/workflows/build.yml`) runs the same suite across
 a Python version matrix on every push and PR — treat a red CI run the same as
 a local test failure, not as something to wait out.
 
