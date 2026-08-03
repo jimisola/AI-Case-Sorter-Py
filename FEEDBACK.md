@@ -20,6 +20,12 @@ someone else's repo. The plan is to fold its durable content into the upstream P
 and turn §9 into individual issues, then drop the file in the commit that opens upstream.
 Kept for now because the work is still in flight and this is the working record.
 
+**Nothing else in the repo references this file**, so deleting it leaves no dangling links —
+that is a deliberate invariant, please keep it that way. The one piece of durable content that
+did have external references, §6's owner checklist, now lives permanently at
+[`.github/REPO_SETUP.md`](.github/REPO_SETUP.md); §6 is retained below only as the working
+record of how it was arrived at.
+
 **Status:** implemented; all commits green on CI (Ubuntu + Windows). Not yet exercised: a real
 release cut on the fork — see §8.
 **Last updated:** 2026-08-03

@@ -293,7 +293,10 @@ between them from the Run tab's template dropdown.
 - **`updater.py`** — GitHub Releases check, version comparison, and download →
   verify → stage. Needs `requests`. Never writes to the app folder.
 - **`apply_update.py`** — the pre-launch half: copies a staged tree over the app
-  folder, with backup/rollback. **Stdlib-only** — it runs before `pip install`.
+  folder, with backup/rollback. **Stdlib-only** — it runs before `uv sync`.
+  Also stamps `sorter/_version.py` with the applied version when the archive
+  didn't carry one, so an install updated from the source-archive fallback
+  doesn't keep reporting `0.0.0+unknown` and re-prompting forever.
 
 ### Community / cloud
 - **`auth.py`** — `AuthManager`: MSAL `PublicClientApplication` against Azure AD
@@ -358,7 +361,8 @@ Config shows in AI Config mode; Community is mounted only while signed in. The
 ### Dialogs (`dialog_*.py`)
 `dialog_training_progress` (live training console), `dialog_training_config`
 (hyperparameters), `dialog_model_editor` (create/edit model + feedback-loop
-opt-in), `dialog_install_torch` (pip-installs torch/torchvision into the venv),
+opt-in), `dialog_install_torch` (installs torch/torchvision into the venv via
+uv, falling back to pip),
 `dialog_login` (MSAL interactive sign-in), `dialog_model_evaluator` (run eval +
 HTML report + history), `dialog_model_images` + `dialog_image_preview` (training
 image browser/reclassify/delete), `dialog_share_model` (publish to community),
@@ -558,10 +562,17 @@ flowchart TD
 ## 8. Conventions & gotchas
 
 - **Conventional Commits are load-bearing, not cosmetic.** The commit type you
-  pick *is* the version bump — git-cliff derives the release version from it
-  (`feat` → minor, `fix` → patch, `!` → major), and there is no version string
-  in the source to edit (§7). A mistyped `fix:` ships a wrong version, not just
-  a wrong changelog line. Full type list and rules: `CONTRIBUTING.md`.
+  pick *is* the version bump — git-cliff derives the release version from it,
+  and there is no version string in the source to edit (§7). A mistyped `fix:`
+  ships a wrong version, not just a wrong changelog line. Full type list and
+  rules: `CONTRIBUTING.md`.
+  - **While the project is pre-1.0, git-cliff's 0.x semantics apply:** `feat`
+    → **patch**, `fix` → **patch**, `!`/`BREAKING CHANGE:` → **minor**. That
+    is git-cliff's default below 1.0.0 (`features_always_bump_minor` and
+    `breaking_always_bump_major` are both off), and it's deliberate — 0.x is
+    where the API is still allowed to move. From 1.0.0 onward the familiar
+    `feat` → minor, `!` → major mapping takes over on its own, with no config
+    change needed.
 - **Threading rule:** never touch Tk widgets off the main thread. Do blocking
   work in `run_worker`/daemon threads and `bus.post(...)`; the drain loop
   delivers handlers on the main thread. **`widget.after()` is not an escape
@@ -576,7 +587,8 @@ flowchart TD
   the legacy Windows app — preserve that compatibility when editing these.
 - **PyTorch is optional and lazily imported.** Guard any torch use; surface a
   friendly "install PyTorch" path rather than letting an `ImportError` escape.
-  Don't add torch to `requirements.txt` (it's the `[ml]` extra).
+  Don't add torch to the core `dependencies` in `pyproject.toml` — it's the
+  `[ml]` extra.
 - **DB access is shared across threads** via one connection + RLock. Wrap
   multi-statement work in `db.transaction()` (reentrant via SAVEPOINT).
 - **Headstamps are read fresh, not cached** — don't reintroduce a cached
@@ -587,10 +599,10 @@ flowchart TD
   local copy of the backend; the **Azure B2C tenant/client/scopes in `auth.py`
   are still hardcoded**, so a fork pointing at its own identity provider has to
   edit that file. The backend itself is a separate service, not in this repo.
-- **Releases drive the updater.** Bump `sorter/__init__.py.__version__` in the
-  same commit you tag a release, and keep the tag and that value in step.
-  `/releases/latest` excludes pre-releases, so tagging an rc won't reach
-  stable users.
+- **Releases drive the updater.** There is no version string to edit — tagging
+  *is* the bump (§7), and the release workflow derives the tag from the commit
+  types since the last one. `/releases/latest` excludes pre-releases, so
+  tagging an rc won't reach stable users. See `RELEASING.md`.
 - **The distribution path assumes a public repo.** The installer and updater
   both fetch anonymously over HTTPS; against a private repo every request
   404s and there is no in-band way to tell that apart from "no releases yet"

@@ -118,11 +118,24 @@ change.
 
 This isn't just a style preference: **commit type drives both the changelog and
 the version number**, automatically. `git-cliff` groups commits into changelog
-sections by type, and computes the next version from them — a `feat:` bumps the
-minor, a `fix:` the patch, a `!`/`BREAKING CHANGE:` the major. A `fix:` that
-should have been a `feat:` produces a wrong changelog entry *and* a wrong
-version bump. Commits that don't parse as Conventional Commits are dropped from
-the changelog entirely.
+sections by type, and computes the next version from them. A `fix:` that should
+have been a `feat:` produces a wrong changelog entry *and* a wrong version
+bump. Commits that don't parse as Conventional Commits are dropped from the
+changelog entirely.
+
+**The type → bump mapping depends on whether the project is pre-1.0**, and
+git-cliff applies the standard 0.x rule automatically:
+
+| Commit | While `0.x` (today) | From `1.0.0` on |
+|---|---|---|
+| `fix:` | patch | patch |
+| `feat:` | patch | **minor** |
+| `type!:` / `BREAKING CHANGE:` | **minor** | **major** |
+
+Below 1.0.0 the major number is reserved and breaking changes only move the
+minor — that's what 0.x *means*, and it's why a breaking change right now
+reads as `0.1.0 → 0.2.0` rather than `1.0.0`. The switchover needs no config
+change; it happens on its own once a 1.x tag exists.
 
 ## Releasing
 

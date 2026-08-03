@@ -42,10 +42,20 @@ jobs:
       # whatever args were passed. Confirmed the hard way: this repo has no
       # tags yet, so that came back empty. --bumped-version's own stdout is
       # what's actually wanted, captured directly.
+      # Digest-pinned for the same reason as release.yml's copy: a release
+      # asset is mutable upstream, so the version in the URL alone is not a
+      # pin. Keep the two digests in step when bumping the version.
       - name: Install git-cliff
+        env:
+          GIT_CLIFF_VERSION: "2.13.1"
+          GIT_CLIFF_SHA256: "9a1263f24e59a2f508c7b3d3283c9dea94a8bf697f96dbc18cc783cac6284546"
         run: |
-          curl -fsSL https://github.com/orhun/git-cliff/releases/download/v2.13.1/git-cliff-2.13.1-x86_64-unknown-linux-gnu.tar.gz \
-            | tar -xz --strip-components=1 -C /usr/local/bin git-cliff-2.13.1/git-cliff
+          curl -fsSL -o git-cliff.tar.gz \
+            "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${GIT_CLIFF_SHA256}  git-cliff.tar.gz" | sha256sum -c -
+          tar -xzf git-cliff.tar.gz --strip-components=1 -C /usr/local/bin \
+            "git-cliff-${GIT_CLIFF_VERSION}/git-cliff"
+          rm git-cliff.tar.gz
 
       - name: Compute next version via git-cliff
         id: next

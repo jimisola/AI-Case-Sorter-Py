@@ -5,7 +5,8 @@
 # folder names, so a label on a PR tells you which part of the app is in play.
 #
 # NOTE: actions/labeler does not create labels -- every label named here must
-# already exist in the repo or the action errors. See FEEDBACK.md §6.
+# already exist in the repo or the action errors. They are declared in
+# .github/settings.yml; .github/REPO_SETUP.md has the `gh label create` form.
 
 ui:
   - changed-files:

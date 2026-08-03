@@ -29,7 +29,7 @@ jobs:
           enable-cache: true
 
       # libgl1/libglib2.0-0 only -- not python3-tk. uv's provisioned Python
-      # bundles Tcl/Tk itself (verified empirically -- see FEEDBACK.md), so
+      # bundles Tcl/Tk itself (verified empirically on real runners), so
       # the system Python running this step no longer needs it either; only
       # the graphics libraries opencv dlopens at runtime are still a real gap.
       - name: Install system dependencies (Linux)
