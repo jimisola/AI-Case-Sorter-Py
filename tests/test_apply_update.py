@@ -67,6 +67,39 @@ def test_applies_staged_files(install) -> None:
     assert (app / "pyproject.toml").read_text(encoding="utf-8") == "requests\nnumpy\n"
 
 
+def test_records_the_version_when_the_archive_carries_none(install) -> None:
+    """GitHub's auto-generated source archive — updater._pick_asset's fallback
+    when the named asset isn't published — ships no sorter/_version.py and no
+    .git, so without this the install keeps reporting 0.0.0+unknown. That
+    sentinel parses as a pre-release, so every check sees the same release as
+    newer and the update prompt returns on every launch, forever."""
+    app, data = install
+    _stage(data, {"main.py": "new main\n"}, version="0.9.0")
+
+    assert apply_update.apply_pending() is True
+
+    stamp = app / "sorter" / "_version.py"
+    assert stamp.is_file()
+    assert '__version__ = "0.9.0"' in stamp.read_text(encoding="utf-8")
+
+
+def test_a_built_archives_own_version_wins(install) -> None:
+    """The purpose-built release asset carries a hatch-vcs-generated
+    _version.py. That one came from a real build against real tags, so it is
+    authoritative and must not be overwritten by the metadata's copy."""
+    app, data = install
+    _stage(
+        data,
+        {"main.py": "new main\n", "sorter/_version.py": '__version__ = "0.9.0"\nversion = "0.9.0"\n'},
+        version="0.9.0",
+    )
+
+    assert apply_update.apply_pending() is True
+
+    text = (app / "sorter" / "_version.py").read_text(encoding="utf-8")
+    assert "version = " in text, "the built archive's own _version.py was clobbered"
+
+
 def test_prunes_modules_removed_upstream(install) -> None:
     app, data = install
     _stage(data, {"main.py": "new\n", "sorter/__init__.py": "new\n"})

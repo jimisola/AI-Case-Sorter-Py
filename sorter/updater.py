@@ -33,7 +33,7 @@ import shutil
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -161,8 +161,19 @@ def _api_base() -> str:
     return (os.environ.get("CASESORTER_UPDATE_API_BASE") or DEFAULT_API_BASE).rstrip("/")
 
 
+def _strip_tag_prefix(tag: str) -> str:
+    """Drop a single leading ``v``/``V``, matching the publish workflow.
+
+    Deliberately not ``lstrip("vV")``, which strips *every* leading v: the
+    workflow builds the asset name with ``${TAG#v}`` (one character), so on a
+    tag like ``vv1.2.3`` the two would disagree and the exact-name match below
+    would silently miss the real asset.
+    """
+    return tag[1:] if tag[:1] in ("v", "V") else tag
+
+
 def _expected_asset_name(tag: str) -> str:
-    return f"ai-case-sorter-py-{tag.lstrip('vV')}.zip"
+    return f"ai-case-sorter-py-{_strip_tag_prefix(tag)}.zip"
 
 
 def _pick_asset(release: dict[str, Any], tag: str) -> tuple[str, int | None]:
@@ -231,7 +242,7 @@ def check_for_update(
     tag = str(release.get("tag_name") or "").strip()
     if not tag:
         return None
-    version = tag.lstrip("vV")
+    version = _strip_tag_prefix(tag)
     if not is_newer(version, cur):
         return None
 
@@ -416,8 +427,6 @@ def stage_update(
     # Swap staging into place last, so `pending/` only ever exists complete.
     clear_pending()
     os.replace(staging, pending_dir())
-
-    from datetime import datetime
 
     staged_at = datetime.now(UTC).isoformat(timespec="seconds")
     _pending_meta_path().write_text(
