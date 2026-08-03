@@ -14,7 +14,10 @@
    - `version`: **leave empty to auto-detect.** git-cliff computes the next version from the
      Conventional Commits since the last tag -- a `feat:` bumps the minor, a `fix:` the patch,
      a `!`/`BREAKING CHANGE:` the major. Passing one explicitly overrides that.
-   - `ref`: branch, tag, or SHA to release from. Empty means the branch you dispatched on.
+   - `ref`: branch to release from. Empty means the branch you dispatched on. **Must be
+     `main`, `hotfix/*`, or `release/*`** — anything else is rejected before a tag is
+     created. A raw commit SHA is rejected for the same reason: release from the branch
+     containing it instead, so the release is traceable to a branch.
    - `force`: only needed when you pass a `version` that **disagrees** with the auto-detected
      one. Without it, a mismatch is a hard error naming both numbers -- that's the guard that
      catches "meant 0.3.0, typed 0.2.0" before it becomes a tag.

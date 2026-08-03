@@ -96,6 +96,24 @@ jobs:
             echo "source=$SOURCE"
           } >> "$GITHUB_OUTPUT"
 
+      # Same rule check-release.yml enforces, but *before* anything is
+      # created rather than after. check-release.yml fires on
+      # `release: published` -- by which point the tag is pushed and the
+      # draft exists, so it can only report a mistake that already happened.
+      # Checking here means a release from the wrong branch simply doesn't
+      # get made. Both are kept: this one prevents, that one catches a
+      # release created by any other route (e.g. by hand in the UI).
+      - name: Check the ref is a releasable branch
+        env:
+          REF: ${{ inputs.ref || github.ref }}
+        run: |
+          BRANCH="${REF#refs/heads/}"
+          if [[ "$BRANCH" != "main" && "$BRANCH" != hotfix/* && "$BRANCH" != release/* ]]; then
+            echo "::error::Releases must come from main, hotfix/*, or release/* (got: '$BRANCH')."
+            echo "::error::If you passed a raw commit SHA, release from the branch containing it instead."
+            exit 1
+          fi
+
       - name: Check tag does not already exist
         env:
           VERSION: ${{ steps.resolve.outputs.version }}

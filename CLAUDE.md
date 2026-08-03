@@ -557,18 +557,11 @@ flowchart TD
 
 ## 8. Conventions & gotchas
 
-- **Conventional Commits are load-bearing, not cosmetic.** Every commit subject
-  and PR title must be `type(optional-scope): summary`; allowed types are
-  `feat`, `fix`, `refactor`, `chore`, `security`, `revert`, `test`, `docs`,
-  `perf`, `style`, `ci`, `build`, with `type!:` or a `BREAKING CHANGE:` footer
-  for a breaking change. `.github/workflows/check-semantic-pr.yml` enforces the
-  PR title. **The type you choose decides the released version number** —
-  git-cliff computes the next version from these (`feat` → minor, `fix` →
-  patch, `!` → major) and groups the changelog by them, so a `fix:` that should
-  have been a `feat:` ships a wrong version *and* a wrong changelog entry.
-  Commits that don't parse are dropped from the changelog entirely
-  (`filter_unconventional = true` in `cliff.toml`). Nothing else sets the
-  version: there is no version string in the source to edit — see §7.
+- **Conventional Commits are load-bearing, not cosmetic.** The commit type you
+  pick *is* the version bump — git-cliff derives the release version from it
+  (`feat` → minor, `fix` → patch, `!` → major), and there is no version string
+  in the source to edit (§7). A mistyped `fix:` ships a wrong version, not just
+  a wrong changelog line. Full type list and rules: `CONTRIBUTING.md`.
 - **Threading rule:** never touch Tk widgets off the main thread. Do blocking
   work in `run_worker`/daemon threads and `bus.post(...)`; the drain loop
   delivers handlers on the main thread. **`widget.after()` is not an escape
