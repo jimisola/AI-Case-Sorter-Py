@@ -116,10 +116,31 @@ enumerate`. A GitHub Action checks the PR title on every push
 `ci`, `build`. Use `type!:` or a `BREAKING CHANGE:` footer for a breaking
 change.
 
-This isn't just a style preference: commit type drives the automated
-changelog and — once release automation lands — the version number itself.
-A `fix:` that reads like a `feat:` (or vice versa) produces a wrong changelog
-entry and, later, a wrong version bump.
+This isn't just a style preference: **commit type drives both the changelog and
+the version number**, automatically. `git-cliff` groups commits into changelog
+sections by type, and computes the next version from them — a `feat:` bumps the
+minor, a `fix:` the patch, a `!`/`BREAKING CHANGE:` the major. A `fix:` that
+should have been a `feat:` produces a wrong changelog entry *and* a wrong
+version bump. Commits that don't parse as Conventional Commits are dropped from
+the changelog entirely.
+
+## Releasing
+
+Maintainers only, and fully automated — see [`RELEASING.md`](RELEASING.md) for
+the detail. The short version:
+
+- **Nothing to bump by hand.** The git tag is the single source of truth; the
+  version is derived from it at build time (hatch-vcs). There is no version
+  string in the source to edit.
+- **Preview before you cut.** The **Release Preview** workflow (Actions →
+  Release Preview → Run workflow) shows the version a release would get right
+  now and the changelog it would generate, for any branch or SHA. It's the
+  fastest way to notice a mistyped commit type before it becomes a wrong
+  version bump.
+- **Cutting a release** is the manual **Release** workflow (Actions → Release →
+  Run workflow). It defaults to a dry run, auto-detects the version from
+  Conventional Commits if you leave `version` empty, and only ever opens a
+  **draft** release — publishing is always a deliberate human click.
 
 ## Contributions & licensing (DCO)
 

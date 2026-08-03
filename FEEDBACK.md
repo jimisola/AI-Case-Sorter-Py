@@ -8,23 +8,26 @@ can be verified independently, then submitted upstream as **one PR**. This file 
 record of what changed, what was decided and why, and what needs the repo owner — it is the
 basis for that PR's description.
 
-**Status:** planning complete, implementation not started.
+**Status:** implemented; all commits green on CI (Ubuntu + Windows). Not yet exercised: a real
+release cut on the fork — see §8.
 **Last updated:** 2026-08-03
 
 ---
 
 ## 1. How to review this (upstream)
 
-Ten logical changes arrive as one PR, so **review commit-by-commit rather than by the combined
+The changes arrive as one PR, so **review commit-by-commit rather than by the combined
 diff.** Commit boundaries are kept clean deliberately:
 
 - The ruff reformat is its own commit, and its SHA is listed in `.git-blame-ignore-revs` —
   skip it in review, `git blame` will skip it too.
 - Every other commit is scoped to one concern and has a Conventional Commits subject.
-- Nothing in commits 1–5 touches application code.
+- The early commits (templates, Python floor, ruff, CI, Renovate) touch no application code.
 
-Across the whole change, the **runtime-behavior surface is three files**: `sorter/updater.py`,
-`sorter/__init__.py`, and the launchers. Everything else is tooling, CI, or config.
+Across the whole change, the **runtime-behavior surface is four files**: `sorter/updater.py`
+(asset selection), `sorter/__init__.py` (version resolution), `sorter/ui/app.py` (window
+title), `sorter/ui/dialog_install_torch.py` (pip → uv), plus the launchers. Everything else is
+tooling, CI, or config.
 
 ---
 
@@ -35,8 +38,8 @@ Across the whole change, the **runtime-behavior surface is three files**: `sorte
 | D1 | Python floor **3.12** | 3.10 EOL Oct 2026. Ubuntu 24.04 LTS ships 3.12. Doesn't move the torch floor (see F3). | ✅ decided |
 | D2 | CI matrix **3.12 / 3.13 / 3.14** | 3.14 non-blocking (`continue-on-error`) until opencv/torch wheels are reliable. | ✅ decided |
 | D3 | Build backend **hatchling** | Needed for `hatch-vcs`. `uv build` invokes it via PEP 517. | ✅ decided |
-| D4 | Versioning **hatch-vcs**, git-tag derived | Removes the "bump `__version__` in the same commit you tag" footgun. Requires F1 to be solved. | ✅ implemented — see D15 for the real pitfall this surfaced |
-| D15 | `bootstrap.py`'s `uv sync`/`uv run` use `--no-install-project`/`--no-sync`, not just `--frozen` | Empirically confirmed (not assumed) that running hatch-vcs's build hook with no `.git` present either hard-crashes the build, or — with a `fallback-version` configured to avoid that — *silently overwrites* an already-correct `sorter/_version.py` with the fallback. `bootstrap.py`'s `uv sync` and `uv run` each rebuild the project by default on every launch, so a correctly pre-baked release version would get clobbered the first time a downloaded release actually ran. `--frozen` alone does not prevent this — it only constrains *how* a sync resolves, not whether one happens; `uv run --frozen` was confirmed to still rebuild and clobber. `--no-install-project` (on the sync) + `--no-sync` (on the run) together mean the hook never fires client-side at all, which is fine: `main.py` never needed `sorter` installed into site-packages, it imports straight from the source tree. | ✅ decided, verified against a real git-less copy of this repo |
+| D4 | Versioning **hatch-vcs**, git-tag derived | Removes the "bump `__version__` in the same commit you tag" footgun. Requires F1 to be solved. | ✅ implemented — see D4a for the real pitfall this surfaced |
+| D4a | `bootstrap.py`'s `uv sync`/`uv run` use `--no-install-project`/`--no-sync`, not just `--frozen` | Empirically confirmed (not assumed) that running hatch-vcs's build hook with no `.git` present either hard-crashes the build, or — with a `fallback-version` configured to avoid that — *silently overwrites* an already-correct `sorter/_version.py` with the fallback. `bootstrap.py`'s `uv sync` and `uv run` each rebuild the project by default on every launch, so a correctly pre-baked release version would get clobbered the first time a downloaded release actually ran. `--frozen` alone does not prevent this — it only constrains *how* a sync resolves, not whether one happens; `uv run --frozen` was confirmed to still rebuild and clobber. `--no-install-project` (on the sync) + `--no-sync` (on the run) together mean the hook never fires client-side at all, which is fine: `main.py` never needed `sorter` installed into site-packages, it imports straight from the source tree. | ✅ decided, verified against a real git-less copy of this repo |
 | D5 | Env/dependency tool **uv**, not hatch | Both now have lockfiles and can provision Python. uv wins on bootstrap: single static binary with a standalone installer, so PEP 668 on Ubuntu is a non-issue. Hatch needs pip/pipx. | ✅ decided |
 | D6 | Lint/format **ruff** | Replaces black + flake8 with one tool, one config block. Project currently has neither. | ✅ decided |
 | D7 | **Vendor** the reqstool workflows, don't `uses:` them cross-org | Calling `reqstool/.github@main` couples this repo's CI to another org's default branch. | ✅ decided |
@@ -48,6 +51,11 @@ Across the whole change, the **runtime-behavior surface is three files**: `sorte
 | D13 | Renovate over Dependabot | Grouping, scheduling and label control. Requires Dependabot *security updates* to be **off** or both bots open duplicate PRs. | ✅ decided |
 | D13a | `minimumReleaseAge` on minor/patch updates (3 days) and major updates (7 days) | Not just noise reduction — a supply-chain-attack mitigation. A malicious or compromised package version published today gets caught and yanked/reported well within that window in the common case; auto-merging same-day means installing it before anyone's had a chance to notice. The delay costs nothing for a legitimate release. | ✅ decided |
 | D14 | Superseded: originally proposed `hatch` for envs | Reversed by D5 after examining the launcher. Recorded so the reasoning isn't re-litigated. | ↩︎ superseded |
+| D15 | Release version **auto-detected** by default; `force` required to override | Adopted from the `resurs-internal` `.github` template. The commit types already encode the intended bump, so making a human retype it is a chance to get it wrong. `force` turns a silent mismatch into a hard error naming both numbers. `ref` allows releasing from `release/*`/`hotfix/*`. | ✅ decided, all three paths verified locally via `act` |
+| D16 | **Auto-label PRs** by subsystem (`.github/labeler.yml`) | Config adapted from the same template, but every glob rewritten — theirs are Gradle/multi-module Java paths. Labels map to CLAUDE.md's subsystem boundaries, so a label says which part of the app is in play. | ✅ decided |
+| D16a | The labeler is the one workflow using `pull_request_target` | Labeling needs `pull-requests: write`, which a `pull_request` run from a fork never gets. The usual danger — running untrusted PR code with a writable token — doesn't apply: the job never checks out the PR head and never executes anything from it. zizmor clean at `--min-severity low`. Flagged explicitly because the rest of this series deliberately avoids that trigger. | ✅ decided, considered exception |
+| D17 | **Not** adopting `security-scan.yml` from that template | It re-prints Dependabot/Code-Scanning/Secret-Scanning alerts that GitHub already surfaces natively, that Renovate already opens PRs for (D13/D13a), and that zizmor already covers at the workflow level — and it runs `continue-on-error`, so it never blocks anything. A dashboard, not a control. (Initially called "a real gap" on a skim; corrected on a proper read.) | ❌ declined, with reasons |
+| D18 | Release Preview is **manual-only**, not per-PR | Briefly ran on every PR on the theory it'd catch a mistyped commit type pre-merge. But it wrote to the job summary — invisible unless you click into the run — on every PR including docs-only ones, and its computed "next version" goes stale the moment another PR merges. On-demand delivers the same signal, at the point someone actually wants it (before cutting a release), without the per-PR noise. | ✅ decided |
 
 ---
 
@@ -96,6 +104,7 @@ than it would otherwise have been.
 | F10 | No CI, no dependency automation, no issue/PR templates, no `CODEOWNERS` | — | PRs 1, 4, 5 |
 | F11 | The repo ships both a `.sh` and a `.bat` with no `.gitattributes`, so a CRLF-committed shell script fails with a cryptic `\r` error | — | `.gitattributes` |
 | F12 | **The system Python is the app's Python.** It must be ≥ the floor, have tkinter, and have `venv`/`ensurepip` — because `.venv` is created from it. Users on a distro whose system Python is too old cannot run the app without changing their system | `start.sh:151`, `:159`, `:172`, `:186` | uv provisions the app's interpreter independently — see §4a |
+| F13 | **The window title hardcoded `v2.0.1`** — a literal connected to nothing. Not a git tag (there are none, in this fork or upstream), not `__version__` (`0.1.0` at the time), not `pyproject.toml`. Users read one version off the title bar while the in-app updater compared a completely different one against release tags. Nothing in CI could catch it: a string literal lints clean and every test passed with it wrong | `sorter/ui/app.py:58` | Derived from `__version__`, plus a guard test that parses the title call and rejects any hardcoded `x.y.z` — verified it actually fails when the old literal is restored |
 
 ---
 
@@ -231,7 +240,7 @@ upstream PR at all.
 | `install_uv()` | Actually ran with the real global `uv` hidden from `PATH` — genuine download, real checksum verification by the official installer, confirmed version `0.12.1` |
 | `bootstrap.py` end to end (non-GUI path) | `python bootstrap.py --apply-update` on this machine → real `uv sync`, real `uv run`, exit 0 |
 | `launcher-smoke` (both `start.sh` and `start.bat`, for real) | **Green on both `ubuntu-latest` and `windows-latest`, on real GitHub Actions runners.** Along the way it caught and drove the fix for four real bugs, not zero: `start.sh` had lost its executable bit when rewritten into a thin shim; a test hardcoded the POSIX binary name and failed for real on Windows while passing on Linux; `install_uv()`'s Windows path piped a multi-line script to `powershell.exe` via `-Command -` on stdin, which silently did nothing (exit 0, no file created) — switched to a temp file + `-File`; and once that made the *real* error visible, `-File` itself exposed a PowerShell cross-version module-loading failure (`Get-ExecutionPolicy` from `Microsoft.PowerShell.Security` failing to load) from spawning legacy `powershell.exe` out of a `pwsh` session — fixed by preferring `pwsh` when available. Each fix was driven by actual CI output, not guessed; see the commit history on `chore/repo-modernization` for the full trail. This is the launcher-smoke job earning its keep, not incidental noise. |
-| release notes + draft release | Mechanism built and pushed (commit 8), `release-preview.yml` already ran for real on this PR (`NEXT: 0.1.0` confirmed in its actual job summary). **Not yet exercised**: actually running the `release.yml` workflow to cut a real tag — that's the next step, on the fork, before this is proposed upstream. |
+| release notes + draft release | `release-preview.yml` ran for real on this PR while it still had a `pull_request` trigger — `NEXT: 0.1.0` confirmed in its actual job summary. (It's since been changed to manual-only; see D18.) `release.yml` was then exercised locally via `act` against this repo's real history, all three input paths: auto-detect resolved `0.1.0` and succeeded; a mismatched `9.9.9` without `force` failed with an error naming both versions; the same with `force` succeeded with a warning. Dry-run correctly skipped the tag-push and draft-release steps entirely. **Not yet exercised**: cutting a real tag on the fork — the next step before proposing upstream. |
 | artifact upload | Mechanism built and pushed (commit 9), `uv build` + `twine check --strict` verified locally against this real package. **Not yet exercised**: a real `release: published` event to confirm `gh release upload` actually attaches the wheel/sdist/app-archive. |
 | purpose-built app archive (`ai-case-sorter-py-<tag>.zip`) with a correct baked version | Built and pushed (commit 10). The two riskiest pieces verified directly, not assumed: (1) hatch-vcs's build hook against a real git-less copy of this repo — confirmed it either crashes or silently overwrites a correct `sorter/_version.py`, which is why `bootstrap.py` now runs with `--no-install-project`/`--no-sync`; (2) the archive-assembly sequence itself (`git archive` + inject `_version.py` + zip) run locally, confirmed the file lands in the right place. **Not yet exercised**: an actual release building this archive in CI. |
 | end-to-end self-update | **Not yet done.** Needs a real release on the fork (the two rows above) before it's possible via `CASESORTER_UPDATE_REPO` (`updater.py:149`) — the next concrete step. |
@@ -349,3 +358,4 @@ heading — kept short here since FEEDBACK.md is already long.
 | 2026-08-03 | Added F12 (the system Python is the app's Python) and §4a correcting an earlier overstatement that uv "deletes the version check". Recorded the resulting ruff constraint on `bootstrap.py`. |
 | 2026-08-03 | Added §9 "Suggestions for improvement" (own findings + an independent subagent review). Updated §8's verification table to reflect what actually happened: uv/tkinter/libGL claims verified empirically, `bootstrap.py` proven on real GitHub Actions runners on both platforms (catching two real bugs in the process), and marked what's genuinely not done yet (releases, artifact upload, self-update, a human's own hands on Windows). |
 | 2026-08-03 | `launcher-smoke` is now green on both `ubuntu-latest` and `windows-latest`. Getting there caught two more real bugs beyond the first two: `install_uv()`'s Windows path silently failed when piping the installer script via stdin, and a PowerShell cross-version module-loading failure when spawning `powershell.exe` from a `pwsh` session. Four real bugs total from this one CI job — recorded as the concrete case for why it's worth having, not just process for its own sake. |
+| 2026-08-03 | Adopted three inputs from the `resurs-internal` `.github` template's release workflow (auto-detect version, `ref`, `force` — D15) and its PR auto-labeling (D16); declined its `security-scan.yml` with reasons (D17). Made Release Preview manual-only (D18). Recorded F13: the window title hardcoded `v2.0.1`, connected to no tag, no `__version__`, and no `pyproject.toml` — found by a user actually launching the app, not by any check in here. Corrected §1's stale "three files"/"planning not started" framing. |

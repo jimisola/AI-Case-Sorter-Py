@@ -1,10 +1,13 @@
 name: Release Preview
 
+# Manual only, deliberately. An earlier revision ran this on every PR, on the
+# theory that seeing the computed version pre-merge would catch a mistyped
+# commit type. In practice that wrote to the job summary -- which nobody reads
+# unless they click into the run -- on every PR including docs-only ones, and
+# its "next version" is only accurate until the next merge anyway. Running it
+# on demand, when someone actually wants the answer (typically right before
+# cutting a release), is the same signal without the per-PR noise.
 on:
-  # Automatic on every PR (the common case: see what a release would look
-  # like without asking), plus manual for any arbitrary ref -- e.g. previewing
-  # a release/* or hotfix/* branch that has no open PR.
-  pull_request:
   workflow_dispatch:
     inputs:
       ref:
