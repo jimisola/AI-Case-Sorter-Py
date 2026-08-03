@@ -57,43 +57,91 @@ jobs:
           name: junit-${{ matrix.os }}-py${{ matrix.python-version }}
           path: build/junit.xml
 
-  windows-launcher-smoke:
-    name: start.bat actually bootstraps on Windows
-    runs-on: windows-latest
+  launcher-smoke:
+    name: launcher actually bootstraps (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
 
+      # The version here is just what runs bootstrap.py itself -- bootstrap.py
+      # provisions the app's actual interpreter separately via uv, per
+      # .python-version. That decoupling is the whole point being tested.
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
-      # main.py has no headless flag, so a full run would block on the Tk main
-      # loop. This exercises the bootstrap phase only -- venv creation and
-      # dependency install -- by starting the launcher, giving it a generous
-      # window to finish installing, then killing it and checking it actually
-      # got through setup. It is not a substitute for an interactive run.
-      - name: Launch start.bat and verify it completed dependency install
+      # xvfb only -- deliberately NOT libgl1/glib. Pre-installing those would
+      # test a runner that already has them, not bootstrap.py's own
+      # detect-and-offer-to-install logic. xvfb just gives Tk a display to
+      # initialize against; it has nothing to do with that logic.
+      - name: Install xvfb (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+      # main.py has no headless flag, so a full run blocks on the Tk main
+      # loop. This starts the real launcher, gives it a generous window to
+      # get through uv install + dependency sync, then kills it -- not a
+      # substitute for an interactive run, but it does exercise the same
+      # bootstrap.py every user goes through, on a stock runner image.
+      - name: Launch and wait (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          Xvfb :99 -screen 0 1280x1024x24 &
+          export DISPLAY=:99
+          timeout 300 ./start.sh --auto &
+          LAUNCH_PID=$!
+          for _ in $(seq 1 60); do
+            kill -0 "$LAUNCH_PID" 2>/dev/null || break
+            sleep 5
+          done
+          kill "$LAUNCH_PID" 2>/dev/null || true
+          wait "$LAUNCH_PID" 2>/dev/null || true
+
+      - name: Launch and wait (Windows)
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $proc = Start-Process -FilePath ".\start.bat" -PassThru -WindowStyle Hidden
+          $proc = Start-Process -FilePath ".\start.bat" -ArgumentList "--auto" -PassThru -WindowStyle Hidden
           $deadline = (Get-Date).AddMinutes(5)
           while ((Get-Date) -lt $deadline) {
-            if (Test-Path ".installed") { break }
             if ($proc.HasExited) { break }
             Start-Sleep -Seconds 5
           }
-          $installed = Test-Path ".installed"
           if (-not $proc.HasExited) {
             Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
           }
-          if (-not (Test-Path ".venv")) {
-            Write-Error "start.bat did not create .venv"
+
+      # The real assertion: not "a file exists" but "the resulting environment
+      # actually works". Two separate checks, since `uv run` rejects
+      # --frozen and --locked together: --check catches a uv.lock that has
+      # drifted from pyproject.toml, and the import proves the environment
+      # bootstrap.py actually built -- via `uv sync --frozen`, same as here
+      # -- has the runtime pieces that matter (cv2 needs libGL/glib; tkinter
+      # needs Tcl/Tk). Works identically on both platforms because
+      # bootstrap.py's logic is now the same code either way.
+      - name: Verify the resulting environment (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          test -x .uv/bin/uv || { echo "::error::bootstrap.py did not install uv"; exit 1; }
+          .uv/bin/uv lock --check
+          .uv/bin/uv run --frozen python -c "import cv2, tkinter; print('cv2 + tkinter import OK')"
+
+      - name: Verify the resulting environment (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path ".uv\bin\uv.exe")) {
+            Write-Error "bootstrap.py did not install uv"
             exit 1
           }
-          if (-not $installed) {
-            Write-Error "start.bat did not finish installing dependencies within 5 minutes (exited early: $($proc.HasExited))"
-            exit 1
-          }
-          Write-Host "start.bat created .venv and finished installing dependencies -- bootstrap phase succeeded."
+          & .uv\bin\uv.exe lock --check
+          & .uv\bin\uv.exe run --frozen python -c "import cv2, tkinter; print('cv2 + tkinter import OK')"
