@@ -45,6 +45,7 @@ Across the whole change, the **runtime-behavior surface is three files**: `sorte
 | D11 | PyPI publishing **implemented but disabled** | Gated on a repo variable, unset = off. Merging changes nothing until you opt in. | ✅ decided |
 | D12 | Attach wheel + sdist to **GitHub Releases** now | Gives pre-built downloads with no PyPI dependency. Safe today — see F2. | ✅ decided |
 | D13 | Renovate over Dependabot | Grouping, scheduling and label control. Requires Dependabot *security updates* to be **off** or both bots open duplicate PRs. | ✅ decided |
+| D13a | `minimumReleaseAge` on minor/patch updates (3 days) and major updates (7 days) | Not just noise reduction — a supply-chain-attack mitigation. A malicious or compromised package version published today gets caught and yanked/reported well within that window in the common case; auto-merging same-day means installing it before anyone's had a chance to notice. The delay costs nothing for a legitimate release. | ✅ decided |
 | D14 | Superseded: originally proposed `hatch` for envs | Reversed by D5 after examining the launcher. Recorded so the reasoning isn't re-litigated. | ↩︎ superseded |
 
 ---
@@ -209,19 +210,107 @@ upstream PR at all.
 | Change | How it was verified |
 |---|---|
 | lint / test matrix / xvfb | Green on the fork; also runs on the upstream PR itself |
-| actionlint / zizmor | Same |
-| release notes + draft release | A real tagged release cut on the fork |
-| artifact upload | Same release |
-| end-to-end self-update | The real app updated itself from a fork release via `CASESORTER_UPDATE_REPO` (`updater.py:149`) |
-| `bootstrap.py` | Clean-VM Ubuntu run + real Windows run |
-
-> To be filled in with run links as each lands.
+| actionlint / zizmor | Run locally against every new workflow before each push, not just left to CI |
+| `uv`-provisioned Python bundles Tcl/Tk | `uv python install 3.12` + `import tkinter` on this machine → `Tk 9.0`, before writing `bootstrap.py` around that assumption |
+| `install_uv()` | Actually ran with the real global `uv` hidden from `PATH` — genuine download, real checksum verification by the official installer, confirmed version `0.12.1` |
+| `bootstrap.py` end to end (non-GUI path) | `python bootstrap.py --apply-update` on this machine → real `uv sync`, real `uv run`, exit 0 |
+| `launcher-smoke` (both `start.sh` and `start.bat`, for real) | **Ran on actual GitHub Actions runners**, both `ubuntu-latest` and `windows-latest` — not just planned, not just local. Two real bugs surfaced and fixed this way: `start.sh` had lost its executable bit, and a test hardcoded the POSIX binary name and failed for real on Windows. See the commit history on the `chore/repo-modernization` branch. |
+| release notes + draft release | Not yet done — still to come (commit 8 in the series) |
+| artifact upload | Not yet done — still to come (commit 9) |
+| end-to-end self-update | Not yet done — still to come (commit 10), via `CASESORTER_UPDATE_REPO` (`updater.py:149`) |
+| Interactive first run on a real Windows machine | **Still not done.** CI proves the bootstrap mechanics work on a stock Windows runner; it does not replace a human clicking through `start.bat` on their own machine. Flagged explicitly rather than implied by the CI passing. |
 
 ---
 
-## 9. Document changelog
+## 9. Suggestions for improvement (post-merge)
+
+Out of scope for this PR — it's tooling/CI/packaging, not an application code review — but
+worth a deliberate look afterward. Two sources: my own pass while working in this codebase,
+and an independent read by a fresh subagent instructed to avoid re-covering anything already
+listed here. Ranked roughly by how much it matters, not by count.
+
+### From working in this codebase
+
+1. **Python 3.12 idioms, not just the floor.** This PR raises `requires-python` to 3.12 and
+   ruff's `target-version` follows it, so `ruff check --select UP` will keep surfacing
+   auto-fixable upgrades over time — but a deliberate pass would also catch things pyupgrade
+   doesn't auto-fix: the relaxed f-string grammar (nested same-quotes, backslashes), PEP 695
+   generic syntax where generics exist, `Path.walk()` in `training/dataset.py`'s directory
+   scans, etc.
+2. **Resolve the deferred ruff findings from the lint-adoption commit.** `F841`, `F811`,
+   `B023`, `B007`, `B017`, `B904`, `UP042` were deliberately excluded from `pyproject.toml`'s
+   ruff config rather than silently fixed in a "just formatting" commit — see that commit's
+   message for the reasoning. `B023` in particular (`sorter/camera.py`) is a closure/loop-
+   variable pattern worth a real look, not just a style nit — it's the kind of thing that can
+   be a genuine latent bug in threaded code.
+3. **Apple Silicon (MPS) support in `sorter/local_inference.py`.** Device selection
+   (`_pick_device`, line ~121) is CUDA-or-CPU only — confirmed while answering "would this run
+   on a Mac": it would, but always on CPU, leaving an M-series chip's GPU unused. A `torch.backends.mps.is_available()`
+   branch alongside the existing CUDA check would be a small, well-scoped addition.
+4. **A `macos-latest` CI leg**, once/if macOS support is a real goal — would turn "probably
+   works" into a verified claim. `sorter/camera.py` has explicit backends for Windows
+   (`CAP_DSHOW`) and Linux (`CAP_V4L2`) but nothing for Darwin; worth knowing whether the
+   OpenCV default backend is actually fine there.
+5. **An OpenAPI spec for the community backend** (reloadingrecipes.com) would help, but that
+   service is a separate, closed-source repo — not something this repo or PR can add. Worth
+   raising with whoever owns that project, not actionable here.
+6. **A core/UI split enabling a web-based frontend** was asked about directly — see the
+   session for the full answer. Short version: the non-UI code already doesn't import
+   `tkinter` anywhere, so a real boundary exists structurally, but the event bus assumes an
+   in-process Tk consumer, camera frames would need encoding for network transport, and — most
+   importantly — this app commands real motors, so remote reachability is a safety/security
+   question to answer deliberately, not a side effect of a refactor. A legitimate long-term
+   idea, not a near-term task.
+7. **Test coverage measurement.** Nothing currently reports what fraction of the non-UI code
+   the suite actually exercises; `pytest-cov` in CI (per-module floor, not a global number —
+   a global one would be dominated by the untestable UI modules and say nothing useful) would
+   turn "the suite covers the non-UI logic" from a claim into a number.
+
+### From an independent review pass (fresh subagent, codebase only — not shown this session's
+work, so it couldn't just agree with the above)
+
+Every item below cites a real file/line and was checked against the code, not inferred from
+docs. Full detail (why it matters, suggested fix) is in the PR description under this same
+heading — kept short here since FEEDBACK.md is already long.
+
+1. `run_worker` (`sorter/ui/app.py`) keys subscriptions on `id(fn)` and never unsubscribes —
+   a stale handler from an earlier closed dialog can fire again if CPython reuses that address.
+2. `EventBus.drain()` swallows every handler exception with a bare `except: pass`
+   (`sorter/events.py`), and the app has **no `logging` module usage anywhere** — six modules,
+   six different `print(..., file=sys.stderr)` prefixes, no file sink. Flagged as the single
+   highest-leverage, cheapest fix available.
+3. `safe_label`/`parse_label` (`sorter/training/dataset.py`) don't round-trip on `__` —
+   untrusted classification-server labels can silently merge two training classes.
+4. `serial_broker._process_buffer` (`sorter/serial_broker.py`) does unanchored substring
+   matching (`"ok" in line`) rather than anchored matching, and has **zero test coverage** —
+   only the emulator is tested, so the real parser and the emulator can silently diverge.
+5. A mid-run serial disconnect surfaces only as a 20-second generic timeout, with no
+   `on_disconnect` callback and no bus event — the connection indicator stays "connected."
+6. `updater._pick_asset` picks the first `.zip` release asset with no integrity/signature
+   check beyond TLS — directly relevant once this PR's series starts attaching build
+   artifacts to releases (commit 9).
+7. `model_io`'s zip-bomb guard only checks entries ≥ 1 MB — many-small-entries archives skip
+   the check entirely.
+8. The MSAL token-cache temp file briefly exists at default (world-readable) permissions
+   before its `chmod(0600)`; the SQLite DB (which holds the AI Config API key in cleartext)
+   is never chmod'd at all.
+9. `eval_report.py`'s `json.dumps` into a `<script>` block doesn't escape `</` — and the
+   report can include model **class names** sourced from a community-downloaded checkpoint,
+   not just locally-trusted folder names as the existing CLAUDE.md caveat implies.
+10. `requirements.txt`/`pyproject.toml` drift, independently rediscovered (matches F3/F9 here)
+    — now resolved by this PR deleting `requirements.txt` entirely.
+11. Three near-duplicated capture→crop→classify blocks in `run_controller.py`
+    (`test_once`/`run_once`/`cycle_once`) — one's already marked `# noqa: C901`.
+12. Concrete, worth-it test-coverage gaps beyond "UI isn't tested": `sorter/events.py` (the
+    architectural backbone) has no test file at all, `serial_broker`'s real parser is
+    untested, and the SQLite migration path isn't exercised against an old-shape DB.
+
+---
+
+## 10. Document changelog
 
 | Date | Change |
 |---|---|
 | 2026-08-03 | Created. Decisions D1–D14, findings F1–F11 recorded from the planning phase. |
 | 2026-08-03 | Added F12 (the system Python is the app's Python) and §4a correcting an earlier overstatement that uv "deletes the version check". Recorded the resulting ruff constraint on `bootstrap.py`. |
+| 2026-08-03 | Added §9 "Suggestions for improvement" (own findings + an independent subagent review). Updated §8's verification table to reflect what actually happened: uv/tkinter/libGL claims verified empirically, `bootstrap.py` proven on real GitHub Actions runners on both platforms (catching two real bugs in the process), and marked what's genuinely not done yet (releases, artifact upload, self-update, a human's own hands on Windows). |

@@ -96,13 +96,18 @@ jobs:
       # get through uv install + dependency sync, then kills it -- not a
       # substitute for an interactive run, but it does exercise the same
       # bootstrap.py every user goes through, on a stock runner image.
+      # Output is redirected and dumped afterward unconditionally (not just on
+      # failure): a backgrounded/hidden process's stdout doesn't reliably
+      # surface in the step log otherwise, verified the hard way -- neither
+      # platform's launch step showed any [bootstrap] log lines even on a
+      # passing run.
       - name: Launch and wait (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           Xvfb :99 -screen 0 1280x1024x24 &
           export DISPLAY=:99
-          timeout 300 ./start.sh --auto &
+          timeout 300 ./start.sh --auto > bootstrap.log 2>&1 &
           LAUNCH_PID=$!
           for _ in $(seq 1 60); do
             kill -0 "$LAUNCH_PID" 2>/dev/null || break
@@ -110,12 +115,15 @@ jobs:
           done
           kill "$LAUNCH_PID" 2>/dev/null || true
           wait "$LAUNCH_PID" 2>/dev/null || true
+          echo "----- bootstrap.py output -----"
+          cat bootstrap.log || true
 
       - name: Launch and wait (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $proc = Start-Process -FilePath ".\start.bat" -ArgumentList "--auto" -PassThru -WindowStyle Hidden
+          $proc = Start-Process -FilePath ".\start.bat" -ArgumentList "--auto" -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput "bootstrap-stdout.log" -RedirectStandardError "bootstrap-stderr.log"
           $deadline = (Get-Date).AddMinutes(5)
           while ((Get-Date) -lt $deadline) {
             if ($proc.HasExited) { break }
@@ -124,6 +132,10 @@ jobs:
           if (-not $proc.HasExited) {
             Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
           }
+          Write-Host "----- bootstrap.py stdout -----"
+          if (Test-Path "bootstrap-stdout.log") { Get-Content "bootstrap-stdout.log" }
+          Write-Host "----- bootstrap.py stderr -----"
+          if (Test-Path "bootstrap-stderr.log") { Get-Content "bootstrap-stderr.log" }
 
       # The real assertion: not "a file exists" but "the resulting environment
       # actually works". Two separate checks, since `uv run` rejects
