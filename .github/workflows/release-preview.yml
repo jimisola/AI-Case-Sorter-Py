@@ -1,7 +1,16 @@
 name: Release Preview
 
 on:
+  # Automatic on every PR (the common case: see what a release would look
+  # like without asking), plus manual for any arbitrary ref -- e.g. previewing
+  # a release/* or hotfix/* branch that has no open PR.
   pull_request:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag, or commit SHA to preview. Leave empty for the branch this was dispatched on."
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -15,6 +24,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
           fetch-tags: true
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Get latest tag
         id: latest

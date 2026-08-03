@@ -4,14 +4,27 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release (PEP 440, no v prefix), e.g. 0.2.0"
-        required: true
+        description: "Version to release (PEP 440, no v prefix), e.g. 0.2.0. Leave empty to auto-detect from Conventional Commits."
+        required: false
         type: string
+      ref:
+        description: "Branch, tag, or commit SHA to release from. Leave empty for the branch this workflow was dispatched on."
+        required: false
+        type: string
+      force:
+        description: "Allow a version that disagrees with the auto-detected one."
+        required: false
+        type: boolean
+        default: false
       dry-run:
         description: "Validate and preview only -- no tag pushed, no draft release created."
         required: false
         type: boolean
         default: true
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -21,23 +34,71 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    env:
-      VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
           fetch-depth: 0
           fetch-tags: true
+          ref: ${{ inputs.ref || github.ref }}
 
-      - name: Validate version is PEP 440
+      # Same direct install as release-preview.yml, for the same reason:
+      # orhun/git-cliff-action's `version` output is the latest *existing*
+      # release, not what the passed args compute, so --bumped-version has to
+      # be read from the binary's own stdout. Using it for the changelog too
+      # keeps one tool in this workflow instead of a binary plus an action.
+      - name: Install git-cliff
         run: |
-          if ! echo "$VERSION" | grep -qE '^[0-9]+(\.[0-9]+)*(a[0-9]+|b[0-9]+|rc[0-9]+)?(\.post[0-9]+)?(\.dev[0-9]+)?$'; then
-            echo "::error::Version '$VERSION' is not a valid PEP 440 version (e.g. 0.2.0, 0.2.0rc1)"
+          curl -fsSL https://github.com/orhun/git-cliff/releases/download/v2.13.1/git-cliff-2.13.1-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz --strip-components=1 -C /usr/local/bin git-cliff-2.13.1/git-cliff
+
+      - name: Resolve version
+        id: resolve
+        env:
+          REQUESTED: ${{ inputs.version }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          AUTO="$(git-cliff --config cliff.toml --bumped-version)"
+          PEP440='^[0-9]+(\.[0-9]+)*(a[0-9]+|b[0-9]+|rc[0-9]+)?(\.post[0-9]+)?(\.dev[0-9]+)?$'
+
+          if [ -z "$REQUESTED" ]; then
+            VERSION="$AUTO"
+            SOURCE="auto-detected from Conventional Commits"
+          else
+            VERSION="$REQUESTED"
+            if ! echo "$VERSION" | grep -qE "$PEP440"; then
+              echo "::error::Version '$VERSION' is not a valid PEP 440 version (e.g. 0.2.0, 0.2.0rc1)"
+              exit 1
+            fi
+            if [ "$VERSION" != "$AUTO" ]; then
+              if [ "$FORCE" != "true" ]; then
+                echo "::error::Version '$VERSION' disagrees with the auto-detected '$AUTO'. Re-run with force enabled if that is deliberate."
+                exit 1
+              fi
+              echo "::warning::Forcing '$VERSION' over the auto-detected '$AUTO'."
+              SOURCE="user-specified (forced over '$AUTO')"
+            else
+              SOURCE="user-specified (matches auto-detected)"
+            fi
+          fi
+
+          # Auto-detect can legitimately return nothing useful -- e.g. a repo
+          # with no tags *and* no conventional commits to infer a bump from.
+          # Better to fail here than to try tagging an empty string.
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not determine a version to release. Pass one explicitly."
             exit 1
           fi
 
+          {
+            echo "version=$VERSION"
+            echo "auto=$AUTO"
+            echo "source=$SOURCE"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Check tag does not already exist
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
         run: |
           if git rev-parse "$VERSION" > /dev/null 2>&1; then
             echo "::error::Tag '$VERSION' already exists"
@@ -45,15 +106,14 @@ jobs:
           fi
 
       - name: Generate changelog
-        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
-        with:
-          config: cliff.toml
-          args: --latest --unreleased --strip all
         env:
-          OUTPUT: NOTES.md
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: git-cliff --config cliff.toml --latest --unreleased --strip all --output NOTES.md
 
       - name: Push tag
         if: ${{ !inputs.dry-run }}
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -64,6 +124,7 @@ jobs:
         if: ${{ !inputs.dry-run }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.resolve.outputs.version }}
         run: |
           DRAFT_URL=$(gh release create "$VERSION" \
             --title "$VERSION" \
@@ -80,16 +141,36 @@ jobs:
             echo "Review the draft and click **Publish release** to trigger the publish workflows."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Dry-run summary
-        if: ${{ inputs.dry-run }}
+      - name: Summary
+        if: always()
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          AUTO: ${{ steps.resolve.outputs.auto }}
+          SOURCE: ${{ steps.resolve.outputs.source }}
+          REF: ${{ inputs.ref || github.ref }}
+          DRY_RUN: ${{ inputs.dry-run }}
         run: |
+          # Both "true" and "false" are non-empty strings, so test the value
+          # explicitly -- ${DRY_RUN:+...} would expand in both cases.
+          if [ "$DRY_RUN" = "true" ]; then
+            HEADING="Release (dry run)"
+            MODE="dry run -- no tag pushed, no release created"
+          else
+            HEADING="Release"
+            MODE="tag pushed, draft release created"
+          fi
           {
-            echo "### Release dry-run"
+            echo "### $HEADING"
             echo ""
-            echo "**Version:** \`$VERSION\`  "
-            echo "**Mode:** dry-run -- no tag pushed, no release created."
+            echo "| | Value |"
+            echo "|---|---|"
+            echo "| Version | \`$VERSION\` |"
+            echo "| Auto-detected | \`$AUTO\` |"
+            echo "| Source | $SOURCE |"
+            echo "| Ref | \`$REF\` |"
+            echo "| Mode | $MODE |"
             echo ""
-            echo "#### Generated release notes"
+            echo "#### Release notes"
             echo ""
-            cat NOTES.md
+            cat NOTES.md 2>/dev/null || echo "_(not generated -- an earlier step failed)_"
           } >> "$GITHUB_STEP_SUMMARY"
