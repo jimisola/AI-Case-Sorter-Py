@@ -56,5 +56,9 @@ protect_breaking_commits = true
 
 filter_commits = false
 # PEP 440, no `v` prefix (0.2.0, 0.2.0rc1) -- see RELEASING.md.
-tag_pattern = "[0-9].*"
+# Anchored: git-cliff treats tag_pattern as an unanchored regex, so the
+# obvious "[0-9].*" also matches any tag merely *containing* a digit --
+# including the `v1.0.0` form that check-release.yml explicitly rejects. A
+# stray v-tag would then silently be picked up as a release boundary.
+tag_pattern = "^[0-9]+\\.[0-9]+\\.[0-9]+"
 sort_commits = "newest"

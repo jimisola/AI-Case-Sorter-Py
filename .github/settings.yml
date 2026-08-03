@@ -9,12 +9,12 @@
 #     an admin repo and needs a GitHub App + an org.
 #     https://github.com/github/safe-settings
 #
-# Kept here regardless, for two reasons: it's the same checklist FEEDBACK.md §6
-# spells out in prose, but declarative and diffable -- settings drift becomes a
+# Kept here regardless, for two reasons: it's the same ground REPO_SETUP.md
+# covers in prose, but declarative and diffable -- settings drift becomes a
 # reviewable change rather than something someone silently clicked; and if an
 # app is ever installed, it applies without being rewritten first.
 #
-# Without an app installed, FEEDBACK.md §6 remains the manual fallback.
+# Without an app installed, .github/REPO_SETUP.md is the manual fallback.
 #
 # THIS FILE IS IN repository-settings/app FORMAT, not safe-settings format --
 # they look similar but are not interchangeable. Verified against
@@ -26,7 +26,7 @@
 #      (and supports `exclude:`); this format takes a flat `labels: [...]`.
 #   2. security: safe-settings has a `repository.security` block with
 #      `enableVulnerabilityAlerts` / `enableAutomatedSecurityFixes`. There is
-#      no equivalent here, so those two stay manual -- see FEEDBACK.md §6.
+#      no equivalent here, so those two stay manual -- see REPO_SETUP.md.
 #      (For this project the wanted state is alerts ON, automated fixes OFF,
 #      because Renovate owns dependency PRs -- see D13.)
 #
@@ -92,6 +92,14 @@ labels:
   - name: dependencies
     color: "0366d6"
     description: "Dependency updates"
+
+  # Applied by the issue templates (.github/ISSUE_TEMPLATE/*.yml), which set it
+  # on every new issue. Same trap as the Renovate labels below: GitHub issue
+  # forms silently drop a label that doesn't exist, so without this entry the
+  # templates' `labels: [..., "triage"]` was doing nothing at all.
+  - name: triage
+    color: "ededed"
+    description: "New issue awaiting triage"
 
   # Applied by Renovate itself (.github/renovate.json5), not by labeler.yml.
   # These were referenced by that config but had never been created -- Renovate
