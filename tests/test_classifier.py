@@ -68,9 +68,12 @@ def test_uses_local_when_active_model_has_path(tmp_path: Path) -> None:
 
 def test_no_db_falls_back_to_http(tmp_path: Path) -> None:
     image = np.zeros((10, 10, 3), dtype=np.uint8)
-    with patch("sorter.classifier.api_client.classify", return_value=("Y", 50.0)) as m:
+    with patch("sorter.classifier.api_client.classify", return_value=("Y", 50.0)) as m_http:
         result = classifier.classify_active(image, [], {}, None)
     assert result == ("Y", 50.0)
+    # The return value alone doesn't prove the fallback: assert the HTTP path
+    # is what produced it.
+    m_http.assert_called_once()
 
 
 def test_missing_model_file_falls_back_to_http(tmp_path: Path) -> None:
@@ -81,8 +84,9 @@ def test_missing_model_file_falls_back_to_http(tmp_path: Path) -> None:
     ModelRepo(db).update(model)
 
     image = np.zeros((10, 10, 3), dtype=np.uint8)
-    with patch("sorter.classifier.api_client.classify", return_value=("Z", 33.0)) as m:
+    with patch("sorter.classifier.api_client.classify", return_value=("Z", 33.0)) as m_http:
         with patch("sorter.classifier.local_inference.classify") as m_local:
             result = classifier.classify_active(image, [], {}, db)
     assert result == ("Z", 33.0)
+    m_http.assert_called_once()
     m_local.assert_not_called()
