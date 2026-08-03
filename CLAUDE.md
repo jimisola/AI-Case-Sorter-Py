@@ -576,5 +576,4 @@ flowchart TD
   CI. Most UI modules need a display — `xvfb-run -a pytest` covers them on a
   headless box; without tkinter installed those modules skip rather than
   fail.
-- See **`OPEN_SOURCE_READINESS.md`** for the open-source readiness assessment and
-  **`CONTRIBUTING.md`** for how to set up and contribute.
+- See **`CONTRIBUTING.md`** for how to set up and contribute.

@@ -206,8 +206,12 @@ the app. Nothing to do.
 
 - **Installed on Windows via the installer:** the app tells you when an update
   is available and installs it on the next restart.
-- **Running from a git checkout:** `git pull` as usual. The in-app updater is
-  still available, but a source checkout is normally managed with git.
+- **Running from a git checkout:** `git pull` as usual, then just launch the
+  app again — `./start.sh` / `start.bat` always run whatever's currently on
+  disk, so a pull that changes `bootstrap.py`, `start.sh`/`start.bat`
+  themselves, or `uv.lock` (new/updated dependencies) takes effect on the
+  very next launch with nothing extra to run. The in-app updater is still
+  available, but a source checkout is normally managed with git.
 - Disable update checks entirely with `CASESORTER_UPDATE_DISABLED=1`, or the
   checkbox in the update dialog.
 
@@ -250,8 +254,6 @@ and point `CASESORTER_API_CA_BUNDLE` at it.
   changes.
 - [`CLAUDE.md`](CLAUDE.md) — architecture map for contributors and AI coding
   assistants (layers, event bus, module reference, UI tabs, data layout).
-- [`OPEN_SOURCE_READINESS.md`](OPEN_SOURCE_READINESS.md) — open-source readiness
-  assessment and checklist.
 
 ---
 
