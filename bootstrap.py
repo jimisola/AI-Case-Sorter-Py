@@ -109,9 +109,21 @@ def install_uv() -> str:
         # own .ps1, so it's a known-working pattern in this repo already.
         script_path = UV_INSTALL_DIR / "_uv-installer.ps1"
         script_path.write_text(script, encoding="utf-8")
+        # Prefer pwsh (PowerShell 7) over the legacy powershell.exe (5.1) if
+        # it's available: real CI failure, not a guess -- the installer
+        # script itself failed with "the 'Get-ExecutionPolicy' command was
+        # found ... but the module could not be loaded", a known symptom of
+        # powershell.exe inheriting a $env:PSModulePath that doesn't include
+        # 5.1's built-in module locations when spawned from a pwsh session
+        # (which this script always is, directly or via bootstrap.py's own
+        # caller). pwsh doesn't have that cross-version mismatch with itself.
+        # Not all end-user machines have pwsh, though, so fall back to
+        # powershell.exe -- it's what the official docs recommend and it
+        # works fine outside a nested-pwsh context.
+        ps_exe = "pwsh" if shutil.which("pwsh") else "powershell"
         try:
             subprocess.run(
-                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script_path)],
+                [ps_exe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script_path)],
                 env=env,
                 check=True,
             )
