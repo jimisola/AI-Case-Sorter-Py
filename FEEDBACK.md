@@ -3,10 +3,22 @@
 Working document for the repo-standardization contribution to
 [`sjseth/AI-Case-Sorter-Py`](https://github.com/sjseth/AI-Case-Sorter-Py).
 
-The work is split into small PRs **on the fork** (`jimisola/AI-Case-Sorter-Py`) so each piece
-can be verified independently, then submitted upstream as **one PR**. This file is the running
-record of what changed, what was decided and why, and what needs the repo owner — it is the
-basis for that PR's description.
+The work is staged **on the fork** (`jimisola/AI-Case-Sorter-Py`) so every piece can be
+verified before any of it is proposed upstream as **one PR**. This file is the running record
+of what changed, what was decided and why, and what needs the repo owner.
+
+**Two audiences, deliberately kept apart:**
+
+- The **fork PR** (`jimisola/AI-Case-Sorter-Py#1`) is a staging branch, written for the
+  contributor: current state, what's blocked, what's left to decide.
+- The **upstream PR** (not yet open) is written for the maintainer, and gets its own
+  description drawn from this file — decisions from §2, the owner checklist from §6.
+
+**This file itself is not intended to ship upstream.** It's process meta about *this
+contribution*, not documentation of the project, and would sit oddly as a permanent file in
+someone else's repo. The plan is to fold its durable content into the upstream PR description
+and turn §9 into individual issues, then drop the file in the commit that opens upstream.
+Kept for now because the work is still in flight and this is the working record.
 
 **Status:** implemented; all commits green on CI (Ubuntu + Windows). Not yet exercised: a real
 release cut on the fork — see §8.
@@ -407,3 +419,4 @@ heading — kept short here since FEEDBACK.md is already long.
 | 2026-08-03 | `launcher-smoke` is now green on both `ubuntu-latest` and `windows-latest`. Getting there caught two more real bugs beyond the first two: `install_uv()`'s Windows path silently failed when piping the installer script via stdin, and a PowerShell cross-version module-loading failure when spawning `powershell.exe` from a `pwsh` session. Four real bugs total from this one CI job — recorded as the concrete case for why it's worth having, not just process for its own sake. |
 | 2026-08-03 | Adopted three inputs from the `resurs-internal` `.github` template's release workflow (auto-detect version, `ref`, `force` — D15) and its PR auto-labeling (D16); declined its `security-scan.yml` with reasons (D17). Made Release Preview manual-only (D18). Recorded F13: the window title hardcoded `v2.0.1`, connected to no tag, no `__version__`, and no `pyproject.toml` — found by a user actually launching the app, not by any check in here. Corrected §1's stale "three files"/"planning not started" framing. |
 | 2026-08-03 | Added suggestion §9.9: `CLAUDE.md`'s 613-line size as a context cost, with per-section measurements and three options — recorded rather than acted on, since §4/§5 are the maintainer's architecture reference and half the file. Fixed the part that was self-inflicted (a duplicated commit-type list added earlier in this PR, now a pointer). Also moved the release branch restriction (`main`/`hotfix/*`/`release/*`) into `release.yml` so it rejects before tagging — `check-release.yml` only ran on `release: published`, i.e. after the tag and draft already existed. |
+| 2026-08-03 | Separated the two audiences. The fork PR's description was written as a pitch to the maintainer, but its actual reader is the contributor — rewritten as a staging-branch status: what's done, what's blocked (a real release, which needs a merge to `main` first), and what's still to decide. The maintainer-facing pitch belongs on the upstream PR, which doesn't exist yet. Also recorded the intent that this file does **not** ship upstream: durable content folds into that PR's description, §9 becomes individual issues, and the file is dropped in the commit that opens upstream. |
