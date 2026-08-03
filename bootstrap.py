@@ -100,13 +100,23 @@ def install_uv() -> str:
         script_url = f"{base}/uv-installer.ps1"
         with urllib.request.urlopen(script_url, timeout=30) as resp:
             script = resp.read().decode("utf-8")
-        subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "-"],
-            input=script,
-            text=True,
-            env=env,
-            check=True,
-        )
+        # A temp file + -File, not piping the script via -Command - on stdin:
+        # real Windows PowerShell (powershell.exe, not pwsh) is far less
+        # reliable at reading a full multi-line script that way -- confirmed
+        # the hard way in CI: the piped version exited 0 with no error at all
+        # and simply never created the binary. -File is also what
+        # installer/install-windows.bat already uses successfully for its
+        # own .ps1, so it's a known-working pattern in this repo already.
+        script_path = UV_INSTALL_DIR / "_uv-installer.ps1"
+        script_path.write_text(script, encoding="utf-8")
+        try:
+            subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script_path)],
+                env=env,
+                check=True,
+            )
+        finally:
+            script_path.unlink(missing_ok=True)
     else:
         script_url = f"{base}/uv-installer.sh"
         with urllib.request.urlopen(script_url, timeout=30) as resp:
