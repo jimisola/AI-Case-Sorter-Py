@@ -308,6 +308,38 @@ listed here. Ranked roughly by how much it matters, not by count.
    verified without a real Windows machine, and this file already has one documented
    past failure mode from an unverified edit (`tests/test_installer_scripts.py`'s ASCII/CRLF
    guards exist because of it).
+9. **`CLAUDE.md` is 613 lines, and every assistant session loads all of it.** Raised during
+   this work as a context-cost concern. Measured rather than guessed:
+
+   | Section | Lines |
+   |---|---|
+   | §4 Module reference | 194 |
+   | §5 The UI | 110 |
+   | §7 Updates & Windows install | 75 |
+   | §8 Conventions & gotchas | ~47 |
+   | §1–3, §6 | ~168 |
+
+   §4 + §5 are half the file. They're also the part that most earns its keep — the module
+   reference is what made navigating this codebase fast, and it's where the constraints that
+   actually shaped this PR live (the threading rule, `pending.json` being a sibling of
+   `pending/`, headstamps never being cached). Cutting them would remove the file's core
+   value, so **nothing was cut here** — deliberately, since it's an architecture doc written
+   by the maintainer and trimming it inside a tooling PR is scope creep on content the
+   contributor is not best placed to judge. The one thing that *was* fixed is
+   self-inflicted: this PR briefly added a full restatement of `CONTRIBUTING.md`'s commit-type
+   list to §8, now reduced to a 5-line pointer.
+
+   Options, roughly in order of recommendation:
+   - **Split §4/§5 into `docs/architecture.md`** and leave `CLAUDE.md` a ~300-line index
+     pointing at it. Same information, always-loaded file halves, nothing lost. Lowest risk.
+   - **Trim §5's per-dialog list**, which largely restates what the filenames already say
+     (~40 lines, mild loss).
+   - **Leave it.** 613 lines is roughly 8k tokens — real, but modest next to an assistant
+     guessing wrong about the threading model or the updater's constraints, which is exactly
+     what this file prevents.
+
+   Worth noting the file's own header says *"Keep this file current"* — the length is at
+   least partly deliberate, so this is a judgement call for the maintainer, not a defect.
 
 ### From an independent review pass (fresh subagent, codebase only — not shown this session's
 work, so it couldn't just agree with the above)
@@ -359,3 +391,4 @@ heading — kept short here since FEEDBACK.md is already long.
 | 2026-08-03 | Added §9 "Suggestions for improvement" (own findings + an independent subagent review). Updated §8's verification table to reflect what actually happened: uv/tkinter/libGL claims verified empirically, `bootstrap.py` proven on real GitHub Actions runners on both platforms (catching two real bugs in the process), and marked what's genuinely not done yet (releases, artifact upload, self-update, a human's own hands on Windows). |
 | 2026-08-03 | `launcher-smoke` is now green on both `ubuntu-latest` and `windows-latest`. Getting there caught two more real bugs beyond the first two: `install_uv()`'s Windows path silently failed when piping the installer script via stdin, and a PowerShell cross-version module-loading failure when spawning `powershell.exe` from a `pwsh` session. Four real bugs total from this one CI job — recorded as the concrete case for why it's worth having, not just process for its own sake. |
 | 2026-08-03 | Adopted three inputs from the `resurs-internal` `.github` template's release workflow (auto-detect version, `ref`, `force` — D15) and its PR auto-labeling (D16); declined its `security-scan.yml` with reasons (D17). Made Release Preview manual-only (D18). Recorded F13: the window title hardcoded `v2.0.1`, connected to no tag, no `__version__`, and no `pyproject.toml` — found by a user actually launching the app, not by any check in here. Corrected §1's stale "three files"/"planning not started" framing. |
+| 2026-08-03 | Added suggestion §9.9: `CLAUDE.md`'s 613-line size as a context cost, with per-section measurements and three options — recorded rather than acted on, since §4/§5 are the maintainer's architecture reference and half the file. Fixed the part that was self-inflicted (a duplicated commit-type list added earlier in this PR, now a pointer). Also moved the release branch restriction (`main`/`hotfix/*`/`release/*`) into `release.yml` so it rejects before tagging — `check-release.yml` only ran on `release: published`, i.e. after the tag and draft already existed. |
