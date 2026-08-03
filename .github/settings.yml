@@ -93,6 +93,35 @@ labels:
     color: "0366d6"
     description: "Dependency updates"
 
+  # Applied by Renovate itself (.github/renovate.json5), not by labeler.yml.
+  # These were referenced by that config but had never been created -- Renovate
+  # does not create labels it references, so every one of them was silently
+  # doing nothing.
+  - name: bot-renovate
+    color: "5319e7"
+    description: "Opened by Renovate"
+  - name: bot-renovate-stop
+    color: "5d0811"
+    description: "Renovate: stop updating this PR (add it yourself to pin a PR)"
+  - name: security
+    color: "b60205"
+    description: "Vulnerability alert / security update"
+  - name: needs-hardware-test
+    color: "e99695"
+    description: "torch/torchvision bump -- verify on real CUDA hardware before merging"
+  - name: renovate-version-major
+    color: "d73a4a"
+    description: "Major version update (breaking risk; never auto-merged)"
+  - name: renovate-version-minor
+    color: "fbca04"
+    description: "Minor version update"
+  - name: renovate-version-patch
+    color: "0e8a16"
+    description: "Patch version update"
+  - name: renovate-version-digest
+    color: "c5def5"
+    description: "Digest/SHA pin update (never auto-merged)"
+
   # GitHub's defaults, restated so this file is the whole picture rather than a
   # diff against whatever a repo happened to start with.
   - name: bug

@@ -19,6 +19,8 @@
     "bot-renovate",
   ],
 
+  // Functional rather than decorative -- add this one to a PR to stop
+  // Renovate rebasing/updating that PR any further.
   stopUpdatingLabel: "bot-renovate-stop",
 
   dependencyDashboard: false,
@@ -57,6 +59,9 @@
       addLabels: ["renovate-version-major"],
       minimumReleaseAge: "7 days",
     },
+    // minor/patch are labelled too even though they auto-merge: a complete
+    // set means every Renovate PR states its own risk tier at a glance,
+    // including one that sits open because its checks failed.
     {
       matchUpdateTypes: ["minor"],
       addLabels: ["renovate-version-minor"],
@@ -93,21 +98,16 @@
     // own PRs regardless (see matchUpdateTypes: ["digest"] above).
     // =====================================================
 
+    // No ecosystem-classification labels (renovate-type-python /
+    // renovate-type-cicd). Those earn their place in an org juggling Java,
+    // Node, Python and Docker across many repos -- here there are exactly
+    // two ecosystems, and .github/labeler.yml already separates them:
+    // `dependencies` for pyproject.toml/uv.lock, `ci` for .github/**.
     {
       matchManagers: ["github-actions"],
       semanticCommitType: "chore",
       semanticCommitScope: "github-actions",
-      addLabels: ["renovate-type-cicd"],
       automerge: true,
-    },
-
-    // =====================================================
-    // Ecosystem classification labels
-    // =====================================================
-
-    {
-      matchDatasources: ["pypi"],
-      addLabels: ["renovate-type-python"],
     },
   ],
 }

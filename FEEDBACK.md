@@ -189,10 +189,15 @@ it's all in repo/org settings or third-party app installs.
       of Issues)
 - [ ] Approve the first CI run on this PR — GitHub holds workflow runs from first-time
       outside contributors until a maintainer clicks "Approve and run"
-- [ ] **Create the labels `.github/labeler.yml` references** — `actions/labeler` does *not*
-      create labels; it errors on any label that doesn't already exist. Nine are needed
-      beyond GitHub's defaults (`documentation` already exists). One command, copy-pasteable:
+- [ ] **Create the labels the config files reference.** Neither tool creates them:
+      `actions/labeler` errors on a missing label, and Renovate silently applies nothing.
+      Both sets were referenced but had never existed — the Renovate ones had been dead
+      config since the moment they were written. 17 needed beyond GitHub's defaults
+      (`documentation` already exists). All of it is also declared in
+      `.github/settings.yml`, so installing `repository-settings/app` applies it instead.
+      Copy-pasteable:
       ```bash
+      # Subsystem labels -- .github/labeler.yml, applied by changed path
       gh label create ui           --color 1d76db --description "Tkinter UI: tabs, dialogs, theme"
       gh label create training     --color 6f42c1 --description "Model training, local inference, evaluation"
       gh label create hardware     --color b60205 --description "Serial board, camera, image processing"
@@ -202,8 +207,18 @@ it's all in repo/org settings or third-party app installs.
       gh label create tests        --color c2e0c6 --description "Test suite"
       gh label create ci           --color 000000 --description "CI/CD workflows and repo tooling"
       gh label create dependencies --color 0366d6 --description "Dependency updates"
+
+      # Renovate labels -- .github/renovate.json5
+      gh label create bot-renovate            --color 5319e7 --description "Opened by Renovate"
+      gh label create bot-renovate-stop       --color 5d0811 --description "Renovate: stop updating this PR (add it yourself to pin a PR)"
+      gh label create security                --color b60205 --description "Vulnerability alert / security update"
+      gh label create needs-hardware-test     --color e99695 --description "torch/torchvision bump -- verify on real CUDA hardware before merging"
+      gh label create renovate-version-major  --color d73a4a --description "Major version update (breaking risk; never auto-merged)"
+      gh label create renovate-version-minor  --color fbca04 --description "Minor version update"
+      gh label create renovate-version-patch  --color 0e8a16 --description "Patch version update"
+      gh label create renovate-version-digest --color c5def5 --description "Digest/SHA pin update (never auto-merged)"
       ```
-      (Already done on the fork, so the labeler works there today.)
+      (All already created on the fork, so both tools work there today.)
 
 **Only if PyPI publishing is ever turned on** (currently shipped disabled — see D11)
 - [ ] Create the project on TestPyPI and PyPI
