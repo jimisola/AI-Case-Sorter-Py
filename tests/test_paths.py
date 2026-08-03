@@ -165,7 +165,11 @@ def test_migration_no_legacy_folder(monkeypatch, tmp_path: Path) -> None:
 
 def test_find_uv_prefers_project_local_install(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(paths, "app_root", lambda: tmp_path)
-    local = tmp_path / ".uv" / "bin" / "uv"
+    # Match the OS-appropriate binary name find_uv() itself looks for
+    # (uv.exe on Windows) -- this ran green on Linux but failed for real on
+    # Windows CI when it was hardcoded to the POSIX name.
+    binary_name = "uv.exe" if paths.os.name == "nt" else "uv"
+    local = tmp_path / ".uv" / "bin" / binary_name
     local.parent.mkdir(parents=True)
     local.touch()
     monkeypatch.setattr(paths.shutil, "which", lambda _name: "/usr/bin/some-other-uv")
