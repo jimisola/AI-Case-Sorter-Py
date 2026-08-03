@@ -197,30 +197,56 @@ def ensure_linux_runtime_libs(uv: str, auto_install: bool) -> None:
     """opencv dlopens libGL/glib at runtime. uv's Python bundles Tcl/Tk, but
     not these -- they're system X11/graphics libraries, not part of a Python
     build. Probed the same way start.sh did: try the import for real, in the
-    app's actual environment, and read the failure instead of guessing."""
+    app's actual environment, and read the failure instead of guessing.
+
+    The probe loops because the import reports only the *first* library it
+    fails to find: on a minimal container or a fresh WSL image both libGL and
+    glib are typically missing, and installing one just reveals the other. One
+    pass would install libGL, return happy, and let the app die on glib with
+    none of this guidance. The loop is bounded by the number of features we
+    know how to install, so an unrecognised failure still exits rather than
+    spinning."""
     if not sys.platform.startswith("linux"):
         return
 
-    probe = subprocess.run(
-        [uv, "run", "--no-sync", "python", "-c", "import cv2"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
+    # (substring to match in stderr, _PKG_NAMES feature, message, hint)
+    known = (
+        ("libgl", "gl", "OpenCV needs libGL.so.1 from the system.", "Install the system OpenGL library and re-run."),
+        (
+            ("libgthread", "libglib"),
+            "glib",
+            "OpenCV needs glib from the system.",
+            "Install glib2 (apt: libglib2.0-0) and re-run.",
+        ),
     )
-    if probe.returncode == 0:
-        return
 
-    stderr = probe.stderr or ""
-    if "libgl" in stderr.lower():
-        log("OpenCV needs libGL.so.1 from the system.")
-        if not _try_install_system_pkg("gl", auto_install):
-            raise SystemExit("[bootstrap] Install the system OpenGL library and re-run.")
-    elif "libgthread" in stderr.lower() or "libglib" in stderr.lower():
-        log("OpenCV needs glib from the system.")
-        if not _try_install_system_pkg("glib", auto_install):
-            raise SystemExit("[bootstrap] Install glib2 (apt: libglib2.0-0) and re-run.")
-    else:
-        raise SystemExit(f"[bootstrap] OpenCV failed to import:\n{stderr}")
+    # len(known) + 1 passes: one probe per library we might have to install,
+    # plus a final probe to confirm the last install actually fixed it.
+    for _ in range(len(known) + 1):
+        probe = subprocess.run(
+            [uv, "run", "--no-sync", "python", "-c", "import cv2"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if probe.returncode == 0:
+            return
+
+        stderr = probe.stderr or ""
+        haystack = stderr.lower()
+        for needles, feature, message, hint in known:
+            if isinstance(needles, str):
+                needles = (needles,)
+            if any(n in haystack for n in needles):
+                log(message)
+                if not _try_install_system_pkg(feature, auto_install):
+                    raise SystemExit(f"[bootstrap] {hint}")
+                break
+        else:
+            raise SystemExit(f"[bootstrap] OpenCV failed to import:\n{stderr}")
+
+    # Every library we know about has been installed and it still won't import.
+    raise SystemExit("[bootstrap] OpenCV still fails to import after installing its system libraries.")
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +293,30 @@ def main(argv: list[str] | None = None) -> int:
     # fallback -- clobbering the real version the release workflow baked in.
     # Verified this exact failure mode against a real git-less copy of this
     # repo before adding the flag, not assumed.
-    subprocess.run([uv, "sync", "--frozen", "--no-install-project"], cwd=ROOT, check=True)
+    #
+    # --inexact: `uv sync` is *exact* by default and removes anything in the
+    # venv that isn't in the lockfile. torch/torchvision are the [ml] extra --
+    # deliberately outside the default sync set, installed on demand by
+    # dialog_install_torch.py straight into this same venv -- so an exact sync
+    # here uninstalls PyTorch on every single launch. The user would train,
+    # restart, and find it gone, with a multi-GB re-download to get back.
+    # CI still syncs exactly (--locked in build.yml); being strict is the
+    # whole point there. Here, a user-installed extra has to survive.
+    try:
+        subprocess.run(
+            [uv, "sync", "--frozen", "--inexact", "--no-install-project"],
+            cwd=ROOT,
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        # Every other failure path in this file exits with something a
+        # non-developer can act on; a raw traceback here would be the odd one
+        # out, and this is the step most likely to fail on a flaky network.
+        raise SystemExit(
+            f"[bootstrap] Dependency sync failed (uv exited {exc.returncode}).\n"
+            "[bootstrap] Check your network connection and re-run. If it persists, "
+            "delete the .venv folder and try again."
+        ) from exc
 
     ensure_linux_runtime_libs(uv, auto_install)
 

@@ -5,8 +5,7 @@ its whole job is to provision a newer one via uv -- so the properties worth
 guarding are "doesn't import anything that isn't in the box" and "does what
 the CLI contract promises", not the actual uv install/sync (that needs a
 real network and a real uv release; exercised in CI's launcher-smoke job on
-real runners, and manually against a real uv install while this was built --
-see FEEDBACK.md).
+real runners, and manually against a real uv install while this was built).
 """
 
 from __future__ import annotations
@@ -123,6 +122,76 @@ def test_apply_update_runs_before_sync(bootstrap, monkeypatch) -> None:
 
     bootstrap.main([])
     assert order == ["apply_update", "uv_sync"]
+
+
+def test_sync_is_inexact_so_the_ml_extra_survives(bootstrap, monkeypatch) -> None:
+    """`uv sync` is exact by default and prunes anything absent from the
+    lockfile. torch/torchvision are the [ml] extra -- installed on demand by
+    dialog_install_torch.py into this same venv, outside the lock -- so
+    without --inexact every launch silently uninstalls PyTorch."""
+    monkeypatch.setattr(bootstrap, "find_uv", MagicMock(return_value="/fake/uv"))
+    monkeypatch.setattr(bootstrap, "apply_pending_update", MagicMock())
+    monkeypatch.setattr(bootstrap, "ensure_linux_runtime_libs", MagicMock())
+
+    sync_cmd = []
+
+    def tracking_run(cmd, *a, **kw):
+        if cmd[1:2] == ["sync"]:
+            sync_cmd.extend(cmd)
+        return MagicMock(returncode=0)
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", tracking_run)
+
+    bootstrap.main([])
+    assert "--inexact" in sync_cmd, f"launcher sync would prune the [ml] extra: {sync_cmd}"
+
+
+def test_sync_failure_exits_with_a_readable_message(bootstrap, monkeypatch) -> None:
+    """The audience for this script is a non-developer who downloaded a ZIP;
+    a raw CalledProcessError traceback is not an actionable failure."""
+    monkeypatch.setattr(bootstrap, "find_uv", MagicMock(return_value="/fake/uv"))
+    monkeypatch.setattr(bootstrap, "apply_pending_update", MagicMock())
+    monkeypatch.setattr(bootstrap, "ensure_linux_runtime_libs", MagicMock())
+
+    def failing_run(cmd, *a, **kw):
+        if cmd[1:2] == ["sync"]:
+            raise bootstrap.subprocess.CalledProcessError(1, cmd)
+        return MagicMock(returncode=0)
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", failing_run)
+
+    with pytest.raises(SystemExit) as excinfo:
+        bootstrap.main([])
+    assert "Dependency sync failed" in str(excinfo.value)
+
+
+def test_runtime_lib_probe_retries_for_each_known_library(bootstrap, monkeypatch) -> None:
+    """The cv2 import reports only the first missing library, so a box short
+    of both libGL and glib needs a second pass -- otherwise bootstrap installs
+    libGL, declares success, and the app dies on glib with no guidance."""
+    monkeypatch.setattr(bootstrap.sys, "platform", "linux")
+
+    installed = []
+    monkeypatch.setattr(
+        bootstrap,
+        "_try_install_system_pkg",
+        lambda feature, auto_install: installed.append(feature) or True,
+    )
+
+    errors = [
+        "ImportError: libGL.so.1: cannot open shared object file",
+        "ImportError: libgthread-2.0.so.0: cannot open shared object file",
+    ]
+
+    def fake_run(cmd, *a, **kw):
+        if errors:
+            return MagicMock(returncode=1, stderr=errors.pop(0))
+        return MagicMock(returncode=0, stderr="")
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", fake_run)
+
+    bootstrap.ensure_linux_runtime_libs("/fake/uv", auto_install=True)
+    assert installed == ["gl", "glib"]
 
 
 def test_find_uv_delegates_to_sorter_paths(bootstrap, monkeypatch) -> None:
