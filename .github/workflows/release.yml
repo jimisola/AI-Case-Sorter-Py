@@ -47,10 +47,25 @@ jobs:
       # release, not what the passed args compute, so --bumped-version has to
       # be read from the binary's own stdout. Using it for the changelog too
       # keeps one tool in this workflow instead of a binary plus an action.
+      #
+      # Pinned by digest, not just by version: a GitHub release asset is
+      # mutable by its upstream owner, and this job holds contents: write plus
+      # a token that can push tags and create releases -- i.e. it can reach the
+      # very artifacts the in-app updater installs on users' machines. Every
+      # *action* here is SHA-pinned for that reason; a raw download deserves
+      # the same. The digest was cross-checked against upstream's published
+      # .sha512 for the same asset.
       - name: Install git-cliff
+        env:
+          GIT_CLIFF_VERSION: "2.13.1"
+          GIT_CLIFF_SHA256: "9a1263f24e59a2f508c7b3d3283c9dea94a8bf697f96dbc18cc783cac6284546"
         run: |
-          curl -fsSL https://github.com/orhun/git-cliff/releases/download/v2.13.1/git-cliff-2.13.1-x86_64-unknown-linux-gnu.tar.gz \
-            | tar -xz --strip-components=1 -C /usr/local/bin git-cliff-2.13.1/git-cliff
+          curl -fsSL -o git-cliff.tar.gz \
+            "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${GIT_CLIFF_SHA256}  git-cliff.tar.gz" | sha256sum -c -
+          tar -xzf git-cliff.tar.gz --strip-components=1 -C /usr/local/bin \
+            "git-cliff-${GIT_CLIFF_VERSION}/git-cliff"
+          rm git-cliff.tar.gz
 
       - name: Resolve version
         id: resolve
@@ -128,15 +143,21 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: git-cliff --config cliff.toml --latest --unreleased --strip all --output NOTES.md
 
+      # The checkout above sets persist-credentials: false, so `origin` carries
+      # no auth -- a bare `git push origin` here would 403. Pushing to an
+      # explicit tokenised URL keeps the hardening (no credential left behind
+      # in .git/config for later steps to leak) while still authenticating.
       - name: Push tag
         if: ${{ !inputs.dry-run }}
         env:
           VERSION: ${{ steps.resolve.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag "$VERSION"
-          git push origin "$VERSION"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$VERSION"
 
       - name: Create draft GitHub Release
         if: ${{ !inputs.dry-run }}
@@ -144,11 +165,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.resolve.outputs.version }}
         run: |
+          # `gh release create` prints the release URL on stdout; it has no
+          # --json/--jq of its own (those live on `release view`/`list`).
           DRAFT_URL=$(gh release create "$VERSION" \
             --title "$VERSION" \
             --notes-file NOTES.md \
-            --draft \
-            --json url -q .url)
+            --draft)
           {
             echo "### Release draft created"
             echo ""
