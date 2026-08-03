@@ -23,7 +23,7 @@ def install(monkeypatch, tmp_path: Path):
     (app / "main.py").write_text("old main\n", encoding="utf-8")
     (app / "sorter" / "__init__.py").write_text('__version__ = "0.1.0"\n', encoding="utf-8")
     (app / "sorter" / "gone.py").write_text("removed upstream\n", encoding="utf-8")
-    (app / "requirements.txt").write_text("requests\n", encoding="utf-8")
+    (app / "pyproject.toml").write_text("requests\n", encoding="utf-8")
     monkeypatch.setenv("CASESORTER_DATA_DIR", str(data))
     monkeypatch.setattr(paths, "app_root", lambda: app)
     return app, data
@@ -55,15 +55,16 @@ def test_applies_staged_files(install) -> None:
             "main.py": "new main\n",
             "sorter/__init__.py": '__version__ = "0.9.0"\n',
             "sorter/updater.py": "brand new\n",
-            "requirements.txt": "requests\nnumpy\n",
+            "pyproject.toml": "requests\nnumpy\n",
         },
     )
 
     assert apply_update.apply_pending() is True
     assert (app / "main.py").read_text(encoding="utf-8") == "new main\n"
     assert (app / "sorter" / "updater.py").read_text(encoding="utf-8") == "brand new\n"
-    # requirements.txt must land before the launcher's hash check runs.
-    assert (app / "requirements.txt").read_text(encoding="utf-8") == "requests\nnumpy\n"
+    # pyproject.toml/uv.lock must land before bootstrap.py's `uv sync` runs,
+    # so a dependency change in an update installs on this same launch.
+    assert (app / "pyproject.toml").read_text(encoding="utf-8") == "requests\nnumpy\n"
 
 
 def test_prunes_modules_removed_upstream(install) -> None:
@@ -89,7 +90,8 @@ def test_protected_paths_survive(install) -> None:
     (app / ".venv" / "lib").mkdir(parents=True)
     (app / ".venv" / "lib" / "pyvenv.cfg").write_text("venv", encoding="utf-8")
     (app / ".env").write_text("SECRET=1", encoding="utf-8")
-    (app / ".installed").write_text("hash", encoding="utf-8")
+    (app / ".uv" / "bin").mkdir(parents=True)
+    (app / ".uv" / "bin" / "uv").write_text("uv-binary", encoding="utf-8")
     (app / "data").mkdir()
     (app / "data" / "casesorter.db").write_text("portable db", encoding="utf-8")
 
@@ -100,7 +102,7 @@ def test_protected_paths_survive(install) -> None:
             "main.py": "new\n",
             "sorter/__init__.py": "new\n",
             ".env": "STOLEN=1",
-            ".installed": "bogus",
+            ".uv/bin/uv": "clobbered",
             "data/casesorter.db": "clobbered",
             ".venv/lib/pyvenv.cfg": "clobbered",
         },
@@ -108,7 +110,7 @@ def test_protected_paths_survive(install) -> None:
 
     assert apply_update.apply_pending() is True
     assert (app / ".env").read_text(encoding="utf-8") == "SECRET=1"
-    assert (app / ".installed").read_text(encoding="utf-8") == "hash"
+    assert (app / ".uv" / "bin" / "uv").read_text(encoding="utf-8") == "uv-binary"
     assert (app / "data" / "casesorter.db").read_text(encoding="utf-8") == "portable db"
     assert (app / ".venv" / "lib" / "pyvenv.cfg").read_text(encoding="utf-8") == "venv"
 

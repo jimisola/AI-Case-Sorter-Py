@@ -42,27 +42,44 @@ Two ways to classify:
 from a legacy `data/config.json` if present), loads `Config`, and launches
 `sorter.ui.app.MainWindow`.
 
-**Launch (handles venv + system deps automatically):**
+**Launch (handles the Python runtime, system deps, and dependency sync
+automatically):**
 - Linux/macOS: `./start.sh` (`--auto` / `AUTO_INSTALL=1` auto-confirms `sudo`
-  package installs for tkinter/libGL/glib/venv)
+  package installs for libGL/glib — the only system packages still needed;
+  see below)
 - Windows: `start.bat`
-- Directly: `python main.py`
+- Either just hands off to `bootstrap.py`, which does the actual work via
+  [uv](https://docs.astral.sh/uv/): installs uv itself if it isn't already
+  present (into a project-local `.uv/`, not system-wide), provisions the
+  pinned Python version from `.python-version` (uv's own build, bundling
+  Tcl/Tk — the app's *system* Python only has to be new enough to run
+  `bootstrap.py` itself, not to run the app), syncs dependencies from the
+  committed `uv.lock`, then launches. See `bootstrap.py`'s module docstring
+  for the full ordering and why it has to stay stdlib-only.
+- Directly (once synced): `uv run python main.py`, or `python main.py` inside
+  an activated `.venv`.
 
 **Tests:** `pytest` from the repo root (`tests/conftest.py` puts the repo on
-`sys.path`). There are ~30 test modules covering the non-UI logic (config, db,
-repository, evaluator, model_io, run_controller, serial emulator, auth, etc.).
-There is **no CI configured** — run pytest locally before pushing.
+`sys.path`). There are ~35 test modules covering the non-UI logic (config, db,
+repository, evaluator, model_io, run_controller, serial emulator, auth,
+bootstrap, etc.). CI (`.github/workflows/build.yml`) runs the full matrix on
+every push/PR — run `pytest` locally before pushing regardless, since CI
+turnaround is slower than your own machine. The suite is threading-fragile by
+design (see `tests/conftest.py`); don't parallelize it.
 
-**Python:** 3.12+. **Core deps:** pyserial, opencv-python, numpy, Pillow,
-requests, msal, platformdirs (+ `pygrabber` on Windows). **Optional ML deps:**
-torch, torchvision.
+**Python:** 3.12+ floor (`pyproject.toml`); `.python-version` pins the actual
+version uv provisions for the app itself, independent of that floor. **Core
+deps:** pyserial, opencv-python, numpy, Pillow, requests, msal, platformdirs
+(+ `pygrabber` on Windows). **Optional ML deps:** torch, torchvision.
 
 ```
 AI-Case-Sorter-Py/
 ├── main.py                  # entry point (+ `--apply-update` pre-launch hook)
-├── start.sh / start.bat     # bootstrap launchers (venv + system deps + update)
+├── bootstrap.py              # cross-platform launcher logic (Python+uv+deps+update)
+├── start.sh / start.bat     # thin per-OS shims that just call bootstrap.py
 ├── pyproject.toml           # package metadata; [ml] extra = torch/torchvision
-├── requirements.txt
+├── uv.lock                  # committed, exact dependency resolution
+├── .python-version           # Python version uv provisions for the app
 ├── sorter/                  # all application code
 │   ├── ui/                  # Tkinter UI (tabs + dialogs + theme)
 │   └── training/            # out-of-process ConvNeXt trainer
@@ -467,7 +484,7 @@ the same trust anchor as `git pull` over HTTPS, and the source tree is ~1 MB, so
 delta transfer buys nothing.
 
 **Version:** `sorter/__init__.py.__version__` is the single source.
-`pyproject.toml` reads it via `[tool.setuptools.dynamic]`, and the updater
+`pyproject.toml` reads it via `[tool.hatch.version]`, and the updater
 compares it against the latest release tag. **Bump it in the same commit you tag
 a release** — otherwise the updater re-offers a release users already have.
 
@@ -480,7 +497,7 @@ updater.stage_update()       download → verify → <data>/updates/pending/
         ↓                    (the app folder is NOT touched)
      [restart]
         ↓
-main.py --apply-update       run by start.bat/start.sh BEFORE pip  [stdlib ONLY]
+main.py --apply-update       run by bootstrap.py BEFORE `uv sync`   [stdlib ONLY]
         ↓
 sorter.apply_update          backup → copy over app dir → prune → clear pending
 ```
@@ -490,24 +507,26 @@ sorter.apply_update          backup → copy over app dir → prune → clear pe
   `main.py` + `sorter/__init__.py` to be present before trusting an archive, and
   caps the archive size. Staging is atomic: `pending/` only ever exists complete.
 - **`apply_update.py`** — **must stay stdlib-only.** It runs against a venv that
-  may hold nothing but pip; importing `requests` here would break the very launch
-  it exists to fix. Backs up everything it will overwrite, rolls back on failure,
-  and **always exits 0** so a broken updater can never stop the app starting.
-  Pruning stale files is confined to `sorter/`; `PROTECTED_TOP_LEVEL` (`.git`,
-  `.venv`, `data`, `.env`, `.installed`, `portable.txt`) is never touched.
+  may hold nothing at all yet; importing `requests` here would break the very
+  launch it exists to fix. Backs up everything it will overwrite, rolls back on
+  failure, and **always exits 0** so a broken updater can never stop the app
+  starting. Pruning stale files is confined to `sorter/`; `PROTECTED_TOP_LEVEL`
+  (`.git`, `.venv`, `.uv`, `data`, `.env`, `portable.txt`) is never touched.
 - **Why a pre-launch step at all:** on Windows the venv's `.pyd`/`.dll` files
   (opencv, numpy) are locked while the app runs, so in-place replacement is
   unreliable. Applying before Python loads anything sidesteps locking — and puts
-  a new `requirements.txt` in place *before* the launcher's hash check, so
-  dependency changes install on the same restart.
+  a new `pyproject.toml`/`uv.lock` in place *before* `bootstrap.py` calls
+  `uv sync`, so dependency changes install on the same restart. There's no
+  hash-based marker to worry about anymore: `uv sync` reconciles against the
+  venv's actual contents, not a proxy for them.
 - **UI** — `dialog_update.py` (notes → progress → "Restart to update") reached
   from a status-bar button in `app.py` that appears only when there's something
   to do. A silent check runs 2.5 s after startup; opt out via the dialog's
   checkbox (`updates.check_on_startup`) or `CASESORTER_UPDATE_DISABLED=1`.
 - **`installer/`** — `install-windows.ps1` (+ `.bat` wrapper) provisions Python
   via winget or a silent python.org install, lays the app down in
-  `%LOCALAPPDATA%\Programs\CaseSorter`, and hands off to `start.bat`. Per-user,
-  no admin. See `installer/README.md`.
+  `%LOCALAPPDATA%\Programs\CaseSorter`, and hands off to `start.bat` (which just
+  calls `bootstrap.py`). Per-user, no admin. See `installer/README.md`.
 
 ---
 

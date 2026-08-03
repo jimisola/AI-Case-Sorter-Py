@@ -6,8 +6,11 @@ capability ≥ 8.0). If one is present, the user gets to pick between
 the GPU build (CUDA 12.8 wheels) and the CPU build; otherwise only
 the CPU build is offered.
 
-`pip install` runs in a subprocess and streams its output to the dialog's
-console. On success the calling tab's `on_success` callback fires and the
+`uv pip install --python <this interpreter>` runs in a subprocess and streams
+its output to the dialog's console. Uses uv rather than `python -m pip`
+because a uv-managed venv (see bootstrap.py) doesn't ship pip by default --
+`--python` targets the running venv explicitly regardless of how it was
+created. On success the calling tab's `on_success` callback fires and the
 training run proceeds; on cancel/failure the venv is left as-is.
 """
 
@@ -21,6 +24,7 @@ from collections.abc import Callable
 from tkinter import ttk
 
 from ..gpu_detect import GpuInfo, detect_supported_nvidia_gpu
+from ..paths import find_uv
 from .theme import PALETTE
 
 # Pin exactly the versions the legacy project validates against. Floating
@@ -175,7 +179,17 @@ class TorchInstallDialog(tk.Toplevel):
         active_btn = self.gpu_btn if (use_gpu and self._gpu is not None) else self.cpu_btn
         active_btn.config(text="Installing…")
 
-        cmd: list[str] = [sys.executable, "-u", "-m", "pip", "install", *list(_CPU_TARGETS)]
+        uv = find_uv()
+        if uv is None:
+            self._append(
+                "Could not find uv. It should have been installed by bootstrap.py "
+                "on first launch -- try restarting the app via start.sh/start.bat, "
+                "or install uv yourself from https://docs.astral.sh/uv/.\n"
+            )
+            self._finish(success=False)
+            return
+
+        cmd: list[str] = [uv, "pip", "install", "--python", sys.executable, *list(_CPU_TARGETS)]
         if use_gpu:
             cmd.extend(["--index-url", _CUDA_INDEX])
         self._append("$ " + " ".join(cmd) + "\n")
@@ -189,7 +203,7 @@ class TorchInstallDialog(tk.Toplevel):
                 bufsize=1,
             )
         except OSError as exc:
-            self._append(f"Failed to spawn pip: {exc}\n")
+            self._append(f"Failed to spawn uv: {exc}\n")
             self._finish(success=False)
             return
         threading.Thread(target=self._pump, daemon=True).start()

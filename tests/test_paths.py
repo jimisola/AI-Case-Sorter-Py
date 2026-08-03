@@ -154,3 +154,34 @@ def test_migration_skipped_when_env_override_set(monkeypatch, tmp_path: Path) ->
 def test_migration_no_legacy_folder(monkeypatch, tmp_path: Path) -> None:
     _fake_install(monkeypatch, tmp_path)
     assert paths.migrate_legacy_data_dir() is None
+
+
+# ----- find_uv ---------------------------------------------------------------
+# bootstrap.py and dialog_install_torch.py both need to locate uv after it's
+# been installed -- the latter because a uv-managed venv doesn't ship pip, so
+# `uv pip install --python <interpreter>` is how it installs torch into the
+# already-running venv.
+
+
+def test_find_uv_prefers_project_local_install(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(paths, "app_root", lambda: tmp_path)
+    local = tmp_path / ".uv" / "bin" / "uv"
+    local.parent.mkdir(parents=True)
+    local.touch()
+    monkeypatch.setattr(paths.shutil, "which", lambda _name: "/usr/bin/some-other-uv")
+
+    assert paths.find_uv() == str(local)
+
+
+def test_find_uv_falls_back_to_path_when_no_local_install(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(paths, "app_root", lambda: tmp_path)
+    monkeypatch.setattr(paths.shutil, "which", lambda _name: "/usr/bin/uv")
+
+    assert paths.find_uv() == "/usr/bin/uv"
+
+
+def test_find_uv_returns_none_when_uv_is_nowhere(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(paths, "app_root", lambda: tmp_path)
+    monkeypatch.setattr(paths.shutil, "which", lambda _name: None)
+
+    assert paths.find_uv() is None

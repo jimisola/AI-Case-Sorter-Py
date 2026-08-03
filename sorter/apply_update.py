@@ -35,7 +35,7 @@ from pathlib import Path
 from . import __version__, paths
 
 # Never overwritten, never pruned, regardless of what an archive contains.
-PROTECTED_TOP_LEVEL = frozenset({".git", ".venv", "venv", "data", ".env", ".installed", "portable.txt"})
+PROTECTED_TOP_LEVEL = frozenset({".git", ".venv", "venv", ".uv", "data", ".env", "portable.txt"})
 
 # Pruning stale files is confined to these directories.
 PRUNE_ROOTS = ("sorter",)

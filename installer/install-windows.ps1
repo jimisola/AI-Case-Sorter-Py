@@ -4,8 +4,9 @@
 
 .DESCRIPTION
     Provisions the two things a non-developer machine is missing - a Python
-    runtime and a copy of the app - then hands off to start.bat, which owns
-    the virtualenv and dependency install.
+    runtime and a copy of the app - then hands off to start.bat, which just
+    calls bootstrap.py: that's what owns the virtualenv and dependency
+    install now (via uv), not this script or start.bat itself.
 
     Deliberately git-free. `git pull` over HTTPS and a release ZIP over HTTPS
     have the same trust anchor (TLS to github.com), and this repo is ~1 MB, so
@@ -259,9 +260,9 @@ whose tag matches what you asked for.
 
         New-Item -ItemType Directory -Path $Dest -Force | Out-Null
 
-        # Copy over the top. The venv (.venv), the dependency marker
-        # (.installed), and any local .env are left alone; user data lives
-        # outside $Dest entirely, so nothing here can touch it.
+        # Copy over the top. The venv (.venv), the local uv install (.uv),
+        # and any local .env are left alone; user data lives outside $Dest
+        # entirely, so nothing here can touch it.
         Write-Note "Installing to $Dest"
         Copy-Item -Path (Join-Path $src '*') -Destination $Dest -Recurse -Force
     } finally {
