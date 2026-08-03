@@ -180,6 +180,21 @@ it's all in repo/org settings or third-party app installs.
       of Issues)
 - [ ] Approve the first CI run on this PR — GitHub holds workflow runs from first-time
       outside contributors until a maintainer clicks "Approve and run"
+- [ ] **Create the labels `.github/labeler.yml` references** — `actions/labeler` does *not*
+      create labels; it errors on any label that doesn't already exist. Nine are needed
+      beyond GitHub's defaults (`documentation` already exists). One command, copy-pasteable:
+      ```bash
+      gh label create ui           --color 1d76db --description "Tkinter UI: tabs, dialogs, theme"
+      gh label create training     --color 6f42c1 --description "Model training, local inference, evaluation"
+      gh label create hardware     --color b60205 --description "Serial board, camera, image processing"
+      gh label create community    --color 0e8a16 --description "Community backend, auth, feedback loop"
+      gh label create updater      --color fbca04 --description "In-app updater and the Windows installer"
+      gh label create launcher     --color d4c5f9 --description "bootstrap.py and the start.sh/start.bat shims"
+      gh label create tests        --color c2e0c6 --description "Test suite"
+      gh label create ci           --color 000000 --description "CI/CD workflows and repo tooling"
+      gh label create dependencies --color 0366d6 --description "Dependency updates"
+      ```
+      (Already done on the fork, so the labeler works there today.)
 
 **Only if PyPI publishing is ever turned on** (currently shipped disabled — see D11)
 - [ ] Create the project on TestPyPI and PyPI

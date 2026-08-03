@@ -1,0 +1,68 @@
+# Configuration for actions/labeler -- see .github/workflows/labeler.yml
+#
+# Labels map to this repo's actual subsystem boundaries as CLAUDE.md describes
+# them (UI vs. hardware I/O vs. control logic vs. persistence), not to generic
+# folder names, so a label on a PR tells you which part of the app is in play.
+#
+# NOTE: actions/labeler does not create labels -- every label named here must
+# already exist in the repo or the action errors. See FEEDBACK.md §6.
+
+ui:
+  - changed-files:
+      - any-glob-to-any-file: 'sorter/ui/**'
+
+training:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'sorter/training/**'
+          - 'sorter/local_inference.py'
+          - 'sorter/evaluator.py'
+          - 'sorter/eval_report.py'
+
+hardware:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'sorter/serial_broker.py'
+          - 'sorter/serial_emulator.py'
+          - 'sorter/camera.py'
+          - 'sorter/image_proc.py'
+
+community:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'sorter/community_api.py'
+          - 'sorter/auth.py'
+          - 'sorter/feedback.py'
+
+updater:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'sorter/updater.py'
+          - 'sorter/apply_update.py'
+          - 'installer/**'
+
+launcher:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'bootstrap.py'
+          - 'start.sh'
+          - 'start.bat'
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file: 'tests/**'
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file: '.github/**'
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file: '**/*.md'
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'pyproject.toml'
+          - 'uv.lock'
+  - head-branch: ['^renovate/', '^dependabot/']
