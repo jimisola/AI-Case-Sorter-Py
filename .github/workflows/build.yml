@@ -63,7 +63,7 @@ jobs:
           path: build/junit.xml
 
   launcher-smoke:
-    name: launcher actually bootstraps (${{ matrix.os }})
+    name: verify launcher bootstrap (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
