@@ -11,14 +11,19 @@ name: Verify Installer
 # release:published -- the single most realistic moment, since the default
 # checkout for that event resolves to the tagged commit, testing the
 # installer as it existed at release time against the release just cut.
+#
+# The workflow file is in its own path filter: without that, a PR editing
+# only this file never runs the job it changes.
 on:
   pull_request:
     paths:
       - "installer/**"
+      - ".github/workflows/installer-smoke.yml"
   push:
     branches: [main]
     paths:
       - "installer/**"
+      - ".github/workflows/installer-smoke.yml"
   release:
     types: [published]
 
@@ -33,6 +38,14 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
+
+      # Runs first, and needs no release: it feeds hostile entry names to the
+      # validation directly. The install below only ever sees a legitimate
+      # archive, so it can show the check doesn't reject good entries but
+      # never that it rejects bad ones -- that half is only tested here.
+      - name: Archive-entry validation
+        shell: powershell
+        run: .\installer\Test-ArchiveEntryValidation.ps1
 
       # -Repo $env:GITHUB_REPOSITORY, not the script's own hardcoded default:
       # makes this self-adapting to wherever it runs -- the fork's own real
@@ -52,9 +65,12 @@ jobs:
 
       # The real assertion: not "the script exited 0" but "a working install
       # landed with the version the sdist actually carries" -- proves the
-      # -Repo override, sdist asset-matching, and tar.exe extraction
-      # (including this PR's new entry sanitization) all worked against a
-      # real GitHub release, not a synthetic fixture.
+      # -Repo override, sdist asset-matching and tar.exe extraction all
+      # worked against a real GitHub release, not a synthetic fixture.
+      #
+      # It does NOT prove the entry validation rejects anything: this archive
+      # is legitimate, so all it shows is the check not firing on good input.
+      # The rejection half is the earlier step's job.
       - name: Verify the install
         shell: powershell
         run: |

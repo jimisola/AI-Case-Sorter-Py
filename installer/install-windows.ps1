@@ -56,7 +56,7 @@ $LASTEXITCODE = 0
 # BOM-less file as the system ANSI codepage, so a UTF-8 em-dash arrives as
 # 'a', 'EUR', and U+201D - and PowerShell treats U+201D as a closing double
 # quote, which silently truncates the enclosing string and misparses
-# everything after it. tests/test_installer_scripts.py enforces this.
+# everything after it. tests/unit/test_installer_scripts.py enforces this.
 
 $DefaultBranch = 'main'
 $PythonWinget = 'Python.Python.3.12'
@@ -174,6 +174,50 @@ function Install-Python {
 # ---------------------------------------------------------------------------
 # App payload
 # ---------------------------------------------------------------------------
+
+function Assert-SafeArchiveEntries {
+    <# Throws unless every entry name is safe to extract into a directory.
+
+       tar.exe extracts unconditionally and has no sanitization worth relying
+       on: verified against a real bsdtar (the engine Windows bundles) that
+       its extraction does reject a `..` traversal entry, but does NOT reject
+       "pkg/D:/evil.py" -- it just writes a literal folder named "D:" on
+       Linux, where a colon is an ordinary filename character. On Windows
+       that component can instead be read as a drive reference during
+       path-join, escaping the destination entirely.
+
+       Checks are per *component*, not against the whole string. An earlier
+       version anchored the drive-letter test with '^[A-Za-z]:', which
+       matches only when the drive sits at the very start -- so the exact
+       "pkg/D:/evil.py" this exists to stop went straight through it. That is
+       the same mistake sorter/updater.py's Python-side extraction had (it
+       tested name[1] of the whole name) and was fixed for; the two paths
+       consume the same archives and must reject the same shapes. See
+       Test-ArchiveEntryValidation.ps1, and _safe_members in updater.py. #>
+    param([string[]]$EntryNames)
+
+    foreach ($entryName in $EntryNames) {
+        if ([string]::IsNullOrWhiteSpace($entryName)) { continue }
+
+        if ($entryName.StartsWith('/') -or $entryName.StartsWith('\')) {
+            # Covers UNC ("\\server\share") along with plain rooted paths.
+            throw "Update archive contains an absolute path: $entryName"
+        }
+
+        foreach ($part in ($entryName -split '[\\/]')) {
+            if ($part -eq '..') {
+                throw "Update archive contains a traversal path: $entryName"
+            }
+            # Any colon anywhere in a component: a drive reference ("D:" or
+            # "D:name") and an NTFS alternate data stream ("file.txt:hidden")
+            # are the same character doing different damage, and neither is
+            # legal in a filename this installer should ever write.
+            if ($part.Contains(':')) {
+                throw "Update archive contains a drive-qualified or stream path: $entryName"
+            }
+        }
+    }
+}
 
 function Select-ReleaseAsset {
     <# Given a release API response, matches the sdist by its exact name --
@@ -299,32 +343,20 @@ extract the release archive by hand:
   $Url
 "@
             }
-            # tar.exe extracts unconditionally, with no sanitization of its
-            # own to rely on: verified against a real bsdtar (same engine
-            # Windows bundles) that its extraction does reject a `..`
-            # traversal entry, but does NOT reject "pkg/D:/evil.py" -- it
-            # just writes a literal folder named "D:" on Linux, where a
-            # colon is an ordinary filename character. On Windows that
-            # component can instead be read as a drive reference during
-            # path-join, escaping the destination entirely -- the exact
-            # class of bug sorter/updater.py's Python-side extraction had
-            # (a PurePosixPath/Path() mismatch on "C:") and was fixed for.
-            # Reject it here too, before tar.exe ever writes a byte, rather
-            # than trust unverified behaviour on the one platform this
-            # can't be tested against directly.
-            $listing = & tar.exe -tf $zip
+            # List and vet every entry before tar.exe writes a byte -- see
+            # Assert-SafeArchiveEntries for why tar's own behaviour is not
+            # something to lean on.
+            $listing = @(& tar.exe -tf $zip)
             if ($LASTEXITCODE -ne 0) {
                 throw "Could not read the downloaded archive (tar exited $LASTEXITCODE)."
             }
-            foreach ($entryName in $listing) {
-                if ([string]::IsNullOrWhiteSpace($entryName)) { continue }
-                if ($entryName -match '^[A-Za-z]:' -or $entryName.StartsWith('/') -or $entryName.StartsWith('\')) {
-                    throw "Update archive contains an absolute or drive-rooted path: $entryName"
-                }
-                if (($entryName -split '[\\/]') -contains '..') {
-                    throw "Update archive contains a traversal path: $entryName"
-                }
+            # @() above keeps a single-entry archive an array rather than a
+            # bare string; an empty listing means tar found nothing to
+            # extract, which is never a real sdist.
+            if ($listing.Count -eq 0) {
+                throw "The downloaded archive is empty."
             }
+            Assert-SafeArchiveEntries -EntryNames $listing
 
             & tar.exe -xzf $zip -C $unpack
             if ($LASTEXITCODE -ne 0) {
@@ -384,6 +416,11 @@ function New-Shortcuts {
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
+# Skipped when the file is dot-sourced (`. install-windows.ps1`), which is how
+# Test-ArchiveEntryValidation.ps1 gets at the functions above. Without this,
+# loading the script to test one function runs a real install.
+if ($MyInvocation.InvocationName -eq '.') { return }
 
 Write-Host ""
 Write-Host "  AI Case Sorter - Windows installer" -ForegroundColor White
