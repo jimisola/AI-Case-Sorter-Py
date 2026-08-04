@@ -167,6 +167,7 @@ labels:
 #         contexts:
 #           - "ruff (check + format)"
 #           - "lint the workflows themselves"
+#           - "release version mapping"
 #           - "pytest (ubuntu-latest, py3.12)"
 #           - "pytest (windows-latest, py3.12)"
 #           - "Validate PR title"

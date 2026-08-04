@@ -31,7 +31,19 @@ Settings → Rules → Rulesets, target `main`.
 - [ ] Dismiss stale approvals when new commits are pushed
 - [ ] Require conversation/thread resolution before merging
 - [ ] Block force-pushes and branch deletion
-- [ ] Require status checks to pass: `lint`, `test` (the `build.yml` job), `semantic-pr`
+- [ ] Require status checks to pass. These are **job names**, not workflow names, and the
+      ruleset matches them literally — a name that never reports blocks every merge
+      indefinitely rather than failing loudly:
+      - `ruff (check + format)`
+      - `lint the workflows themselves`
+      - `release version mapping`
+      - `pytest (ubuntu-latest, py3.12)`
+      - `pytest (windows-latest, py3.12)`
+      - `Validate PR title`
+
+      The other matrix legs are deliberately not required: 3.14 runs
+      `continue-on-error`, and requiring 3.13 as well buys nothing 3.12 doesn't already
+      catch. Keep this list in step with the `contexts:` block in `settings.yml`.
 
 Note that requiring an approving review makes it impossible to merge your own PR
 (GitHub won't let you approve your own), which locks a solo maintainer or a fork owner
