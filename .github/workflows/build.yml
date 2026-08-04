@@ -99,11 +99,12 @@ jobs:
       # fixed 60x5s loop could only ever end by exhausting all 300 seconds.
       # 300s stays, as a ceiling rather than a floor.
       #
-      # Output is redirected and dumped afterward unconditionally (not just on
-      # failure): a backgrounded/hidden process's stdout doesn't reliably
-      # surface in the step log otherwise, verified the hard way -- neither
-      # platform's launch step showed any [bootstrap] log lines even on a
-      # passing run.
+      # Output is redirected and dumped afterward unconditionally, not just on
+      # failure. This used to come back empty on every run; the cause was
+      # bootstrap.py's stdout being block-buffered once redirected, so a
+      # process killed mid-run never flushed a byte. Fixed at the source
+      # (bootstrap.log's writer flushes), which is also what makes the poll
+      # below possible at all.
       - name: Launch and wait (Linux)
         if: runner.os == 'Linux'
         shell: bash

@@ -64,12 +64,20 @@ UV_VERSION = "0.12.1"
 UV_INSTALL_DIR = ROOT / ".uv" / "bin"
 
 
+# flush=True because stdout is block-buffered whenever it isn't a terminal,
+# and this process ends by being killed while still inside main.py's Tk loop
+# -- so an unflushed buffer is never written at all. That is not theoretical:
+# build.yml's launcher-smoke redirects to a file and dumped it afterwards,
+# and the file came back empty every run, which is why its comment used to
+# say no [bootstrap] lines ever appeared. It also matters to a user watching
+# a multi-minute first-launch sync: block-buffered progress messages arrive
+# in 4 KB lumps, which reads as a hang.
 def log(msg: str) -> None:
-    print(f"[bootstrap] {msg}")
+    print(f"[bootstrap] {msg}", flush=True)
 
 
 def warn(msg: str) -> None:
-    print(f"[bootstrap] {msg}", file=sys.stderr)
+    print(f"[bootstrap] {msg}", file=sys.stderr, flush=True)
 
 
 # ---------------------------------------------------------------------------
