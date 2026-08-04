@@ -123,19 +123,22 @@ have been a `feat:` produces a wrong changelog entry *and* a wrong version
 bump. Commits that don't parse as Conventional Commits are dropped from the
 changelog entirely.
 
-**The type → bump mapping depends on whether the project is pre-1.0**, and
-git-cliff applies the standard 0.x rule automatically:
+The mapping, which holds at every version including `0.x`:
 
-| Commit | While `0.x` (today) | From `1.0.0` on |
-|---|---|---|
-| `fix:` | patch | patch |
-| `feat:` | patch | **minor** |
-| `type!:` / `BREAKING CHANGE:` | **minor** | **major** |
+| Commit | Bump |
+|---|---|
+| `fix:` | patch |
+| `feat:` | minor |
+| `type!:` / `BREAKING CHANGE:` | major |
 
-Below 1.0.0 the major number is reserved and breaking changes only move the
-minor — that's what 0.x *means*, and it's why a breaking change right now
-reads as `0.1.0 → 0.2.0` rather than `1.0.0`. The switchover needs no config
-change; it happens on its own once a 1.x tag exists.
+Note that **a breaking change bumps the major even while the project is
+pre-1.0** — `0.1.0` + `feat!:` gives `1.0.0`, not `0.2.0`. git-cliff's
+`features_always_bump_minor` and `breaking_always_bump_major` both default to
+true, so it does not apply the looser "anything goes below 1.0" convention
+some tools do. Verified against git-cliff 2.13.1 with this repo's `cliff.toml`
+across `0.0.1`, `0.1.0`, `0.9.3` and `1.2.3` base tags. If you want a breaking
+change that does *not* leave 0.x, it needs an explicit `version` input on the
+Release workflow.
 
 ## Releasing
 

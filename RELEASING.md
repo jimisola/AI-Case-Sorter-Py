@@ -12,12 +12,11 @@
    which is how you preview a `release/*` or `hotfix/*` branch that has no open PR.
 3. When ready, run the **Release** workflow manually (Actions tab -> Release -> Run workflow):
    - `version`: **leave empty to auto-detect.** git-cliff computes the next version from the
-     Conventional Commits since the last tag. **While the project is pre-1.0 that means
-     `feat:` and `fix:` both bump the patch, and a `!`/`BREAKING CHANGE:` bumps the minor** --
-     git-cliff's standard 0.x behaviour, since 0.x is where breaking changes are expected.
-     From the first 1.x tag it switches to the familiar `feat:` -> minor, `!` -> major on its
-     own. See CONTRIBUTING.md for the full table. Passing a version explicitly overrides all
-     of this.
+     Conventional Commits since the last tag -- a `feat:` bumps the minor, a `fix:` the patch,
+     a `!`/`BREAKING CHANGE:` the major. **That holds at 0.x too**: `0.1.0` + a `feat!:`
+     auto-detects as `1.0.0`, not `0.2.0`, so if you want a breaking change that stays in 0.x
+     you have to pass `version` explicitly (with `force`). See CONTRIBUTING.md. Passing a
+     version always overrides auto-detection.
    - `ref`: branch to release from. Empty means the branch you dispatched on. **Must be
      `main`, `hotfix/*`, or `release/*`** — anything else is rejected before a tag is
      created. A raw commit SHA is rejected for the same reason: release from the branch

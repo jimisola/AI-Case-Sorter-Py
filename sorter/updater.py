@@ -162,14 +162,25 @@ def _api_base() -> str:
 
 
 def _strip_tag_prefix(tag: str) -> str:
-    """Drop a single leading ``v``/``V``, matching the publish workflow.
+    """Drop one leading lowercase ``v``, exactly as the publish workflow does.
 
-    Deliberately not ``lstrip("vV")``, which strips *every* leading v: the
-    workflow builds the asset name with ``${TAG#v}`` (one character), so on a
-    tag like ``vv1.2.3`` the two would disagree and the exact-name match below
-    would silently miss the real asset.
+    This has to mirror ``${TAG#v}`` in publish.yml character for character,
+    because the result is used to build the asset name that ``_pick_asset``
+    matches exactly — any disagreement means the client silently misses the
+    real asset and falls back to the source archive.
+
+    Two ways to get that wrong, both verified against bash:
+
+    * ``lstrip("vV")`` strips *every* leading v, so ``vv1.2.3`` would become
+      ``1.2.3`` while the workflow produces ``v1.2.3``.
+    * ``${TAG#v}`` is case-sensitive, so ``V1.2.3`` stays ``V1.2.3`` upstream.
+      Stripping the capital here would disagree too.
+
+    (``check-release.yml`` rejects any ``v``-prefixed tag, so neither case
+    should reach a real release — this is about the two sides not drifting,
+    not about supporting those tags.)
     """
-    return tag[1:] if tag[:1] in ("v", "V") else tag
+    return tag[1:] if tag.startswith("v") else tag
 
 
 def _expected_asset_name(tag: str) -> str:

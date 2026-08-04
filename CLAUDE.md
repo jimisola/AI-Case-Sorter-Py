@@ -566,13 +566,13 @@ flowchart TD
   and there is no version string in the source to edit (§7). A mistyped `fix:`
   ships a wrong version, not just a wrong changelog line. Full type list and
   rules: `CONTRIBUTING.md`.
-  - **While the project is pre-1.0, git-cliff's 0.x semantics apply:** `feat`
-    → **patch**, `fix` → **patch**, `!`/`BREAKING CHANGE:` → **minor**. That
-    is git-cliff's default below 1.0.0 (`features_always_bump_minor` and
-    `breaking_always_bump_major` are both off), and it's deliberate — 0.x is
-    where the API is still allowed to move. From 1.0.0 onward the familiar
-    `feat` → minor, `!` → major mapping takes over on its own, with no config
-    change needed.
+  - The mapping is `fix` → patch, `feat` → minor, `!`/`BREAKING CHANGE:` →
+    major, and it **holds at every version, including 0.x** —
+    `0.1.0` + `feat!:` gives `1.0.0`, not `0.2.0`. git-cliff does not apply
+    the looser "anything goes below 1.0" convention
+    (`features_always_bump_minor` / `breaking_always_bump_major` both default
+    to true). Verified empirically against git-cliff 2.13.1 with this repo's
+    `cliff.toml`; don't assume 0.x is lenient here.
 - **Threading rule:** never touch Tk widgets off the main thread. Do blocking
   work in `run_worker`/daemon threads and `bus.post(...)`; the drain loop
   delivers handlers on the main thread. **`widget.after()` is not an escape
