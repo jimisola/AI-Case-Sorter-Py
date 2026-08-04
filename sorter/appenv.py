@@ -32,6 +32,7 @@ Recognised keys (see ``.env.example``):
 in the data directory — that file lives inside the directory it would be
 relocating. Set it as a real environment variable, or in the app-root ``.env``.
 """
+
 from __future__ import annotations
 
 import os
@@ -41,7 +42,6 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import paths
-
 
 DEFAULT_API_BASE = "https://www.reloadingrecipes.com/api"
 
@@ -111,7 +111,7 @@ def parse_env_text(text: str) -> dict[str, str]:
         if not line or line.startswith("#") or "=" not in line:
             continue
         if line.startswith("export "):
-            line = line[len("export "):].lstrip()
+            line = line[len("export ") :].lstrip()
         key, _, value = line.partition("=")
         key = key.strip()
         # Anything that isn't a plain environment-variable name is garbage from
@@ -207,9 +207,7 @@ def is_loopback(url: str) -> bool:
     if not host:
         return False
     return (
-        host in ("localhost", "127.0.0.1", "::1", "0.0.0.0")
-        or host.endswith(".localhost")
-        or host.startswith("127.")
+        host in ("localhost", "127.0.0.1", "::1", "0.0.0.0") or host.endswith(".localhost") or host.startswith("127.")
     )
 
 
@@ -240,8 +238,7 @@ def tls_verify() -> bool | str:
             return True
         _warn_once(
             "insecure-loopback",
-            f"TLS verification is DISABLED for community calls to {base} "
-            f"({ENV_INSECURE}=1). Development only.",
+            f"TLS verification is DISABLED for community calls to {base} ({ENV_INSECURE}=1). Development only.",
         )
         _silence_insecure_warnings()
         return False
@@ -281,9 +278,7 @@ def startup_report(applied: list[Path] | None = None) -> list[str]:
         lines.append(f"loaded {path} ({keys})")
 
     configured = bool(
-        os.environ.get(ENV_API_BASE, "").strip()
-        or os.environ.get(ENV_CA_BUNDLE, "").strip()
-        or _flag(ENV_INSECURE)
+        os.environ.get(ENV_API_BASE, "").strip() or os.environ.get(ENV_CA_BUNDLE, "").strip() or _flag(ENV_INSECURE)
     )
     if applied or configured:
         lines.append(describe())

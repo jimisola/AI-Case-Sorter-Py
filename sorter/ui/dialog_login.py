@@ -1,4 +1,5 @@
 """Login modal — kicks off the MSAL interactive flow."""
+
 from __future__ import annotations
 
 import tkinter as tk
@@ -20,18 +21,14 @@ class LoginDialog(tk.Toplevel):
         frm.pack(fill=tk.BOTH, expand=True)
         ttk.Label(
             frm,
-            text=(
-                "Sign in to access community models.\n\n"
-                "A browser window will open to complete the sign-in."
-            ),
+            text=("Sign in to access community models.\n\nA browser window will open to complete the sign-in."),
             justify=tk.LEFT,
         ).pack(anchor=tk.W)
 
         btns = ttk.Frame(frm)
         btns.pack(fill=tk.X, pady=(12, 0))
         ttk.Button(btns, text="Cancel", command=self.destroy).pack(side=tk.RIGHT)
-        ttk.Button(btns, text="Sign in",
-                   command=self._sign_in, style="Accent.TButton").pack(side=tk.RIGHT, padx=(0, 8))
+        ttk.Button(btns, text="Sign in", command=self._sign_in, style="Accent.TButton").pack(side=tk.RIGHT, padx=(0, 8))
 
     def _sign_in(self) -> None:
         def _work():
@@ -39,8 +36,7 @@ class LoginDialog(tk.Toplevel):
 
         def _ok(_result):
             self.app._mount_community_tab()
-            messagebox.showinfo("Signed in",
-                                "Community tab is now available.", parent=self)
+            messagebox.showinfo("Signed in", "Community tab is now available.", parent=self)
             self.destroy()
 
         def _fail(exc):

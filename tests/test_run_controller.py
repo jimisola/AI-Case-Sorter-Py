@@ -1,4 +1,5 @@
 """Run-controller happy/sad paths using the emulator + monkeypatched classify."""
+
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -28,6 +29,7 @@ def _make_controller(tmp_path) -> tuple[RunController, Config, Database]:
     db.ensure_initialized()
     # Activate the auto-seeded model so headstamps have a target.
     from sorter.repository import ModelRepo, SettingsRepo
+
     seed = ModelRepo(db).list()[0]
     SettingsRepo(db).set_active_model_id(seed.id)
     cfg = Config(db).load()
@@ -71,6 +73,7 @@ def test_confidence_floor_zero_disables_floor(tmp_path) -> None:
 
 def _run_image_files(model_id):
     from sorter import paths
+
     d = paths.model_run_images_dir(model_id)
     return sorted(d.glob("*.jpg")) if d.exists() else []
 
@@ -79,6 +82,7 @@ def test_store_images_above_floor(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CASESORTER_DATA_DIR", str(tmp_path / "data"))
     ctrl, cfg, db = _make_controller(tmp_path)
     from sorter.repository import SettingsRepo
+
     mid = SettingsRepo(db).get_active_model_id()
     cfg.set_run_confidence_floor(50)
     cfg.set_run_store_images("above")
@@ -98,22 +102,24 @@ def test_store_images_below_floor(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CASESORTER_DATA_DIR", str(tmp_path / "data"))
     ctrl, cfg, db = _make_controller(tmp_path)
     from sorter.repository import SettingsRepo
+
     mid = SettingsRepo(db).get_active_model_id()
     cfg.set_run_confidence_floor(50)
     cfg.set_run_store_images("below")
 
     with patch("sorter.classifier.classify_active", return_value=("WIN", 90)):
         ctrl.run_once()
-    assert _run_image_files(mid) == []          # above floor -> not stored
+    assert _run_image_files(mid) == []  # above floor -> not stored
     with patch("sorter.classifier.classify_active", return_value=("WIN", 10)):
         ctrl.run_once()
-    assert len(_run_image_files(mid)) == 1       # below floor -> stored
+    assert len(_run_image_files(mid)) == 1  # below floor -> stored
 
 
 def test_store_images_none_and_all(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CASESORTER_DATA_DIR", str(tmp_path / "data"))
     ctrl, cfg, db = _make_controller(tmp_path)
     from sorter.repository import SettingsRepo
+
     mid = SettingsRepo(db).get_active_model_id()
 
     cfg.set_run_store_images("none")
@@ -126,7 +132,7 @@ def test_store_images_none_and_all(tmp_path, monkeypatch) -> None:
         ctrl.run_once()
     with patch("sorter.classifier.classify_active", return_value=("WIN", 5)):
         ctrl.run_once()
-    assert len(_run_image_files(mid)) == 2       # every case stored
+    assert len(_run_image_files(mid)) == 2  # every case stored
 
 
 def test_run_once_routes_unknown_label_to_slot_zero(tmp_path) -> None:
@@ -154,6 +160,7 @@ def test_test_once_skips_sort_step(tmp_path) -> None:
 def _link_win_to_brass(db) -> int:
     """Create a Brass parent, link WIN to it, return the parent id."""
     from sorter.repository import HeadstampParentRepo, HeadstampRepo, SettingsRepo
+
     mid = SettingsRepo(db).get_active_model_id()
     brass = HeadstampParentRepo(db).add(mid, "Brass")
     win = next(h for h in HeadstampRepo(db).list_for_model(mid) if h.name == "WIN")
@@ -196,6 +203,7 @@ def test_parent_label_omitted_when_mode_disabled(tmp_path) -> None:
 def _enable_feedback(db, *, floor=95, mode="Instant") -> int:
     """Turn the active seeded model into a feedback-enabled community model."""
     from sorter.repository import ModelRepo, SettingsRepo
+
     mid = SettingsRepo(db).get_active_model_id()
     m = ModelRepo(db).get(mid)
     m.community_model_uid = "uid-1"
@@ -211,6 +219,7 @@ def test_feedback_capture_below_floor_enqueues_and_posts(tmp_path, monkeypatch) 
     ctrl, _, db = _make_controller(tmp_path)
     mid = _enable_feedback(db, floor=95, mode="Instant")
     from sorter.feedback import FeedbackService
+
     events: list[dict] = []
     ctrl.bus.subscribe("feedback/queued", events.append)
     # 90 < 95 floor → captured for the feedback loop.
@@ -227,6 +236,7 @@ def test_feedback_no_capture_above_floor(tmp_path, monkeypatch) -> None:
     ctrl, _, db = _make_controller(tmp_path)
     mid = _enable_feedback(db, floor=95)
     from sorter.feedback import FeedbackService
+
     with patch("sorter.classifier.classify_active", return_value=("WIN", 99)):
         ctrl.run_once()
     assert FeedbackService(db).count_pending(mid) == 0
@@ -237,6 +247,7 @@ def test_feedback_no_capture_for_non_community_model(tmp_path, monkeypatch) -> N
     ctrl, _, db = _make_controller(tmp_path)  # seeded model is not community
     from sorter.feedback import FeedbackService
     from sorter.repository import SettingsRepo
+
     mid = SettingsRepo(db).get_active_model_id()
     with patch("sorter.classifier.classify_active", return_value=("WIN", 5)):
         ctrl.run_once()
@@ -267,6 +278,7 @@ def test_wish_list_capture_during_a_run(tmp_path, monkeypatch) -> None:
     ctrl, _, db = _make_controller(tmp_path)
     mid = _enable_feedback(db, floor=95, mode="Instant")
     from sorter.feedback import FeedbackService
+
     ctrl._feedback.set_wish_list(mid, ["WIN"])
     events: list[dict] = []
     ctrl.bus.subscribe("feedback/queued", events.append)
@@ -283,6 +295,7 @@ def test_wish_list_not_applied_to_manual_feed(tmp_path, monkeypatch) -> None:
     ctrl, _, db = _make_controller(tmp_path)
     mid = _enable_feedback(db, floor=95)
     from sorter.feedback import FeedbackService
+
     ctrl._feedback.set_wish_list(mid, ["WIN"])
     with patch("sorter.classifier.classify_active", return_value=("WIN", 99)):
         ctrl.cycle_once()
@@ -294,6 +307,7 @@ def test_wish_list_off_leaves_confidence_only_behaviour(tmp_path, monkeypatch) -
     ctrl, _, db = _make_controller(tmp_path)
     mid = _enable_feedback(db, floor=95)
     from sorter.feedback import FeedbackService
+
     with patch("sorter.classifier.classify_active", return_value=("WIN", 99)):
         ctrl.run_once()
     assert FeedbackService(db).count_pending(mid) == 0
@@ -305,13 +319,18 @@ def test_refresh_and_clear_wish_list(tmp_path, monkeypatch) -> None:
     _enable_feedback(db)
 
     class _Api:
-        def __init__(self, auth=None, **kw) -> None: pass
-        def fetch_wish_list(self, uid): return ["FC"]
+        def __init__(self, auth=None, **kw) -> None:
+            pass
+
+        def fetch_wish_list(self, uid):
+            return ["FC"]
 
     class _Auth:
-        def acquire_token_silent(self, scopes=None): return object()
+        def acquire_token_silent(self, scopes=None):
+            return object()
 
     import sorter.community_api as ca
+
     monkeypatch.setattr(ca, "CommunityApi", _Api)
     assert ctrl.refresh_wish_list(auth=_Auth()) == ["FC"]
     assert ctrl._feedback.wish_list() == ["fc"]

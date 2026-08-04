@@ -23,19 +23,19 @@ Each slot card is clickable; clicking it shows that slot's details below.
 Slot 0 is the catch-all and cannot be configured — anything classified into
 an unmapped headstamp ends up there.
 """
+
 from __future__ import annotations
 
 import tkinter as tk
 from collections import defaultdict
+from collections.abc import Callable
 from tkinter import messagebox, ttk
-from typing import Callable
 
 from ..events import EventBus
 from ..feedback import FeedbackService, debug_log, is_feedback_model
 from ..repository import ModelRepo
 from .theme import PALETTE, row_style
 from .widgets import ImagePanel
-
 
 CARD_WIDTH = 240
 CARD_MIN_HEIGHT = 110
@@ -110,8 +110,10 @@ class FlowGrid(ttk.Frame):
         for i, cell in enumerate(self._cells):
             row, col = divmod(i, cols)
             cell.grid(
-                row=row, column=col,
-                padx=self._gutter // 2, pady=self._gutter // 2,
+                row=row,
+                column=col,
+                padx=self._gutter // 2,
+                pady=self._gutter // 2,
                 sticky=tk.NSEW if self._expand_cells else tk.NW,
             )
         if self._expand_cells:
@@ -150,13 +152,15 @@ class SlotCard(ttk.Frame):
         self._set_title()
 
         self.title_label = ttk.Label(
-            self, textvariable=self._title_var,
+            self,
+            textvariable=self._title_var,
             style="CardTitle.TLabel",
         )
         self.title_label.pack(anchor=tk.W)
 
         self.headstamps_label = ttk.Label(
-            self, textvariable=self._headstamps_var,
+            self,
+            textvariable=self._headstamps_var,
             wraplength=CARD_WIDTH - 36,
             style="CardMuted.TLabel",
         )
@@ -165,12 +169,14 @@ class SlotCard(ttk.Frame):
         count_row = ttk.Frame(self, style="CardRow.TFrame")
         count_row.pack(fill=tk.X)
         self.count_caption = ttk.Label(
-            count_row, text="Count",
+            count_row,
+            text="Count",
             style="CardSubtle.TLabel",
         )
         self.count_caption.pack(side=tk.LEFT)
         self.count_label = ttk.Label(
-            count_row, textvariable=self._count_var,
+            count_row,
+            textvariable=self._count_var,
             style="CardTitle.TLabel",
         )
         self.count_label.pack(side=tk.RIGHT)
@@ -180,14 +186,20 @@ class SlotCard(ttk.Frame):
         # filling. Hidden until set_package_mode(True) is called.
         self._reset_row = ttk.Frame(self, style="CardRow.TFrame")
         self._reset_btn = ttk.Button(
-            self._reset_row, text="⟲ Reset count",
-            command=self._reset_clicked, width=16,
+            self._reset_row,
+            text="⟲ Reset count",
+            command=self._reset_clicked,
+            width=16,
         )
         self._reset_btn.pack(side=tk.LEFT, pady=(8, 0))
 
         self._clickable_children = (
-            self, self.title_label, self.headstamps_label,
-            count_row, self.count_caption, self.count_label,
+            self,
+            self.title_label,
+            self.headstamps_label,
+            count_row,
+            self.count_caption,
+            self.count_label,
         )
         for w in self._clickable_children:
             w.bind("<Button-1>", lambda _e: self._on_click(self.slot_number))
@@ -198,17 +210,13 @@ class SlotCard(ttk.Frame):
         self.bind("<Leave>", self._on_leave)
 
     def _set_title(self) -> None:
-        self._title_var.set(
-            "Catch-All" if self.slot_number == 0 else f"Slot #{self.slot_number}"
-        )
+        self._title_var.set("Catch-All" if self.slot_number == 0 else f"Slot #{self.slot_number}")
 
     def set_headstamps(self, names: list[str]) -> None:
         if names:
             self._headstamps_var.set(", ".join(names))
         else:
-            self._headstamps_var.set(
-                "Unclassified / unmapped" if self.slot_number == 0 else "(no headstamps)"
-            )
+            self._headstamps_var.set("Unclassified / unmapped" if self.slot_number == 0 else "(no headstamps)")
 
     def set_count(self, value: int) -> None:
         self._count_var.set(str(value))
@@ -297,7 +305,7 @@ class HeadstampCell(ttk.Frame):
         count: int,
         hint: str,
         sources: list[str],
-        on_toggle: Callable[["tk.BooleanVar"], None],
+        on_toggle: Callable[[tk.BooleanVar], None],
         bold: bool = False,
     ):
         super().__init__(parent, padding=2)
@@ -305,7 +313,10 @@ class HeadstampCell(ttk.Frame):
         self.var = tk.BooleanVar(value=checked)
 
         self.cb = ttk.Checkbutton(
-            self, text=label, variable=self.var, state=state,
+            self,
+            text=label,
+            variable=self.var,
+            state=state,
             style="Group.TCheckbutton" if bold else "TCheckbutton",
             command=lambda: on_toggle(self.var),
         )
@@ -315,8 +326,7 @@ class HeadstampCell(ttk.Frame):
         self.count_label.pack(side=tk.LEFT, padx=4)
 
         if hint:
-            ttk.Label(self, text=hint, style="Subtle.TLabel")\
-                .pack(side=tk.LEFT, padx=2)
+            ttk.Label(self, text=hint, style="Subtle.TLabel").pack(side=tk.LEFT, padx=2)
 
     def update_count(self, value: int) -> None:
         self.count_label.config(text=f"({value})")
@@ -347,34 +357,39 @@ class SlotDetailsPanel(ttk.LabelFrame):
 
         self.header_var = tk.StringVar(value="Click a slot above to configure.")
         ttk.Label(
-            header_row, textvariable=self.header_var, style="Header.TLabel",
+            header_row,
+            textvariable=self.header_var,
+            style="Header.TLabel",
         ).pack(side=tk.LEFT, anchor=tk.W)
 
         search_box = ttk.Frame(header_row)
         search_box.pack(side=tk.RIGHT)
-        ttk.Label(search_box, text="Filter", style="Muted.TLabel")\
-            .pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Label(search_box, text="Filter", style="Muted.TLabel").pack(side=tk.LEFT, padx=(0, 4))
         self._search_var = tk.StringVar()
         self._search_var.trace_add("write", lambda *_: self._on_search_changed())
-        ttk.Entry(search_box, textvariable=self._search_var, width=20)\
-            .pack(side=tk.LEFT)
+        ttk.Entry(search_box, textvariable=self._search_var, width=20).pack(side=tk.LEFT)
         clear_btn = tk.Label(
-            search_box, text="✕", cursor="hand2",
-            bg=PALETTE["bg_input"], fg=PALETTE["text_muted"],
-            padx=8, pady=2,
+            search_box,
+            text="✕",
+            cursor="hand2",
+            bg=PALETTE["bg_input"],
+            fg=PALETTE["text_muted"],
+            padx=8,
+            pady=2,
         )
         clear_btn.pack(side=tk.LEFT, padx=(2, 0))
         clear_btn.bind("<Button-1>", lambda _e: self._clear_search())
         clear_btn.bind(
-            "<Enter>", lambda _e: clear_btn.config(fg=PALETTE["text"]),
+            "<Enter>",
+            lambda _e: clear_btn.config(fg=PALETTE["text"]),
         )
         clear_btn.bind(
-            "<Leave>", lambda _e: clear_btn.config(fg=PALETTE["text_muted"]),
+            "<Leave>",
+            lambda _e: clear_btn.config(fg=PALETTE["text_muted"]),
         )
 
         self.hint_var = tk.StringVar(value="")
-        ttk.Label(self, textvariable=self.hint_var, style="Muted.TLabel")\
-            .pack(anchor=tk.W, pady=(0, 2))
+        ttk.Label(self, textvariable=self.hint_var, style="Muted.TLabel").pack(anchor=tk.W, pady=(0, 2))
 
         # Scrollable area that hosts the slot body. The body is rebuilt on
         # every show_slot — a flat flow-grid in child/parent mode, or a
@@ -382,7 +397,10 @@ class SlotDetailsPanel(ttk.LabelFrame):
         body = ttk.Frame(self)
         body.pack(fill=tk.BOTH, expand=True, pady=6)
         self._canvas = tk.Canvas(
-            body, highlightthickness=0, bg=PALETTE["bg_surface"], borderwidth=0,
+            body,
+            highlightthickness=0,
+            bg=PALETTE["bg_surface"],
+            borderwidth=0,
         )
         self._canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll = ttk.Scrollbar(body, orient=tk.VERTICAL, command=self._canvas.yview)
@@ -390,7 +408,9 @@ class SlotDetailsPanel(ttk.LabelFrame):
         self._canvas.configure(yscrollcommand=scroll.set)
         self._body_inner = ttk.Frame(self._canvas)
         self._inner_id = self._canvas.create_window(
-            (0, 0), window=self._body_inner, anchor=tk.NW,
+            (0, 0),
+            window=self._body_inner,
+            anchor=tk.NW,
         )
         self._body_inner.bind(
             "<Configure>",
@@ -413,11 +433,7 @@ class SlotDetailsPanel(ttk.LabelFrame):
 
     def show_slot(self, slot_num: int) -> None:
         self.current_slot = slot_num
-        self.header_var.set(
-            "Catch-All (cannot be configured)"
-            if slot_num == 0
-            else f"Slot #{slot_num}"
-        )
+        self.header_var.set("Catch-All (cannot be configured)" if slot_num == 0 else f"Slot #{slot_num}")
 
         package_mode = bool(getattr(self.config_obj, "run_package_mode", False))
         parents = self.config_obj.parents_with_slots()
@@ -428,9 +444,7 @@ class SlotDetailsPanel(ttk.LabelFrame):
         grouped_mode = (not package_mode) and has_parents and not parent_mode
 
         if slot_num == 0:
-            self.hint_var.set(
-                "Anything we can't classify or that isn't mapped to a slot ends up here."
-            )
+            self.hint_var.set("Anything we can't classify or that isn't mapped to a slot ends up here.")
         elif package_mode:
             self.hint_var.set(
                 "Tick a headstamp to batch it into this slot. The same headstamp "
@@ -440,8 +454,7 @@ class SlotDetailsPanel(ttk.LabelFrame):
             self.hint_var.set("Tick a parent group (or an ungrouped headstamp) to route it here.")
         else:
             self.hint_var.set(
-                "Tick a headstamp to route it to this slot. "
-                "Headstamps assigned to a different slot are greyed out."
+                "Tick a headstamp to route it to this slot. Headstamps assigned to a different slot are greyed out."
             )
 
         for child in list(self._body_inner.winfo_children()):
@@ -459,9 +472,12 @@ class SlotDetailsPanel(ttk.LabelFrame):
         else:
             self._build_child_mode(slot_num, headstamps, needle)
 
-    def _new_grid(self, *, indent: int = 0) -> "FlowGrid":
+    def _new_grid(self, *, indent: int = 0) -> FlowGrid:
         grid = FlowGrid(
-            self._body_inner, cell_width=HEADSTAMP_CELL_WIDTH, gutter=4, expand_cells=True,
+            self._body_inner,
+            cell_width=HEADSTAMP_CELL_WIDTH,
+            gutter=4,
+            expand_cells=True,
         )
         grid.pack(fill=tk.X, expand=True, padx=(indent, 0))
         return grid
@@ -488,21 +504,37 @@ class SlotDetailsPanel(ttk.LabelFrame):
         return sum(counters.get(s, 0) for s in sources)
 
     def _make_cell(
-        self, grid: "FlowGrid", *, label: str, sources: list[str], slot_num: int,
-        assigned: int, on_toggle: Callable[["tk.BooleanVar"], None], bold: bool = False,
+        self,
+        grid: FlowGrid,
+        *,
+        label: str,
+        sources: list[str],
+        slot_num: int,
+        assigned: int,
+        on_toggle: Callable[[tk.BooleanVar], None],
+        bold: bool = False,
     ) -> None:
         checked, state, hint = self._cell_state(slot_num, assigned)
         cell = HeadstampCell(
-            grid, label=label, checked=checked, state=state,
-            count=self._count_for(slot_num, sources), hint=hint,
-            sources=sources, on_toggle=on_toggle, bold=bold,
+            grid,
+            label=label,
+            checked=checked,
+            state=state,
+            count=self._count_for(slot_num, sources),
+            hint=hint,
+            sources=sources,
+            on_toggle=on_toggle,
+            bold=bold,
         )
         grid.add(cell)
         for s in sources:
             self._cells_by_source[s].append(cell)
 
     def _build_child_mode(
-        self, slot_num: int, headstamps: list[dict], needle: str,
+        self,
+        slot_num: int,
+        headstamps: list[dict],
+        needle: str,
     ) -> None:
         grid = self._new_grid()
         for hs in sorted(headstamps, key=lambda h: h["name"].casefold()):
@@ -510,13 +542,19 @@ class SlotDetailsPanel(ttk.LabelFrame):
             if needle and needle not in name.casefold():
                 continue
             self._make_cell(
-                grid, label=name, sources=[name], slot_num=slot_num,
+                grid,
+                label=name,
+                sources=[name],
+                slot_num=slot_num,
                 assigned=int(hs["slot"]),
                 on_toggle=lambda var, n=name: self._toggle_headstamp(n, var),
             )
 
     def _build_package_mode(
-        self, slot_num: int, headstamps: list[dict], needle: str,
+        self,
+        slot_num: int,
+        headstamps: list[dict],
+        needle: str,
     ) -> None:
         """Flat checkbox grid where a headstamp may be ticked into many slots.
 
@@ -531,8 +569,12 @@ class SlotDetailsPanel(ttk.LabelFrame):
                 continue
             state = "disabled" if slot_num == 0 else "normal"
             cell = HeadstampCell(
-                grid, label=name, checked=name in assigned, state=state,
-                count=self._count_for(slot_num, [name]), hint="",
+                grid,
+                label=name,
+                checked=name in assigned,
+                state=state,
+                count=self._count_for(slot_num, [name]),
+                hint="",
                 sources=[name],
                 on_toggle=lambda var, n=name: self._toggle_package_headstamp(n, var),
             )
@@ -547,7 +589,11 @@ class SlotDetailsPanel(ttk.LabelFrame):
         self.on_assignment_change()
 
     def _build_parent_mode(
-        self, slot_num: int, parents: list[dict], headstamps: list[dict], needle: str,
+        self,
+        slot_num: int,
+        parents: list[dict],
+        headstamps: list[dict],
+        needle: str,
     ) -> None:
         grid = self._new_grid()
         children_by_parent: dict[int, list[str]] = defaultdict(list)
@@ -559,8 +605,11 @@ class SlotDetailsPanel(ttk.LabelFrame):
             if needle and needle not in name.casefold():
                 continue
             self._make_cell(
-                grid, label=name, sources=children_by_parent.get(p["id"], []),
-                slot_num=slot_num, assigned=int(p["slot"]),
+                grid,
+                label=name,
+                sources=children_by_parent.get(p["id"], []),
+                slot_num=slot_num,
+                assigned=int(p["slot"]),
                 on_toggle=lambda var, pid=p["id"]: self._toggle_parent(pid, var),
             )
         for hs in sorted(
@@ -571,13 +620,20 @@ class SlotDetailsPanel(ttk.LabelFrame):
             if needle and needle not in name.casefold():
                 continue
             self._make_cell(
-                grid, label=name, sources=[name], slot_num=slot_num,
+                grid,
+                label=name,
+                sources=[name],
+                slot_num=slot_num,
                 assigned=int(hs["slot"]),
                 on_toggle=lambda var, n=name: self._toggle_headstamp(n, var),
             )
 
     def _build_grouped_mode(
-        self, slot_num: int, parents: list[dict], headstamps: list[dict], needle: str,
+        self,
+        slot_num: int,
+        parents: list[dict],
+        headstamps: list[dict],
+        needle: str,
     ) -> None:
         children_by_parent: dict[int, list[dict]] = defaultdict(list)
         orphans: list[dict] = []
@@ -590,10 +646,7 @@ class SlotDetailsPanel(ttk.LabelFrame):
         for p in sorted(parents, key=lambda x: x["name"].casefold()):
             kids = sorted(children_by_parent.get(p["id"], []), key=lambda h: h["name"].casefold())
             name_match = bool(needle) and needle in p["name"].casefold()
-            visible_kids = (
-                kids if (not needle or name_match)
-                else [k for k in kids if needle in k["name"].casefold()]
-            )
+            visible_kids = kids if (not needle or name_match) else [k for k in kids if needle in k["name"].casefold()]
             if needle and not name_match and not visible_kids:
                 continue
             self._build_group_header(slot_num, p, kids)
@@ -601,7 +654,10 @@ class SlotDetailsPanel(ttk.LabelFrame):
                 grid = self._new_grid(indent=22)
                 for k in visible_kids:
                     self._make_cell(
-                        grid, label=k["name"], sources=[k["name"]], slot_num=slot_num,
+                        grid,
+                        label=k["name"],
+                        sources=[k["name"]],
+                        slot_num=slot_num,
                         assigned=int(k["slot"]),
                         on_toggle=lambda var, n=k["name"]: self._toggle_headstamp(n, var),
                     )
@@ -615,7 +671,10 @@ class SlotDetailsPanel(ttk.LabelFrame):
             grid = self._new_grid(indent=22)
             for o in visible_orphans:
                 self._make_cell(
-                    grid, label=o["name"], sources=[o["name"]], slot_num=slot_num,
+                    grid,
+                    label=o["name"],
+                    sources=[o["name"]],
+                    slot_num=slot_num,
                     assigned=int(o["slot"]),
                     on_toggle=lambda var, n=o["name"]: self._toggle_headstamp(n, var),
                 )
@@ -627,8 +686,12 @@ class SlotDetailsPanel(ttk.LabelFrame):
         header.pack(fill=tk.X, pady=(6, 0))
 
         tri = tk.Label(
-            header, text="▼" if expanded else "▶", width=2, cursor="hand2",
-            bg=PALETTE["bg_surface"], fg=PALETTE["text_muted"],
+            header,
+            text="▼" if expanded else "▶",
+            width=2,
+            cursor="hand2",
+            bg=PALETTE["bg_surface"],
+            fg=PALETTE["text_muted"],
         )
         tri.pack(side=tk.LEFT)
         tri.bind("<Button-1>", lambda _e, n=name: self._toggle_collapse(n))
@@ -641,7 +704,11 @@ class SlotDetailsPanel(ttk.LabelFrame):
         state = "normal" if (slot_num != 0 and assignable) else "disabled"
         var = tk.BooleanVar(value=all_here)
         ttk.Checkbutton(
-            header, text=name, variable=var, state=state, style="Group.TCheckbutton",
+            header,
+            text=name,
+            variable=var,
+            state=state,
+            style="Group.TCheckbutton",
             command=lambda v=var, ks=kids: self._toggle_group(ks, v),
         ).pack(side=tk.LEFT)
         count = self._count_for(slot_num, [k["name"] for k in kids])
@@ -649,8 +716,7 @@ class SlotDetailsPanel(ttk.LabelFrame):
 
     def _build_section_label(self, text: str) -> None:
         ttk.Separator(self._body_inner, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(8, 2))
-        ttk.Label(self._body_inner, text=text, style="Subtle.TLabel")\
-            .pack(anchor=tk.W, pady=(0, 2))
+        ttk.Label(self._body_inner, text=text, style="Subtle.TLabel").pack(anchor=tk.W, pady=(0, 2))
 
     # ----- interaction --------------------------------------------------------
 
@@ -734,10 +800,7 @@ class RunTab(ttk.Frame):
         self._monitor_window = None
 
         # Community feedback-loop upload state.
-        self._feedback = (
-            FeedbackService(self.app.db)
-            if getattr(self.app, "db", None) is not None else None
-        )
+        self._feedback = FeedbackService(self.app.db) if getattr(self.app, "db", None) is not None else None
         self._feedback_upload_inflight = False
         self._feedback_declined_models: set[int] = set()
 
@@ -781,25 +844,33 @@ class RunTab(ttk.Frame):
         self._templates: list = []
         template_bar = ttk.Frame(grid_box)
         template_bar.pack(fill=tk.X, padx=8, pady=(8, 0))
-        ttk.Label(template_bar, text="Sorting template", style="Muted.TLabel")\
-            .pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Label(template_bar, text="Sorting template", style="Muted.TLabel").pack(side=tk.LEFT, padx=(0, 8))
         self._template_var = tk.StringVar()
         self._template_combo = ttk.Combobox(
-            template_bar, state="readonly", textvariable=self._template_var, width=26,
+            template_bar,
+            state="readonly",
+            textvariable=self._template_var,
+            width=26,
         )
         self._template_combo.pack(side=tk.LEFT)
-        self._template_combo.bind(
-            "<<ComboboxSelected>>", lambda _e: self._on_template_selected()
-        )
+        self._template_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_template_selected())
         ttk.Button(
-            template_bar, text="+ New", width=7, command=self._new_template,
+            template_bar,
+            text="+ New",
+            width=7,
+            command=self._new_template,
         ).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(
-            template_bar, text="✎ Edit", width=7, command=self._edit_template,
+            template_bar,
+            text="✎ Edit",
+            width=7,
+            command=self._edit_template,
         ).pack(side=tk.LEFT, padx=(4, 0))
         self._template_hint_var = tk.StringVar(value="")
         ttk.Label(
-            template_bar, textvariable=self._template_hint_var, style="Subtle.TLabel",
+            template_bar,
+            textvariable=self._template_hint_var,
+            style="Subtle.TLabel",
         ).pack(side=tk.LEFT, padx=(10, 0))
 
         self.slot_grid = SlotGrid(grid_box)
@@ -820,8 +891,10 @@ class RunTab(ttk.Frame):
         self._parent_opt_frame.pack(fill=tk.X, padx=12, pady=(10, 0))
         self._use_parent_var = tk.BooleanVar(value=False)
         self._parent_opt = ttk.Checkbutton(
-            self._parent_opt_frame, text="Use Parent Classifications",
-            variable=self._use_parent_var, command=self._on_toggle_parent_mode,
+            self._parent_opt_frame,
+            text="Use Parent Classifications",
+            variable=self._use_parent_var,
+            command=self._on_toggle_parent_mode,
         )
 
         # Run options — store-images mode + confidence floor (above Start).
@@ -830,27 +903,27 @@ class RunTab(ttk.Frame):
 
         store_row = ttk.Frame(run_opts)
         store_row.pack(fill=tk.X, pady=2)
-        ttk.Label(store_row, text="Store images", style="Muted.TLabel", width=14, anchor=tk.W)\
-            .pack(side=tk.LEFT)
-        self._store_images_var = tk.StringVar(
-            value=_STORE_IMAGES_LABELS.get(self.config.run_store_images, "None")
-        )
+        ttk.Label(store_row, text="Store images", style="Muted.TLabel", width=14, anchor=tk.W).pack(side=tk.LEFT)
+        self._store_images_var = tk.StringVar(value=_STORE_IMAGES_LABELS.get(self.config.run_store_images, "None"))
         self._store_combo = ttk.Combobox(
-            store_row, state="readonly", textvariable=self._store_images_var,
+            store_row,
+            state="readonly",
+            textvariable=self._store_images_var,
             values=list(_STORE_IMAGES_LABELS.values()),
         )
         self._store_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self._store_combo.bind(
-            "<<ComboboxSelected>>", lambda _e: self._on_store_images_changed()
-        )
+        self._store_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_store_images_changed())
 
         floor_row = ttk.Frame(run_opts)
         floor_row.pack(fill=tk.X, pady=2)
-        ttk.Label(floor_row, text="Confidence floor", style="Muted.TLabel", width=14, anchor=tk.W)\
-            .pack(side=tk.LEFT)
+        ttk.Label(floor_row, text="Confidence floor", style="Muted.TLabel", width=14, anchor=tk.W).pack(side=tk.LEFT)
         self._floor_var = tk.IntVar(value=self.config.run_confidence_floor)
         self._floor_spin = ttk.Spinbox(
-            floor_row, from_=0, to=100, width=6, textvariable=self._floor_var,
+            floor_row,
+            from_=0,
+            to=100,
+            width=6,
+            textvariable=self._floor_var,
             command=self._on_floor_changed,
         )
         self._floor_spin.pack(side=tk.LEFT)
@@ -864,16 +937,21 @@ class RunTab(ttk.Frame):
         pkg_row.pack(fill=tk.X, pady=2)
         self._package_var = tk.BooleanVar(value=self.config.run_package_mode)
         ttk.Checkbutton(
-            pkg_row, text="Package Mode", variable=self._package_var,
+            pkg_row,
+            text="Package Mode",
+            variable=self._package_var,
             command=self._on_toggle_package_mode,
         ).pack(side=tk.LEFT)
 
         self._batch_row = ttk.Frame(run_opts)
-        ttk.Label(self._batch_row, text="Batch size", style="Muted.TLabel",
-                  width=14, anchor=tk.W).pack(side=tk.LEFT)
+        ttk.Label(self._batch_row, text="Batch size", style="Muted.TLabel", width=14, anchor=tk.W).pack(side=tk.LEFT)
         self._batch_var = tk.IntVar(value=self.config.run_package_size)
         self._batch_spin = ttk.Spinbox(
-            self._batch_row, from_=1, to=999999, width=8, textvariable=self._batch_var,
+            self._batch_row,
+            from_=1,
+            to=999999,
+            width=8,
+            textvariable=self._batch_var,
             command=self._on_batch_size_changed,
         )
         self._batch_spin.pack(side=tk.LEFT)
@@ -889,30 +967,40 @@ class RunTab(ttk.Frame):
         auto_row.pack(fill=tk.X, pady=2)
         self._auto_select_var = tk.BooleanVar(value=self.config.run_auto_select_trays)
         ttk.Checkbutton(
-            auto_row, text="Automatically Select Trays",
+            auto_row,
+            text="Automatically Select Trays",
             variable=self._auto_select_var,
             command=self._on_toggle_auto_select,
         ).pack(side=tk.LEFT)
 
         self.start_btn = ttk.Button(
-            controls, text="Start", width=20,
-            command=self._toggle_run, style="Accent.TButton",
+            controls,
+            text="Start",
+            width=20,
+            command=self._toggle_run,
+            style="Accent.TButton",
         )
         self.start_btn.pack(padx=12, pady=(8, 4), fill=tk.X)
 
         # Monitor — open the live image-history window.
         ttk.Button(
-            controls, text="Monitor", width=20,
+            controls,
+            text="Monitor",
+            width=20,
             command=self._open_monitor,
         ).pack(padx=12, pady=2, fill=tk.X)
 
         ttk.Button(
-            controls, text="Manual feed", width=20,
+            controls,
+            text="Manual feed",
+            width=20,
             command=self._manual_feed,
         ).pack(padx=12, pady=2, fill=tk.X)
 
         ttk.Button(
-            controls, text="Force feed", width=20,
+            controls,
+            text="Force feed",
+            width=20,
             command=self._force_feed,
         ).pack(padx=12, pady=2, fill=tk.X)
 
@@ -921,7 +1009,9 @@ class RunTab(ttk.Frame):
         self._feedback_btn_frame = ttk.Frame(controls)
         self._feedback_btn_frame.pack(fill=tk.X)
         self._feedback_btn = ttk.Button(
-            self._feedback_btn_frame, text="Upload Feedback Images", width=20,
+            self._feedback_btn_frame,
+            text="Upload Feedback Images",
+            width=20,
             command=self._upload_feedback_clicked,
         )
 
@@ -929,29 +1019,32 @@ class RunTab(ttk.Frame):
 
         master_row = ttk.Frame(controls)
         master_row.pack(fill=tk.X, padx=12)
-        ttk.Label(master_row, text="Master count", style="Muted.TLabel")\
-            .pack(side=tk.LEFT)
+        ttk.Label(master_row, text="Master count", style="Muted.TLabel").pack(side=tk.LEFT)
         self.master_count_var = tk.StringVar(value="0")
         ttk.Label(
-            master_row, textvariable=self.master_count_var,
+            master_row,
+            textvariable=self.master_count_var,
             style="Accent.TLabel",
         ).pack(side=tk.RIGHT, padx=6)
         ttk.Button(
-            controls, text="Reset counters", width=20,
+            controls,
+            text="Reset counters",
+            width=20,
             command=self._reset_counters,
         ).pack(padx=12, pady=(4, 8), fill=tk.X)
 
         ttk.Separator(controls, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=12, pady=4)
 
-        ttk.Label(controls, text="Last cropped", style="Muted.TLabel")\
-            .pack(padx=12, anchor=tk.W, pady=(4, 2))
+        ttk.Label(controls, text="Last cropped", style="Muted.TLabel").pack(padx=12, anchor=tk.W, pady=(4, 2))
         # Cropped panel: square, sized to the run panel's width less a margin
         # on either side (see _on_cropped_configure). Starts at the size the
         # default RIGHT_PANEL_WIDTH gives it so the first paint isn't clipped;
         # it grows and shrinks with the sash from there.
         _cropped_size = max(80, RIGHT_PANEL_WIDTH - 48)
         self.cropped_panel = ImagePanel(
-            controls, width=_cropped_size, height=_cropped_size,
+            controls,
+            width=_cropped_size,
+            height=_cropped_size,
         )
         self.cropped_panel.pack(pady=2)
         controls.bind("<Configure>", self._on_cropped_configure)
@@ -966,10 +1059,10 @@ class RunTab(ttk.Frame):
 
         def _result_row(caption: str, var: tk.StringVar) -> ttk.Frame:
             row = ttk.Frame(result_box)
-            ttk.Label(row, text=caption, style="Muted.TLabel", width=11, anchor=tk.W)\
-                .pack(side=tk.LEFT)
-            ttk.Label(row, textvariable=var, style="Accent.TLabel", anchor=tk.W)\
-                .pack(side=tk.LEFT, fill=tk.X, expand=True)
+            ttk.Label(row, text=caption, style="Muted.TLabel", width=11, anchor=tk.W).pack(side=tk.LEFT)
+            ttk.Label(row, textvariable=var, style="Accent.TLabel", anchor=tk.W).pack(
+                side=tk.LEFT, fill=tk.X, expand=True
+            )
             return row
 
         # Label, [Parent], Confidence, Destination. The Parent row is inserted
@@ -982,7 +1075,8 @@ class RunTab(ttk.Frame):
 
         # ----- Bottom of left pane: slot details -----------------------------
         self.details = SlotDetailsPanel(
-            bottom_pane, config=config,
+            bottom_pane,
+            config=config,
             on_assignment_change=self._refresh_card_headstamps,
         )
         self.details.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
@@ -1104,7 +1198,9 @@ class RunTab(ttk.Frame):
         package = self.config.run_package_mode
         for slot_num in range(0, max(1, slot_count)):
             card = SlotCard(
-                self.slot_grid, slot_number=slot_num, on_click=self._select_slot,
+                self.slot_grid,
+                slot_number=slot_num,
+                on_click=self._select_slot,
                 on_reset=self._on_card_reset,
             )
             card.set_package_mode(package)
@@ -1121,9 +1217,7 @@ class RunTab(ttk.Frame):
                 if slot > 0 and names:
                     slot_map[slot].extend(names)
             for card in self._slot_cards:
-                card.set_headstamps(
-                    sorted(slot_map.get(card.slot_number, []), key=str.casefold)
-                )
+                card.set_headstamps(sorted(slot_map.get(card.slot_number, []), key=str.casefold))
             return
         parents = self.config.parents_with_slots()
         if parents and self.config.use_parent_classifications:
@@ -1151,9 +1245,7 @@ class RunTab(ttk.Frame):
         active = self.config.active_slot_template(mode)
         self._template_combo["values"] = [t.name for t in self._templates]
         self._template_var.set(active.name)
-        self._template_hint_var.set(
-            "Package-mode layout" if mode == "package" else ""
-        )
+        self._template_hint_var.set("Package-mode layout" if mode == "package" else "")
 
     def _template_busy(self) -> bool:
         """Templates swap the whole layout, so keep them out of a live run."""
@@ -1161,8 +1253,7 @@ class RunTab(ttk.Frame):
             return False
         messagebox.showinfo(
             "Run in progress",
-            "Stop the run before changing sorting templates — switching one "
-            "reassigns every slot.",
+            "Stop the run before changing sorting templates — switching one reassigns every slot.",
             parent=self,
         )
         return True
@@ -1187,11 +1278,11 @@ class RunTab(ttk.Frame):
 
         mode = self.config.slot_template_mode()
         NewSlotTemplateDialog(
-            self, config=self.config, mode=mode,
+            self,
+            config=self.config,
+            mode=mode,
             current_name=self.config.active_slot_template(mode).name,
-            on_created=lambda t: self._after_template_change(
-                f"Created sorting template “{t.name}”."
-            ),
+            on_created=lambda t: self._after_template_change(f"Created sorting template “{t.name}”."),
         )
 
     def _edit_template(self) -> None:
@@ -1201,7 +1292,8 @@ class RunTab(ttk.Frame):
 
         mode = self.config.slot_template_mode()
         EditSlotTemplateDialog(
-            self, config=self.config,
+            self,
+            config=self.config,
             template=self.config.active_slot_template(mode),
             can_delete=len(self.config.list_slot_templates(mode)) > 1,
             on_changed=lambda _t: self._after_template_change("Sorting templates updated."),
@@ -1312,6 +1404,7 @@ class RunTab(ttk.Frame):
 
     def _open_monitor(self) -> None:
         from .monitor import MonitorWindow
+
         win = self._monitor_window
         if win is not None:
             try:
@@ -1386,9 +1479,7 @@ class RunTab(ttk.Frame):
         non-empty queue. Instant/OnRunComplete upload automatically."""
         model = self._active_feedback_model()
         show = (
-            model is not None
-            and model.feedback_loop_upload_mode == "Manual"
-            and self._feedback.has_pending(model.id)
+            model is not None and model.feedback_loop_upload_mode == "Manual" and self._feedback.has_pending(model.id)
         )
         if show:
             self._feedback_btn.pack(padx=12, pady=2, fill=tk.X)
@@ -1425,10 +1516,7 @@ class RunTab(ttk.Frame):
         model = self._active_feedback_model()
         auth = getattr(self.app, "auth", None)
         if model is None or auth is None:
-            debug_log(
-                f"tab_run: wish list not fetched (model={model.id if model else None}, "
-                f"auth={auth is not None})"
-            )
+            debug_log(f"tab_run: wish list not fetched (model={model.id if model else None}, auth={auth is not None})")
             return
         self.app.run_worker(
             lambda: controller.refresh_wish_list(auth=auth),
@@ -1448,8 +1536,11 @@ class RunTab(ttk.Frame):
                 f"mode={model.feedback_loop_upload_mode} "
                 f"pending={self._feedback.count_pending(model.id)}"
             )
-        if model is not None and model.feedback_loop_upload_mode == "OnRunComplete" \
-                and model.id not in self._feedback_declined_models:
+        if (
+            model is not None
+            and model.feedback_loop_upload_mode == "OnRunComplete"
+            and model.id not in self._feedback_declined_models
+        ):
             debug_log("tab_run: OnRunComplete — draining queue at run stop")
             self._trigger_feedback_drain(model.id)
         self._update_feedback_button()

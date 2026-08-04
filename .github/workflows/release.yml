@@ -1,0 +1,216 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (PEP 440, no v prefix), e.g. 0.2.0. Leave empty to auto-detect from Conventional Commits."
+        required: false
+        type: string
+      ref:
+        description: "Branch, tag, or commit SHA to release from. Leave empty for the branch this workflow was dispatched on."
+        required: false
+        type: string
+      force:
+        description: "Allow a version that disagrees with the auto-detected one."
+        required: false
+        type: boolean
+        default: false
+      dry-run:
+        description: "Validate and preview only -- no tag pushed, no draft release created."
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ inputs.ref || github.ref }}
+
+      # Same direct install as release-preview.yml, for the same reason:
+      # orhun/git-cliff-action's `version` output is the latest *existing*
+      # release, not what the passed args compute, so --bumped-version has to
+      # be read from the binary's own stdout. Using it for the changelog too
+      # keeps one tool in this workflow instead of a binary plus an action.
+      #
+      # Pinned by digest, not just by version: a GitHub release asset is
+      # mutable by its upstream owner, and this job holds contents: write plus
+      # a token that can push tags and create releases -- i.e. it can reach the
+      # very artifacts the in-app updater installs on users' machines. Every
+      # *action* here is SHA-pinned for that reason; a raw download deserves
+      # the same. The digest was cross-checked against upstream's published
+      # .sha512 for the same asset.
+      - name: Install git-cliff
+        env:
+          GIT_CLIFF_VERSION: "2.13.1"
+          GIT_CLIFF_SHA256: "9a1263f24e59a2f508c7b3d3283c9dea94a8bf697f96dbc18cc783cac6284546"
+        run: |
+          curl -fsSL -o git-cliff.tar.gz \
+            "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${GIT_CLIFF_SHA256}  git-cliff.tar.gz" | sha256sum -c -
+          tar -xzf git-cliff.tar.gz --strip-components=1 -C /usr/local/bin \
+            "git-cliff-${GIT_CLIFF_VERSION}/git-cliff"
+          rm git-cliff.tar.gz
+
+      - name: Resolve version
+        id: resolve
+        env:
+          REQUESTED: ${{ inputs.version }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          AUTO="$(git-cliff --config cliff.toml --bumped-version)"
+          PEP440='^[0-9]+(\.[0-9]+)*(a[0-9]+|b[0-9]+|rc[0-9]+)?(\.post[0-9]+)?(\.dev[0-9]+)?$'
+
+          if [ -z "$REQUESTED" ]; then
+            VERSION="$AUTO"
+            SOURCE="auto-detected from Conventional Commits"
+          else
+            VERSION="$REQUESTED"
+            if ! echo "$VERSION" | grep -qE "$PEP440"; then
+              echo "::error::Version '$VERSION' is not a valid PEP 440 version (e.g. 0.2.0, 0.2.0rc1)"
+              exit 1
+            fi
+            if [ "$VERSION" != "$AUTO" ]; then
+              if [ "$FORCE" != "true" ]; then
+                echo "::error::Version '$VERSION' disagrees with the auto-detected '$AUTO'. Re-run with force enabled if that is deliberate."
+                exit 1
+              fi
+              echo "::warning::Forcing '$VERSION' over the auto-detected '$AUTO'."
+              SOURCE="user-specified (forced over '$AUTO')"
+            else
+              SOURCE="user-specified (matches auto-detected)"
+            fi
+          fi
+
+          # Auto-detect can legitimately return nothing useful -- e.g. a repo
+          # with no tags *and* no conventional commits to infer a bump from.
+          # Better to fail here than to try tagging an empty string.
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not determine a version to release. Pass one explicitly."
+            exit 1
+          fi
+
+          {
+            echo "version=$VERSION"
+            echo "auto=$AUTO"
+            echo "source=$SOURCE"
+          } >> "$GITHUB_OUTPUT"
+
+      # Same rule check-release.yml enforces, but *before* anything is
+      # created rather than after. check-release.yml fires on
+      # `release: published` -- by which point the tag is pushed and the
+      # draft exists, so it can only report a mistake that already happened.
+      # Checking here means a release from the wrong branch simply doesn't
+      # get made. Both are kept: this one prevents, that one catches a
+      # release created by any other route (e.g. by hand in the UI).
+      - name: Check the ref is a releasable branch
+        env:
+          REF: ${{ inputs.ref || github.ref }}
+        run: |
+          BRANCH="${REF#refs/heads/}"
+          if [[ "$BRANCH" != "main" && "$BRANCH" != hotfix/* && "$BRANCH" != release/* ]]; then
+            echo "::error::Releases must come from main, hotfix/*, or release/* (got: '$BRANCH')."
+            echo "::error::If you passed a raw commit SHA, release from the branch containing it instead."
+            exit 1
+          fi
+
+      - name: Check tag does not already exist
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          if git rev-parse "$VERSION" > /dev/null 2>&1; then
+            echo "::error::Tag '$VERSION' already exists"
+            exit 1
+          fi
+
+      - name: Generate changelog
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: git-cliff --config cliff.toml --latest --unreleased --strip all --output NOTES.md
+
+      # The checkout above sets persist-credentials: false, so `origin` carries
+      # no auth -- a bare `git push origin` here would 403. Pushing to an
+      # explicit tokenised URL keeps the hardening (no credential left behind
+      # in .git/config for later steps to leak) while still authenticating.
+      - name: Push tag
+        if: ${{ !inputs.dry-run }}
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$VERSION"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$VERSION"
+
+      - name: Create draft GitHub Release
+        if: ${{ !inputs.dry-run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          # `gh release create` prints the release URL on stdout; it has no
+          # --json/--jq of its own (those live on `release view`/`list`).
+          DRAFT_URL=$(gh release create "$VERSION" \
+            --title "$VERSION" \
+            --notes-file NOTES.md \
+            --draft)
+          {
+            echo "### Release draft created"
+            echo ""
+            echo "**Version:** \`$VERSION\`"
+            echo ""
+            echo "**Draft URL:** $DRAFT_URL"
+            echo ""
+            echo "Review the draft and click **Publish release** to trigger the publish workflows."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summary
+        if: always()
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          AUTO: ${{ steps.resolve.outputs.auto }}
+          SOURCE: ${{ steps.resolve.outputs.source }}
+          REF: ${{ inputs.ref || github.ref }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          # Both "true" and "false" are non-empty strings, so test the value
+          # explicitly -- ${DRY_RUN:+...} would expand in both cases.
+          if [ "$DRY_RUN" = "true" ]; then
+            HEADING="Release (dry run)"
+            MODE="dry run -- no tag pushed, no release created"
+          else
+            HEADING="Release"
+            MODE="tag pushed, draft release created"
+          fi
+          {
+            echo "### $HEADING"
+            echo ""
+            echo "| | Value |"
+            echo "|---|---|"
+            echo "| Version | \`$VERSION\` |"
+            echo "| Auto-detected | \`$AUTO\` |"
+            echo "| Source | $SOURCE |"
+            echo "| Ref | \`$REF\` |"
+            echo "| Mode | $MODE |"
+            echo ""
+            echo "#### Release notes"
+            echo ""
+            cat NOTES.md 2>/dev/null || echo "_(not generated -- an earlier step failed)_"
+          } >> "$GITHUB_STEP_SUMMARY"

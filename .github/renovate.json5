@@ -1,0 +1,131 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+
+  extends: [
+    "config:recommended",
+    ":semanticCommits",
+  ],
+
+  semanticCommits: "enabled",
+  semanticCommitType: "chore",
+  semanticCommitScope: "{{datasource}}",
+
+  automergeType: "pr",
+  platformAutomerge: true,
+
+  branchPrefix: "renovate/",
+
+  addLabels: [
+    "bot-renovate",
+  ],
+
+  // Functional rather than decorative -- add this one to a PR to stop
+  // Renovate rebasing/updating that PR any further.
+  stopUpdatingLabel: "bot-renovate-stop",
+
+  dependencyDashboard: false,
+
+  prConcurrentLimit: 10,
+  prHourlyLimit: 5,
+
+  separateMajorMinor: true,
+  separateMultipleMajor: true,
+
+  lockFileMaintenance: {
+    enabled: true,
+  },
+
+  vulnerabilityAlerts: {
+    enabled: true,
+    addLabels: ["security"],
+  },
+
+  osvVulnerabilityAlerts: true,
+
+  packageRules: [
+
+    // =====================================================
+    // Version classification labels
+    //
+    // minimumReleaseAge is a supply-chain-attack mitigation, not just noise
+    // reduction: a malicious or compromised package version gets caught and
+    // pulled well within a few days in the common case, so auto-merging a
+    // same-day release means installing it before anyone's had a chance to
+    // notice. Costs nothing for a legitimate release.
+    // =====================================================
+
+    {
+      matchUpdateTypes: ["major"],
+      addLabels: ["renovate-version-major"],
+      minimumReleaseAge: "7 days",
+    },
+    // minor/patch are labelled too even though they auto-merge: a complete
+    // set means every Renovate PR states its own risk tier at a glance,
+    // including one that sits open because its checks failed.
+    {
+      matchUpdateTypes: ["minor"],
+      addLabels: ["renovate-version-minor"],
+      automerge: true,
+      minimumReleaseAge: "3 days",
+    },
+    {
+      matchUpdateTypes: ["patch"],
+      addLabels: ["renovate-version-patch"],
+      automerge: true,
+      minimumReleaseAge: "3 days",
+    },
+    {
+      matchUpdateTypes: ["digest"],
+      addLabels: ["renovate-version-digest"],
+    },
+
+    // =====================================================
+    // torch / torchvision -- never automerge. Old-CUDA users depend on
+    // specific builds, and a routine bump can silently break them. See
+    // CLAUDE.md.
+    // =====================================================
+
+    {
+      matchPackageNames: ["torch", "torchvision"],
+      automerge: false,
+      addLabels: ["needs-hardware-test"],
+      minimumReleaseAge: "14 days",
+    },
+
+    // =====================================================
+    // GitHub Actions -- minor/patch tag bumps auto-merge once checks pass.
+    //
+    // matchUpdateTypes is load-bearing, not decoration: Renovate applies
+    // packageRules in order and later rules win, so without it this rule's
+    // `automerge: true` would override the major and digest rules above --
+    // the two this repo (and .github/settings.yml's label descriptions)
+    // deliberately keep review-gated. That matters most for digests: every
+    // action here is SHA-pinned precisely so a re-pointed upstream tag can't
+    // silently change what runs, and auto-merging the digest bump would hand
+    // that guarantee straight back. minimumReleaseAge doesn't cover it
+    // either -- it keys off release age, and re-pointing a tag on an existing
+    // release creates no new release.
+    // =====================================================
+
+    // No ecosystem-classification labels (renovate-type-python /
+    // renovate-type-cicd). Those earn their place in an org juggling Java,
+    // Node, Python and Docker across many repos -- here there are exactly
+    // two ecosystems, and .github/labeler.yml already separates them:
+    // `dependencies` for pyproject.toml/uv.lock, `ci` for .github/**.
+    {
+      matchManagers: ["github-actions"],
+      matchUpdateTypes: ["minor", "patch"],
+      semanticCommitType: "chore",
+      semanticCommitScope: "github-actions",
+      automerge: true,
+    },
+    // Same commit metadata for the update types that do *not* auto-merge, so
+    // a major or digest Actions PR still reads as chore(github-actions).
+    {
+      matchManagers: ["github-actions"],
+      matchUpdateTypes: ["major", "digest"],
+      semanticCommitType: "chore",
+      semanticCommitScope: "github-actions",
+    },
+  ],
+}

@@ -1,0 +1,175 @@
+# Repository settings as code.
+#
+# Read by either of two GitHub Apps -- neither is installed by default, and
+# **this file does nothing until one is**:
+#
+#   * repository-settings/app ("Settings")  -- per-repo, works on a personal
+#     repo, reads exactly this path. https://github.com/repository-settings/app
+#   * github/safe-settings                  -- org-scale successor, reads from
+#     an admin repo and needs a GitHub App + an org.
+#     https://github.com/github/safe-settings
+#
+# Kept here regardless, for two reasons: it's the same ground REPO_SETUP.md
+# covers in prose, but declarative and diffable -- settings drift becomes a
+# reviewable change rather than something someone silently clicked; and if an
+# app is ever installed, it applies without being rewritten first.
+#
+# Without an app installed, .github/REPO_SETUP.md is the manual fallback.
+#
+# THIS FILE IS IN repository-settings/app FORMAT, not safe-settings format --
+# they look similar but are not interchangeable. Verified against
+# reqstool/.github-private/safe-settings/settings.yml; two concrete differences
+# if this ever moves to safe-settings (which would also mean moving the file
+# into an admin repo, since safe-settings reads from there, not from here):
+#
+#   1. labels: safe-settings nests them under `labels: { include: [...] }`
+#      (and supports `exclude:`); this format takes a flat `labels: [...]`.
+#   2. security: safe-settings has a `repository.security` block with
+#      `enableVulnerabilityAlerts` / `enableAutomatedSecurityFixes`. There is
+#      no equivalent here, so those two stay manual -- see REPO_SETUP.md.
+#      (For this project the wanted state is alerts ON, automated fixes OFF,
+#      because Renovate owns dependency PRs -- see D13.)
+#
+# NOTE ON BRANCH PROTECTION: the `branches:` block below is commented out on
+# purpose. Requiring an approving review makes it impossible to merge your own
+# PR (GitHub won't let you approve your own), which locks a solo maintainer or
+# a fork owner out of their own repo. Uncomment it upstream, where PRs get an
+# actual second pair of eyes -- see the comment on that block.
+
+repository:
+  has_issues: true
+  has_wiki: false
+  has_projects: false
+  has_discussions: true # the issue templates route support questions here
+
+  # Squash-only. Merge commits and rebase both produce histories that break the
+  # one assumption everything else here depends on: that each commit on main is
+  # a Conventional Commits subject git-cliff can derive a version from.
+  allow_squash_merge: true
+  allow_merge_commit: false
+  allow_rebase_merge: false
+
+  # PR_TITLE, not COMMIT_OR_PR_TITLE (GitHub's default). The default uses the
+  # commit subject when a PR has exactly one commit -- so a PR whose title was
+  # checked by check-semantic-pr.yml can still land with an unchecked subject
+  # line. PR_TITLE means the thing that was validated is the thing that lands.
+  squash_merge_commit_title: PR_TITLE
+  squash_merge_commit_message: COMMIT_MESSAGES
+
+  delete_branch_on_merge: true
+  allow_auto_merge: true
+  allow_update_branch: true
+
+# Referenced by .github/labeler.yml, which auto-applies them by changed path.
+# actions/labeler does NOT create labels -- it errors on any that don't exist,
+# so these have to be created before that workflow can work.
+labels:
+  # Subsystem labels, mapped to CLAUDE.md's architecture boundaries.
+  - name: ui
+    color: "1d76db"
+    description: "Tkinter UI: tabs, dialogs, theme"
+  - name: training
+    color: "6f42c1"
+    description: "Model training, local inference, evaluation"
+  - name: hardware
+    color: "b60205"
+    description: "Serial board, camera, image processing"
+  - name: community
+    color: "0e8a16"
+    description: "Community backend, auth, feedback loop"
+  - name: updater
+    color: "fbca04"
+    description: "In-app updater and the Windows installer"
+  - name: launcher
+    color: "d4c5f9"
+    description: "bootstrap.py and the start.sh/start.bat shims"
+  - name: tests
+    color: "c2e0c6"
+    description: "Test suite"
+  - name: ci
+    color: "000000"
+    description: "CI/CD workflows and repo tooling"
+  - name: dependencies
+    color: "0366d6"
+    description: "Dependency updates"
+
+  # Applied by the issue templates (.github/ISSUE_TEMPLATE/*.yml), which set it
+  # on every new issue. Same trap as the Renovate labels below: GitHub issue
+  # forms silently drop a label that doesn't exist, so without this entry the
+  # templates' `labels: [..., "triage"]` was doing nothing at all.
+  - name: triage
+    color: "ededed"
+    description: "New issue awaiting triage"
+
+  # Applied by Renovate itself (.github/renovate.json5), not by labeler.yml.
+  # These were referenced by that config but had never been created -- Renovate
+  # does not create labels it references, so every one of them was silently
+  # doing nothing.
+  - name: bot-renovate
+    color: "5319e7"
+    description: "Opened by Renovate"
+  - name: bot-renovate-stop
+    color: "5d0811"
+    description: "Renovate: stop updating this PR (add it yourself to pin a PR)"
+  - name: security
+    color: "b60205"
+    description: "Vulnerability alert / security update"
+  - name: needs-hardware-test
+    color: "e99695"
+    description: "torch/torchvision bump -- verify on real CUDA hardware before merging"
+  - name: renovate-version-major
+    color: "d73a4a"
+    description: "Major version update (breaking risk; never auto-merged)"
+  - name: renovate-version-minor
+    color: "fbca04"
+    description: "Minor version update"
+  - name: renovate-version-patch
+    color: "0e8a16"
+    description: "Patch version update"
+  - name: renovate-version-digest
+    color: "c5def5"
+    description: "Digest/SHA pin update (never auto-merged)"
+
+  # GitHub's defaults, restated so this file is the whole picture rather than a
+  # diff against whatever a repo happened to start with.
+  - name: bug
+    color: "d73a4a"
+    description: "Something isn't working"
+  - name: documentation
+    color: "0075ca"
+    description: "Improvements or additions to documentation"
+  - name: enhancement
+    color: "a2eeef"
+    description: "New feature or request"
+  - name: "good first issue"
+    color: "7057ff"
+    description: "Good for newcomers"
+  - name: "help wanted"
+    color: "008672"
+    description: "Extra attention is needed"
+  - name: question
+    color: "d876e3"
+    description: "Further information is requested"
+
+# Uncomment upstream. Deliberately inactive by default -- see the note at the
+# top: required_approving_review_count: 1 prevents a solo maintainer from
+# merging their own PR at all.
+#
+# branches:
+#   - name: main
+#     protection:
+#       required_pull_request_reviews:
+#         required_approving_review_count: 1
+#         dismiss_stale_reviews: true
+#         require_code_owner_reviews: false
+#       required_status_checks:
+#         strict: true
+#         contexts:
+#           - "ruff (check + format)"
+#           - "lint the workflows themselves"
+#           - "pytest (ubuntu-latest, py3.12)"
+#           - "pytest (windows-latest, py3.12)"
+#           - "Validate PR title"
+#       required_conversation_resolution: true
+#       enforce_admins: false
+#       restrictions: null

@@ -1,4 +1,5 @@
 """Tests for ZIP model import/export and backslash normalization."""
+
 from __future__ import annotations
 
 import json
@@ -81,7 +82,8 @@ def test_export_and_import_round_trip(tmp_path: Path) -> None:
     assert imported_model.model_path is not None
     assert Path(imported_model.model_path).exists()
     assert sorted(p.name for p in images_target.iterdir()) == [
-        "FC__123.jpg", "WIN__456.jpg",
+        "FC__123.jpg",
+        "WIN__456.jpg",
     ]
     hs_names = sorted(h.name for h in HeadstampRepo(db2).list_for_model(model_id))
     assert hs_names == ["FC", "WIN"]
@@ -134,9 +136,7 @@ def test_import_rejects_path_traversal(tmp_path: Path) -> None:
         zf.writestr("../../etc/passwd", b"oops")
 
     with pytest.raises(ValueError):
-        import_model(zip_path, db=db,
-                     images_target_dir=tmp_path / "i",
-                     models_target_dir=tmp_path / "m")
+        import_model(zip_path, db=db, images_target_dir=tmp_path / "i", models_target_dir=tmp_path / "m")
 
 
 def _import_manifest() -> dict:
@@ -158,9 +158,7 @@ def test_import_rejects_decompression_bomb(tmp_path: Path) -> None:
         zf.writestr("images/BOOM__1.jpg", b"\x00" * (5 * 1024 * 1024))
 
     with pytest.raises(ValueError, match="compression ratio"):
-        import_model(zip_path, db=db,
-                     images_target_dir=tmp_path / "i",
-                     models_target_dir=tmp_path / "m")
+        import_model(zip_path, db=db, images_target_dir=tmp_path / "i", models_target_dir=tmp_path / "m")
 
 
 def test_import_rejects_unexpected_entry_extension(tmp_path: Path) -> None:
@@ -171,9 +169,7 @@ def test_import_rejects_unexpected_entry_extension(tmp_path: Path) -> None:
         zf.writestr("images/notanimage.exe", b"MZ")
 
     with pytest.raises(ValueError, match="unexpected image entry"):
-        import_model(zip_path, db=db,
-                     images_target_dir=tmp_path / "i",
-                     models_target_dir=tmp_path / "m")
+        import_model(zip_path, db=db, images_target_dir=tmp_path / "i", models_target_dir=tmp_path / "m")
 
 
 def test_export_atomic_write_no_partial_file(tmp_path: Path) -> None:
@@ -208,7 +204,8 @@ def test_unknown_model_mode_in_manifest_falls_back_to_tiny(tmp_path: Path) -> No
         zf.writestr("manifest.json", json.dumps(manifest))
 
     _, mid = import_model(
-        zip_path, db=db,
+        zip_path,
+        db=db,
         images_target_dir=tmp_path / "i",
         models_target_dir=tmp_path / "m",
     )
@@ -289,6 +286,7 @@ def test_winforms_pascal_manifest_picks_up_training_config(tmp_path: Path) -> No
 
 def test_normalize_upload_mode_handles_int_string_and_missing() -> None:
     from sorter.models import normalize_upload_mode
+
     # legacy enum int (Instant=0, OnRunComplete=1, Manual=2)
     assert normalize_upload_mode(0, feedback_enabled=True) == "Instant"
     assert normalize_upload_mode(1, feedback_enabled=True) == "OnRunComplete"
@@ -311,14 +309,17 @@ def test_model_from_row_normalizes_legacy_int_upload_mode(tmp_path: Path) -> Non
     canonical name, so the upload-mode comparisons work without re-import."""
     db = _seed_db(tmp_path)
     cart = CartridgeRepo(db).create("9mmX")
-    m = ModelRepo(db).create(Model(
-        name="Comm", cartridge_id=cart.id, community_model_uid="uid-7",
-        feedback_loop_enabled=True, feedback_loop_confidence_floor=97,
-    ))
-    # Simulate a legacy row that persisted the enum int.
-    db.conn.execute(
-        "UPDATE models SET feedback_loop_upload_mode = '0' WHERE id = ?", (m.id,)
+    m = ModelRepo(db).create(
+        Model(
+            name="Comm",
+            cartridge_id=cart.id,
+            community_model_uid="uid-7",
+            feedback_loop_enabled=True,
+            feedback_loop_confidence_floor=97,
+        )
     )
+    # Simulate a legacy row that persisted the enum int.
+    db.conn.execute("UPDATE models SET feedback_loop_upload_mode = '0' WHERE id = ?", (m.id,))
     reloaded = ModelRepo(db).get(m.id)
     assert reloaded.feedback_loop_upload_mode == "Instant"
 
@@ -326,13 +327,15 @@ def test_model_from_row_normalizes_legacy_int_upload_mode(tmp_path: Path) -> Non
 def test_manifest_with_int_upload_mode_imports_as_name() -> None:
     """A legacy community export serializes the enum as an int (Instant=0);
     model_from_export_dict must store the canonical name, not the raw int."""
-    m = model_from_export_dict({
-        "ModelName": "Comm",
-        "CommunityModelUID": "uid-9",
-        "FeedbackLoopEnabled": True,
-        "FeedbackLoopConfidenceFloor": 90,
-        "FeedbackLoopUploadMode": 0,
-    })
+    m = model_from_export_dict(
+        {
+            "ModelName": "Comm",
+            "CommunityModelUID": "uid-9",
+            "FeedbackLoopEnabled": True,
+            "FeedbackLoopConfidenceFloor": 90,
+            "FeedbackLoopUploadMode": 0,
+        }
+    )
     assert m.feedback_loop_enabled is True
     assert m.feedback_loop_confidence_floor == 90
     assert m.feedback_loop_upload_mode == "Instant"
@@ -340,6 +343,7 @@ def test_manifest_with_int_upload_mode_imports_as_name() -> None:
 
 def test_model_mode_normalization_accepts_misc_spellings() -> None:
     from sorter.model_io import _normalize_model_mode
+
     # Snake case (this app's export)
     assert _normalize_model_mode("convnext_tiny") == "convnext_tiny"
     # legacy display string variants
@@ -354,7 +358,7 @@ def test_model_mode_normalization_accepts_misc_spellings() -> None:
 
 
 def test_export_for_share_writes_zip_and_manifest_sidecar(tmp_path: Path) -> None:
-    from sorter.model_io import export_for_share, write_manifest_sidecar
+    from sorter.model_io import export_for_share
 
     db = _seed_db(tmp_path)
     cart = CartridgeRepo(db).get_or_create("9mm")
@@ -369,10 +373,16 @@ def test_export_for_share_writes_zip_and_manifest_sidecar(tmp_path: Path) -> Non
 
     zip_out = tmp_path / "abc123.zip"
     zip_path, manifest_path = export_for_share(
-        zip_out, saved, "9mm", ["CBC"],
+        zip_out,
+        saved,
+        "9mm",
+        ["CBC"],
         mode=ExportMode.MODEL_AND_IMAGES,
-        model_file=model_file, images_dir=images_dir,
-        community_uid="abc123", feedback_enabled=True, feedback_floor=88,
+        model_file=model_file,
+        images_dir=images_dir,
+        community_uid="abc123",
+        feedback_enabled=True,
+        feedback_floor=88,
     )
     assert zip_path.exists()
     # Sidecar sits next to the zip with the .manifest.json extension.
@@ -489,14 +499,20 @@ def test_community_update_replaces_model_in_place(tmp_path: Path) -> None:
 
     _, first_id = import_model(
         _community_zip(tmp_path / "v1.zip"),
-        db=db, images_target_dir=tmp_path / "imgs", models_target_dir=mods,
+        db=db,
+        images_target_dir=tmp_path / "imgs",
+        models_target_dir=mods,
     )
     _, second_id = import_model(
         _community_zip(
-            tmp_path / "v2.zip", version=2,
-            headstamps=("FC", "WIN", "RP"), checkpoint=b"CHECKPOINT-V2",
+            tmp_path / "v2.zip",
+            version=2,
+            headstamps=("FC", "WIN", "RP"),
+            checkpoint=b"CHECKPOINT-V2",
         ),
-        db=db, images_target_dir=tmp_path / "imgs", models_target_dir=mods,
+        db=db,
+        images_target_dir=tmp_path / "imgs",
+        models_target_dir=mods,
     )
 
     assert second_id == first_id
@@ -510,7 +526,9 @@ def test_community_update_replaces_model_in_place(tmp_path: Path) -> None:
     assert updated.model_path == str(mods / f"{first_id}.pth")
     # New classifications from the update land alongside the existing ones.
     assert sorted(h.name for h in HeadstampRepo(db).list_for_model(first_id)) == [
-        "FC", "RP", "WIN",
+        "FC",
+        "RP",
+        "WIN",
     ]
 
 
@@ -522,7 +540,9 @@ def test_community_update_keeps_slots_and_templates(tmp_path: Path) -> None:
     db = _seed_db(tmp_path)
     _, model_id = import_model(
         _community_zip(tmp_path / "v1.zip"),
-        db=db, images_target_dir=tmp_path / "imgs", models_target_dir=tmp_path / "mods",
+        db=db,
+        images_target_dir=tmp_path / "imgs",
+        models_target_dir=tmp_path / "mods",
     )
 
     SettingsRepo(db).set_active_model_id(model_id)
@@ -534,14 +554,16 @@ def test_community_update_keeps_slots_and_templates(tmp_path: Path) -> None:
 
     import_model(
         _community_zip(tmp_path / "v2.zip", version=2, headstamps=("FC", "WIN", "RP")),
-        db=db, images_target_dir=tmp_path / "imgs", models_target_dir=tmp_path / "mods",
+        db=db,
+        images_target_dir=tmp_path / "imgs",
+        models_target_dir=tmp_path / "mods",
     )
 
     assert SettingsRepo(db).get_active_model_id() == model_id
     fresh = Config(db).load()
     assert fresh.slot_for_headstamp("FC") == 3
     assert fresh.slot_for_headstamp("WIN") == 5
-    assert fresh.slot_for_headstamp("RP") == 0        # new class: catch-all
+    assert fresh.slot_for_headstamp("RP") == 0  # new class: catch-all
     assert [t.name for t in fresh.list_slot_templates()] == template_names
     assert fresh.active_slot_template().name == "Range brass"
 
@@ -550,18 +572,22 @@ def test_community_update_keeps_local_name_and_feedback_optout(tmp_path: Path) -
     db = _seed_db(tmp_path)
     _, model_id = import_model(
         _community_zip(tmp_path / "v1.zip"),
-        db=db, images_target_dir=tmp_path / "i", models_target_dir=tmp_path / "m",
+        db=db,
+        images_target_dir=tmp_path / "i",
+        models_target_dir=tmp_path / "m",
     )
     repo = ModelRepo(db)
     local = repo.get(model_id)
-    assert local.feedback_loop_enabled is True   # the publisher offers the loop
-    local.name = "My Range Model"                # …and the user renames it…
-    local.feedback_loop_enabled = False          # …and opts out
+    assert local.feedback_loop_enabled is True  # the publisher offers the loop
+    local.name = "My Range Model"  # …and the user renames it…
+    local.feedback_loop_enabled = False  # …and opts out
     repo.update(local)
 
     import_model(
         _community_zip(tmp_path / "v2.zip", version=2, name="Community 9mm v2"),
-        db=db, images_target_dir=tmp_path / "i", models_target_dir=tmp_path / "m",
+        db=db,
+        images_target_dir=tmp_path / "i",
+        models_target_dir=tmp_path / "m",
     )
 
     # An update re-offers the loop; it must not silently opt the user back in.
@@ -574,12 +600,17 @@ def test_import_can_force_a_separate_copy(tmp_path: Path) -> None:
     db = _seed_db(tmp_path)
     zip_path = _community_zip(tmp_path / "v1.zip")
     _, first_id = import_model(
-        zip_path, db=db,
-        images_target_dir=tmp_path / "i", models_target_dir=tmp_path / "m",
+        zip_path,
+        db=db,
+        images_target_dir=tmp_path / "i",
+        models_target_dir=tmp_path / "m",
     )
     _, second_id = import_model(
-        zip_path, db=db, update_existing=False,
-        images_target_dir=tmp_path / "i", models_target_dir=tmp_path / "m",
+        zip_path,
+        db=db,
+        update_existing=False,
+        images_target_dir=tmp_path / "i",
+        models_target_dir=tmp_path / "m",
     )
     assert second_id != first_id
     assert ModelRepo(db).get(second_id).name == "Community 9mm (2)"
@@ -592,12 +623,14 @@ def test_find_update_target(tmp_path: Path) -> None:
     with zipfile.ZipFile(plain, "w") as zf:
         zf.writestr("manifest.json", json.dumps(_import_manifest()))
 
-    assert find_update_target(community, db=db) is None      # not installed yet
-    assert find_update_target(plain, db=db) is None          # not a community model
+    assert find_update_target(community, db=db) is None  # not installed yet
+    assert find_update_target(plain, db=db) is None  # not a community model
 
     _, model_id = import_model(
-        community, db=db,
-        images_target_dir=tmp_path / "i", models_target_dir=tmp_path / "m",
+        community,
+        db=db,
+        images_target_dir=tmp_path / "i",
+        models_target_dir=tmp_path / "m",
     )
     target = find_update_target(community, db=db)
     assert target is not None and target.id == model_id

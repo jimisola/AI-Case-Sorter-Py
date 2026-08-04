@@ -4,6 +4,7 @@ Exercises the pure ``ModelEvaluatorDialog._apply_change`` recompute directly —
 importing the module is display-free, so no Tk root is needed. The GUI stack
 (tkinter/cv2/PIL) must import for the module to load, so skip where absent.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -33,7 +34,9 @@ def _row(**over):
 def test_delete_drops_matching_row() -> None:
     rows = [_row(), _row(filename="FC__2.jpg", filepath="/imgs/FC__2.jpg")]
     out = ModelEvaluatorDialog._apply_change(
-        rows, {"action": "deleted", "old_path": "/imgs/WIN__1.jpg"}, {},
+        rows,
+        {"action": "deleted", "old_path": "/imgs/WIN__1.jpg"},
+        {},
     )
     assert [r["filepath"] for r in out] == ["/imgs/FC__2.jpg"]
 

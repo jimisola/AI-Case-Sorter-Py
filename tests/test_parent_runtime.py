@@ -1,4 +1,5 @@
 """Parent-classification runtime config: visibility, persistence, routing."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -34,7 +35,7 @@ def _seed_parents(db: Database, model_id: int) -> dict[str, int]:
     for name, parent in [("BLZR", brass), ("CBC", brass), ("RP", nickle)]:
         h = hs.add(model_id, name)
         hs.set_parent(h.id, parent.id)
-    hs.add(model_id, "WIN")   # orphan
+    hs.add(model_id, "WIN")  # orphan
     hs.add(model_id, "XTRM")  # orphan
     return {"Brass": brass.id, "Nickle": nickle.id}
 
@@ -62,8 +63,11 @@ def test_use_parent_flag_is_per_model(tmp_path: Path) -> None:
 
     # A different active model has its own (default-off) flag.
     other = ModelRepo(db).create(
-        ModelRepo(db).get(mid).__class__(
-            name="other", cartridge_id=ModelRepo(db).get(mid).cartridge_id,
+        ModelRepo(db)
+        .get(mid)
+        .__class__(
+            name="other",
+            cartridge_id=ModelRepo(db).get(mid).cartridge_id,
             model_mode="convnext_tiny",
         )
     )
@@ -101,7 +105,7 @@ def test_routing_uses_parent_slot_when_enabled(tmp_path: Path) -> None:
     cfg = Config(db).load()
     cfg.set_parent_slot(ids["Brass"], 1)
     cfg.set_parent_slot(ids["Nickle"], 2)
-    cfg.set_headstamp_slot("WIN", 3)   # orphan keeps its own slot
+    cfg.set_headstamp_slot("WIN", 3)  # orphan keeps its own slot
     cfg.set_use_parent_classifications(True)
 
     routed = Config(db).load()
@@ -124,8 +128,8 @@ def test_parent_for_headstamp(tmp_path: Path) -> None:
     cfg = Config(db).load()
     assert cfg.parent_for_headstamp("BLZR") == "Brass"
     assert cfg.parent_for_headstamp("RP") == "Nickle"
-    assert cfg.parent_for_headstamp("WIN") is None    # orphan
-    assert cfg.parent_for_headstamp("ZZZ") is None    # unknown
+    assert cfg.parent_for_headstamp("WIN") is None  # orphan
+    assert cfg.parent_for_headstamp("ZZZ") is None  # unknown
 
     SettingsRepo(db).clear_active_model()
     assert Config(db).load().parent_for_headstamp("BLZR") is None  # AI Config mode

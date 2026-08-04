@@ -4,6 +4,7 @@ Importing the module is display-free, but it pulls in the GUI stack, so skip
 where tkinter/cv2/PIL aren't importable. ``_decode_thumb`` itself only needs
 PIL and is the cross-platform thumbnail path used off the UI thread.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

@@ -1,4 +1,5 @@
 """Sort-While-Training slot selection (needs a Tk display)."""
+
 from __future__ import annotations
 
 import pytest
@@ -75,7 +76,7 @@ def test_manual_feed_uses_dropdown_label(root, tmp_path, monkeypatch) -> None:
     tab, broker, _cfg = _make(root, tmp_path, monkeypatch)
     try:
         tab._sort_while_training_var.set(True)
-        tab.label_var.set("CBC")          # user's dropdown selection
+        tab.label_var.set("CBC")  # user's dropdown selection
         tab._feed()
         assert broker.feed_slots[-1] == 3  # CBC's run slot, not 0
     finally:

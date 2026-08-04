@@ -25,14 +25,16 @@ fell below the publisher's floor (the original rule), or its label is on the
 model's **wish list** — the classifications the publisher's model is short of
 training images for, fetched once at run start. See ``set_wish_list``.
 """
+
 from __future__ import annotations
 
 import os
 import sys
 import threading
 import traceback
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import numpy as np
 
@@ -40,7 +42,6 @@ from . import paths
 from .models import Model
 from .repository import ModelRepo
 from .training.dataset import parse_feedback_filename, save_feedback_image
-
 
 # Floor on the publisher's floor: even if a publisher set a very low
 # threshold, anything under 50% confidence is worth moderating.
@@ -71,11 +72,7 @@ def debug_log(msg: str) -> None:
 
 def is_feedback_model(model: Model | None) -> bool:
     """True when ``model`` is a community model with the feedback loop enabled."""
-    return bool(
-        model is not None
-        and model.feedback_loop_enabled
-        and model.community_model_uid
-    )
+    return bool(model is not None and model.feedback_loop_enabled and model.community_model_uid)
 
 
 class FeedbackService:
@@ -129,10 +126,7 @@ class FeedbackService:
         """
         names: list[str] = []
         if not is_feedback_model(model) or auth is None:
-            debug_log(
-                "wish list: not fetching "
-                f"(feedback_model={is_feedback_model(model)}, auth={auth is not None})"
-            )
+            debug_log(f"wish list: not fetching (feedback_model={is_feedback_model(model)}, auth={auth is not None})")
         else:
             try:
                 # Lazy import: the capture path carries no requests/msal dependency.
@@ -230,10 +224,7 @@ class FeedbackService:
         d = paths.model_feedback_dir(model_id)
         if not d.exists():
             return []
-        return sorted(
-            p for p in d.iterdir()
-            if p.is_file() and p.suffix.lower() in (".jpg", ".jpeg")
-        )
+        return sorted(p for p in d.iterdir() if p.is_file() and p.suffix.lower() in (".jpg", ".jpeg"))
 
     def count_pending(self, model_id: int) -> int:
         return len(self.pending_files(model_id))
@@ -243,9 +234,7 @@ class FeedbackService:
 
     # ----- capture ------------------------------------------------------------
 
-    def capture(
-        self, model: Model, image_bgr: np.ndarray, label: str, confidence: float
-    ) -> str | None:
+    def capture(self, model: Model, image_bgr: np.ndarray, label: str, confidence: float) -> str | None:
         """Stage a below-floor image in the model's feedback folder.
 
         Returns its path, or ``None`` on failure (best-effort — a failure here
@@ -253,7 +242,10 @@ class FeedbackService:
         """
         try:
             dest = save_feedback_image(
-                image_bgr, paths.model_feedback_dir(model.id), label or "unknown", confidence,
+                image_bgr,
+                paths.model_feedback_dir(model.id),
+                label or "unknown",
+                confidence,
             )
             debug_log(f"captured -> {dest}")
             return str(dest)
@@ -284,7 +276,10 @@ class FeedbackService:
         when we couldn't authenticate at all.
         """
         result: dict[str, Any] = {
-            "uploaded": 0, "dropped": 0, "declined": False, "skipped": False,
+            "uploaded": 0,
+            "dropped": 0,
+            "declined": False,
+            "skipped": False,
         }
         files = self.pending_files(model_id)
         debug_log(f"upload_pending: model_id={model_id} pending_files={len(files)} auth={auth is not None}")
@@ -343,7 +338,9 @@ class FeedbackService:
                 self._drop_all(files[i:], result)
                 break
             if not ticket.feedback_accepted:
-                debug_log(f"server declined feedback (message={ticket.feedback_message!r}) — dropping remaining {len(files) - i}")
+                debug_log(
+                    f"server declined feedback (message={ticket.feedback_message!r}) — dropping remaining {len(files) - i}"
+                )
                 result["declined"] = True
                 self._drop_all(files[i:], result)
                 break

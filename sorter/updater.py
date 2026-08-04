@@ -11,10 +11,10 @@ The flow is **stage now, apply at next launch**:
 
 Staging never touches the app folder. Windows keeps the venv's ``.pyd``/
 ``.dll`` files (opencv, numpy) locked while the app is running, so replacing
-files in-place is unreliable by construction; the launcher applies the staged
-tree before Python loads anything. That also means a staged update's own
-``requirements.txt`` is in place before the launcher's dependency check runs,
-so dependency changes install on the same restart.
+files in-place is unreliable by construction; bootstrap.py applies the staged
+tree before ``uv sync`` runs. That also means a staged update's own
+``pyproject.toml``/``uv.lock`` are in place before the sync, so dependency
+changes install on the same restart.
 
 Everything in the ``updates/`` tree lives under the data root, which is
 outside the app folder (see ``sorter/paths.py``).
@@ -24,15 +24,18 @@ Environment overrides:
   ``CASESORTER_UPDATE_API_BASE``  — GitHub API base, for testing
   ``CASESORTER_UPDATE_DISABLED``  — ``1`` disables checking entirely
 """
+
 from __future__ import annotations
 
 import json
 import os
 import shutil
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable
+from typing import Any
 
 import requests
 
@@ -67,10 +70,10 @@ class UpdateError(RuntimeError):
 class UpdateInfo:
     """A release newer than what's running."""
 
-    version: str          # normalized, no leading "v"
-    tag: str              # the tag as GitHub reports it
-    url: str              # ZIP to download
-    notes: str = ""       # release body (markdown)
+    version: str  # normalized, no leading "v"
+    tag: str  # the tag as GitHub reports it
+    url: str  # ZIP to download
+    notes: str = ""  # release body (markdown)
     size: int | None = None
     published_at: str = ""
 
@@ -158,17 +161,49 @@ def _api_base() -> str:
     return (os.environ.get("CASESORTER_UPDATE_API_BASE") or DEFAULT_API_BASE).rstrip("/")
 
 
-def _pick_asset(release: dict[str, Any], tag: str) -> tuple[str, int | None]:
-    """Prefer a published ``.zip`` asset; fall back to the tag source archive.
+def _strip_tag_prefix(tag: str) -> str:
+    """Drop one leading lowercase ``v``, exactly as the publish workflow does.
 
-    A purpose-built asset lets the maintainer ship a trimmed archive (no tests,
-    no CI config); the source archive means a release with no assets still
-    updates correctly.
+    This has to mirror ``${TAG#v}`` in publish.yml character for character,
+    because the result is used to build the asset name that ``_pick_asset``
+    matches exactly — any disagreement means the client silently misses the
+    real asset and falls back to the source archive.
+
+    Two ways to get that wrong, both verified against bash:
+
+    * ``lstrip("vV")`` strips *every* leading v, so ``vv1.2.3`` would become
+      ``1.2.3`` while the workflow produces ``v1.2.3``.
+    * ``${TAG#v}`` is case-sensitive, so ``V1.2.3`` stays ``V1.2.3`` upstream.
+      Stripping the capital here would disagree too.
+
+    (``check-release.yml`` rejects any ``v``-prefixed tag, so neither case
+    should reach a real release — this is about the two sides not drifting,
+    not about supporting those tags.)
     """
+    return tag[1:] if tag.startswith("v") else tag
+
+
+def _expected_asset_name(tag: str) -> str:
+    return f"ai-case-sorter-py-{_strip_tag_prefix(tag)}.zip"
+
+
+def _pick_asset(release: dict[str, Any], tag: str) -> tuple[str, int | None]:
+    """Match the purpose-built app archive by its exact name, not "any .zip".
+
+    A release also carries a wheel and an sdist (see the publish workflow) --
+    neither matches this, since a wheel ends in ``.whl`` and an sdist in
+    ``.tar.gz``. But "the first .zip asset" was never a safe rule on its own:
+    the day anyone attached an unrelated ``.zip`` to a release, in upload
+    order ahead of the real one, it would have silently become the tree
+    unpacked over the app folder. Falls back to the tag source archive if the
+    named asset isn't published, same as before -- a release with no assets
+    still updates correctly.
+    """
+    expected = _expected_asset_name(tag)
     for asset in release.get("assets") or []:
         name = str(asset.get("name") or "")
         url = asset.get("browser_download_url")
-        if name.lower().endswith(".zip") and url:
+        if name == expected and url:
             size = asset.get("size")
             return str(url), int(size) if isinstance(size, int) else None
     repo = update_repo()
@@ -218,7 +253,7 @@ def check_for_update(
     tag = str(release.get("tag_name") or "").strip()
     if not tag:
         return None
-    version = tag.lstrip("vV")
+    version = _strip_tag_prefix(tag)
     if not is_newer(version, cur):
         return None
 
@@ -314,8 +349,13 @@ def _safe_members(zf: zipfile.ZipFile) -> list[tuple[zipfile.ZipInfo, PurePosixP
     return raw
 
 
-def _download(url: str, dest: Path, progress: Callable[[int, int | None], None] | None,
-              session: requests.Session | None, timeout: int) -> Path:
+def _download(
+    url: str,
+    dest: Path,
+    progress: Callable[[int, int | None], None] | None,
+    session: requests.Session | None,
+    timeout: int,
+) -> Path:
     """Stream ``url`` to ``dest`` with an atomic ``.tmp`` → ``os.replace``."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".tmp")
@@ -381,10 +421,7 @@ def stage_update(
             names = {str(rel) for _, rel in members}
             missing = [e for e in REQUIRED_ENTRIES if e not in names]
             if missing:
-                raise UpdateError(
-                    "Update archive does not look like the app "
-                    f"(missing {', '.join(missing)})."
-                )
+                raise UpdateError(f"Update archive does not look like the app (missing {', '.join(missing)}).")
             staging.mkdir(parents=True, exist_ok=True)
             for entry, rel in members:
                 out = staging / Path(*rel.parts)
@@ -402,9 +439,7 @@ def stage_update(
     clear_pending()
     os.replace(staging, pending_dir())
 
-    from datetime import datetime, timezone
-
-    staged_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    staged_at = datetime.now(UTC).isoformat(timespec="seconds")
     _pending_meta_path().write_text(
         json.dumps(
             {
@@ -417,6 +452,4 @@ def stage_update(
         ),
         encoding="utf-8",
     )
-    return PendingUpdate(
-        version=info.version, tag=info.tag, path=pending_dir(), staged_at=staged_at
-    )
+    return PendingUpdate(version=info.version, tag=info.tag, path=pending_dir(), staged_at=staged_at)

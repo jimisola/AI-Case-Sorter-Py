@@ -1,0 +1,112 @@
+name: Release Preview
+
+# Manual only, deliberately. An earlier revision ran this on every PR, on the
+# theory that seeing the computed version pre-merge would catch a mistyped
+# commit type. In practice that wrote to the job summary -- which nobody reads
+# unless they click into the run -- on every PR including docs-only ones, and
+# its "next version" is only accurate until the next merge anyway. Running it
+# on demand, when someone actually wants the answer (typically right before
+# cutting a release), is the same signal without the per-PR noise.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag, or commit SHA to preview. Leave empty for the branch this was dispatched on."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Get latest tag
+        id: latest
+        run: |
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "(no tags yet)")
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      # Installed directly rather than via orhun/git-cliff-action for this
+      # step: the action's own `version` output is not "the version --args
+      # computed" -- it always re-runs git-cliff --context and reports
+      # .[0].version from that (the latest *existing* release), ignoring
+      # whatever args were passed. Confirmed the hard way: this repo has no
+      # tags yet, so that came back empty. --bumped-version's own stdout is
+      # what's actually wanted, captured directly.
+      # Digest-pinned for the same reason as release.yml's copy: a release
+      # asset is mutable upstream, so the version in the URL alone is not a
+      # pin. Keep the two digests in step when bumping the version.
+      - name: Install git-cliff
+        env:
+          GIT_CLIFF_VERSION: "2.13.1"
+          GIT_CLIFF_SHA256: "9a1263f24e59a2f508c7b3d3283c9dea94a8bf697f96dbc18cc783cac6284546"
+        run: |
+          curl -fsSL -o git-cliff.tar.gz \
+            "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${GIT_CLIFF_SHA256}  git-cliff.tar.gz" | sha256sum -c -
+          tar -xzf git-cliff.tar.gz --strip-components=1 -C /usr/local/bin \
+            "git-cliff-${GIT_CLIFF_VERSION}/git-cliff"
+          rm git-cliff.tar.gz
+
+      - name: Compute next version via git-cliff
+        id: next
+        run: |
+          echo "version=$(git-cliff --config cliff.toml --bumped-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Generate draft release notes
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
+        with:
+          config: cliff.toml
+          args: --latest --unreleased --strip all
+        env:
+          OUTPUT: NOTES.md
+
+      - name: List commits since latest tag
+        id: commits
+        env:
+          LATEST: ${{ steps.latest.outputs.tag }}
+        run: |
+          if [ "$LATEST" = "(no tags yet)" ]; then
+            COMMITS=$(git log --format="- %h %s" | head -20)
+          else
+            COMMITS=$(git log "${LATEST}..HEAD" --format="- %h %s")
+          fi
+          {
+            echo "COMMITS<<EOF"
+            echo "$COMMITS"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Write job summary
+        env:
+          LATEST: ${{ steps.latest.outputs.tag }}
+          NEXT: ${{ steps.next.outputs.version }}
+          REPO: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          {
+            echo "## Release Preview"
+            echo ""
+            echo "| | Value |"
+            echo "|---|---|"
+            echo "| Latest tag | \`${LATEST}\` |"
+            echo "| Next version (git-cliff) | \`${NEXT}\` |"
+            echo ""
+            echo "### Commits since \`${LATEST}\`"
+            echo ""
+            echo "$COMMITS"
+            echo ""
+            echo "### Draft release notes"
+            echo ""
+            cat NOTES.md
+            echo ""
+            echo "[-> GitHub Releases page](${REPO}/releases)"
+          } >> "$GITHUB_STEP_SUMMARY"

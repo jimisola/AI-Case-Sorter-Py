@@ -3,6 +3,7 @@
 The registry half only needs tkinter to import; the dialog half needs a real
 display (xvfb in practice), matching the other UI tests.
 """
+
 from __future__ import annotations
 
 import gc
@@ -71,7 +72,11 @@ def test_a_registered_theme_becomes_selectable() -> None:
 
 def test_registering_carries_the_halftone_and_outline_options() -> None:
     register_custom_theme(
-        "Inky", _palette(), halftone="#101010", outline=2, base="Comic Book",
+        "Inky",
+        _palette(),
+        halftone="#101010",
+        outline=2,
+        base="Comic Book",
     )
     set_palette("Inky")
 
@@ -135,7 +140,10 @@ def test_a_deleted_theme_falls_back_to_the_default_when_selected() -> None:
 
 def test_renaming_moves_a_theme_rather_than_copying_it() -> None:
     register_custom_theme(
-        "Mine", _palette(action="#123456"), halftone="#101010", outline=2,
+        "Mine",
+        _palette(action="#123456"),
+        halftone="#101010",
+        outline=2,
         base="Gothic",
     )
 
@@ -143,7 +151,7 @@ def test_renaming_moves_a_theme_rather_than_copying_it() -> None:
 
     assert "Mine" not in theme_names()
     assert THEMES["Yours"]["action"] == "#123456"
-    assert HALFTONE_INK["Yours"] == "#101010"        # options came along
+    assert HALFTONE_INK["Yours"] == "#101010"  # options came along
     assert "Mine" not in HALFTONE_INK
     assert custom_theme_payload("Yours")["based_on"] == "Gothic"
 
@@ -152,11 +160,11 @@ def test_a_rejected_rename_leaves_the_original_alone() -> None:
     register_custom_theme("Mine", _palette(action="#123456"))
 
     with pytest.raises(ValueError):
-        rename_custom_theme("Mine", "Dark")             # a built-in
+        rename_custom_theme("Mine", "Dark")  # a built-in
     with pytest.raises(ValueError):
         rename_custom_theme("Mine", "x" * (MAX_THEME_NAME + 1))
     with pytest.raises(ValueError):
-        rename_custom_theme("Sepia", "Mine")            # not renameable
+        rename_custom_theme("Sepia", "Mine")  # not renameable
 
     assert THEMES["Mine"]["action"] == "#123456"
     assert THEMES["Dark"] == BUILTIN_THEMES["Dark"]
@@ -191,9 +199,9 @@ def test_normalize_fills_gaps_and_drops_junk() -> None:
     )
 
     assert set(palette) == set(BUILTIN_THEMES["Dark"])
-    assert palette["action"] == "#abcdef"            # accepted, lowercased
-    assert "nonsense" not in palette                 # unknown role dropped
-    assert palette["text"] == BUILTIN_THEMES["Light"]["text"]      # wrong type
+    assert palette["action"] == "#abcdef"  # accepted, lowercased
+    assert "nonsense" not in palette  # unknown role dropped
+    assert palette["text"] == BUILTIN_THEMES["Light"]["text"]  # wrong type
     assert palette["border"] == BUILTIN_THEMES["Light"]["border"]  # not a hex
 
 
@@ -217,7 +225,10 @@ def test_editable_roles_exclude_the_derived_ones() -> None:
 
 def test_themes_round_trip_through_the_settings_payload() -> None:
     register_custom_theme(
-        "Mine", _palette(action="#123456"), halftone="#101010", outline=2,
+        "Mine",
+        _palette(action="#123456"),
+        halftone="#101010",
+        outline=2,
         base="Gothic",
     )
     stored = custom_themes_payload()
@@ -240,17 +251,19 @@ def test_loading_replaces_the_previous_set() -> None:
 
 
 def test_a_corrupt_settings_row_never_stops_startup() -> None:
-    loaded = load_custom_themes({
-        "Fine": {"name": "Fine", "palette": _palette(action="#010203")},
-        "NotADict": "nonsense",
-        "NoPalette": {"name": "NoPalette"},
-        "Builtin": {"name": "Dark", "palette": _palette()},
-    })
+    loaded = load_custom_themes(
+        {
+            "Fine": {"name": "Fine", "palette": _palette(action="#010203")},
+            "NotADict": "nonsense",
+            "NoPalette": {"name": "NoPalette"},
+            "Builtin": {"name": "Dark", "palette": _palette()},
+        }
+    )
 
-    assert loaded == ["Fine", "NoPalette"]      # the readable ones
+    assert loaded == ["Fine", "NoPalette"]  # the readable ones
     assert THEMES["Fine"]["action"] == "#010203"
-    assert THEMES["NoPalette"] == BUILTIN_THEMES["Dark"]   # gaps filled in
-    assert THEMES["Dark"] == BUILTIN_THEMES["Dark"]        # untouched
+    assert THEMES["NoPalette"] == BUILTIN_THEMES["Dark"]  # gaps filled in
+    assert THEMES["Dark"] == BUILTIN_THEMES["Dark"]  # untouched
 
     assert load_custom_themes(None) == []
     assert load_custom_themes("junk") == []
@@ -328,9 +341,9 @@ def test_saving_registers_applies_and_persists(root) -> None:
     dlg._save()
 
     assert THEMES["Mine"]["action"] == "#abcdef"
-    assert app.theme_name == "Mine"          # applied
-    assert "Mine" in (app.saved or {})       # persisted
-    assert app.refreshed == 1                # picker re-read
+    assert app.theme_name == "Mine"  # applied
+    assert "Mine" in (app.saved or {})  # persisted
+    assert app.refreshed == 1  # picker re-read
     assert theme.PALETTE["action"] == "#abcdef"
 
 
@@ -339,7 +352,9 @@ def test_saving_without_a_name_is_refused(root, monkeypatch) -> None:
 
     warned: list[str] = []
     monkeypatch.setattr(
-        mod.messagebox, "showwarning", lambda *a, **k: warned.append(a[0]),
+        mod.messagebox,
+        "showwarning",
+        lambda *a, **k: warned.append(a[0]),
     )
     app = _StubApp()
     dlg = _editor(root, app)
@@ -348,7 +363,7 @@ def test_saving_without_a_name_is_refused(root, monkeypatch) -> None:
     dlg._save()
 
     assert warned and app.saved is None
-    assert dlg.winfo_exists()                # dialog stays open to be fixed
+    assert dlg.winfo_exists()  # dialog stays open to be fixed
 
 
 def test_a_built_in_name_is_refused(root, monkeypatch) -> None:
@@ -356,7 +371,9 @@ def test_a_built_in_name_is_refused(root, monkeypatch) -> None:
 
     warned: list[str] = []
     monkeypatch.setattr(
-        mod.messagebox, "showwarning", lambda *a, **k: warned.append(a[0]),
+        mod.messagebox,
+        "showwarning",
+        lambda *a, **k: warned.append(a[0]),
     )
     dlg = _editor(root, _StubApp())
     dlg.name_var.set("Sepia")
@@ -379,7 +396,7 @@ def test_editing_a_custom_theme_offers_delete(root) -> None:
     dlg._delete_confirmed()
 
     assert "Mine" not in theme_names()
-    assert app.theme_name == "Sepia"         # falls back to what it was made from
+    assert app.theme_name == "Sepia"  # falls back to what it was made from
     assert app.saved == {}
 
 
@@ -408,7 +425,7 @@ def test_create_new_keeps_the_theme_it_started_from(root, monkeypatch) -> None:
     dlg._set_color("action", "#abcdef")
     dlg._create_new()
 
-    assert THEMES["Mine"]["action"] == "#123456"      # untouched
+    assert THEMES["Mine"]["action"] == "#123456"  # untouched
     assert THEMES["Second"]["action"] == "#abcdef"
     assert app.theme_name == "Second"
 
@@ -429,7 +446,9 @@ def test_editor_refuses_an_over_long_name(root, monkeypatch) -> None:
 
     warned: list[str] = []
     monkeypatch.setattr(
-        mod.messagebox, "showwarning", lambda *a, **k: warned.append(a[0]),
+        mod.messagebox,
+        "showwarning",
+        lambda *a, **k: warned.append(a[0]),
     )
     app = _StubApp()
     dlg = _editor(root, app)
@@ -449,10 +468,10 @@ def test_typed_hex_updates_the_working_palette(root) -> None:
     dlg._hex_vars["accent"].set("#ff8800")
     assert dlg.values["accent"] == "#ff8800"
 
-    dlg._hex_vars["accent"].set("#nope!!")   # ignored, not crashed on
+    dlg._hex_vars["accent"].set("#nope!!")  # ignored, not crashed on
     assert dlg.values["accent"] == "#ff8800"
 
-    dlg._hex_vars["accent"].set("#ff")       # incomplete: wait for the rest
+    dlg._hex_vars["accent"].set("#ff")  # incomplete: wait for the rest
     assert dlg.values["accent"] == "#ff8800"
 
 
@@ -487,9 +506,7 @@ def test_import_rejects_files_that_are_not_themes(root, tmp_path: Path) -> None:
     from sorter.ui.dialog_theme_editor import _describe_bad_theme
 
     assert _describe_bad_theme([1, 2, 3])
-    assert _describe_bad_theme({"name": "x"})                      # no palette
-    assert _describe_bad_theme({"palette": {}, "version": "abc"})   # unreadable
-    assert _describe_bad_theme(
-        {"palette": {}, "version": CUSTOM_THEME_VERSION + 1}
-    )                                                              # from the future
+    assert _describe_bad_theme({"name": "x"})  # no palette
+    assert _describe_bad_theme({"palette": {}, "version": "abc"})  # unreadable
+    assert _describe_bad_theme({"palette": {}, "version": CUSTOM_THEME_VERSION + 1})  # from the future
     assert _describe_bad_theme({"palette": {}}) is None

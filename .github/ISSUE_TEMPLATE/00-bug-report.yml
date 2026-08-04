@@ -1,0 +1,92 @@
+name: Bug Report
+description: Report a bug or unexpected behaviour
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. This app drives physical hardware
+        (camera, serial sorter), so the fields below matter more than usual for reproducing it.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before you submit
+      options:
+        - label: This is a bug report, not a support or usage question
+          required: true
+        - label: I have searched existing issues and no duplicate exists
+          required: true
+
+  - type: input
+    id: app-version
+    attributes:
+      label: App version
+      description: Shown in the title bar, or the tag/commit if running from source
+      placeholder: "e.g. 0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "e.g. Ubuntu 24.04, Windows 11"
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: "e.g. 3.12.4 (run `python3 --version`)"
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Classification mode
+      options:
+        - Local model (PyTorch)
+        - AI Config (HTTP API)
+        - Not sure / not applicable
+    validations:
+      required: true
+
+  - type: input
+    id: hardware
+    attributes:
+      label: Camera / serial hardware involved (if any)
+      description: Camera model, serial board, or "Emulated" if using the serial emulator
+      placeholder: "e.g. Logitech C920, custom Arduino sorter board"
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Logs, screenshots, or anything else that might help.

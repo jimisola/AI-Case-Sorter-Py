@@ -3,6 +3,7 @@
 Needs a real Tk display (uses xvfb in CI); skipped where tkinter/cv2 aren't
 importable, matching the other UI tests.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -14,7 +15,7 @@ pytest.importorskip("cv2")
 import tkinter as tk  # noqa: E402
 
 from sorter.events import EventBus  # noqa: E402
-from sorter.ui.monitor import MonitorWindow, SNAKE_COLORS, _Tile  # noqa: E402
+from sorter.ui.monitor import SNAKE_COLORS, MonitorWindow, _Tile  # noqa: E402
 
 
 def _rec(label: str, slot: int, *, image=None) -> dict:
@@ -54,7 +55,7 @@ def test_grows_then_wraps_as_ring_buffer(root) -> None:
 
     for i in range(4):
         win._on_history(_rec(f"H{i}", i))
-    assert len(win._tiles) == 4          # filled, no extra tiles created
+    assert len(win._tiles) == 4  # filled, no extra tiles created
     first_write = win._write_index
 
     # Fifth record reuses an existing tile (ring buffer), count stays at 4.
@@ -87,7 +88,7 @@ def test_shrink_keeps_newest_records(root) -> None:
     _fixed_capacity(win, rows=1, cols=2)
     win._rebuild_layout()
     assert len(win._tiles) == 2
-    assert newest in win._tiles        # newest survived the shrink
+    assert newest in win._tiles  # newest survived the shrink
     assert len(win._recency) == 2
 
 
@@ -97,8 +98,7 @@ def test_tile_renders_bgr_image_and_text(root) -> None:
     tile = _Tile(root)
     try:
         img = np.full((48, 48, 3), 100, dtype=np.uint8)
-        tile.set_record({"image": img, "label": "WIN", "parent": "Brass",
-                         "confidence": 91, "slot": 3})
+        tile.set_record({"image": img, "label": "WIN", "parent": "Brass", "confidence": 91, "slot": 3})
         assert tile._photo is not None
         assert tile._label_var.get() == "Brass · WIN"
         assert tile._conf_var.get() == "91%"

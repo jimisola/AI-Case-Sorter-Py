@@ -42,27 +42,44 @@ Two ways to classify:
 from a legacy `data/config.json` if present), loads `Config`, and launches
 `sorter.ui.app.MainWindow`.
 
-**Launch (handles venv + system deps automatically):**
+**Launch (handles the Python runtime, system deps, and dependency sync
+automatically):**
 - Linux/macOS: `./start.sh` (`--auto` / `AUTO_INSTALL=1` auto-confirms `sudo`
-  package installs for tkinter/libGL/glib/venv)
+  package installs for libGL/glib — the only system packages still needed;
+  see below)
 - Windows: `start.bat`
-- Directly: `python main.py`
+- Either just hands off to `bootstrap.py`, which does the actual work via
+  [uv](https://docs.astral.sh/uv/): installs uv itself if it isn't already
+  present (into a project-local `.uv/`, not system-wide), provisions the
+  pinned Python version from `.python-version` (uv's own build, bundling
+  Tcl/Tk — the app's *system* Python only has to be new enough to run
+  `bootstrap.py` itself, not to run the app), syncs dependencies from the
+  committed `uv.lock`, then launches. See `bootstrap.py`'s module docstring
+  for the full ordering and why it has to stay stdlib-only.
+- Directly (once synced): `uv run python main.py`, or `python main.py` inside
+  an activated `.venv`.
 
 **Tests:** `pytest` from the repo root (`tests/conftest.py` puts the repo on
-`sys.path`). There are ~30 test modules covering the non-UI logic (config, db,
-repository, evaluator, model_io, run_controller, serial emulator, auth, etc.).
-There is **no CI configured** — run pytest locally before pushing.
+`sys.path`). There are ~35 test modules covering the non-UI logic (config, db,
+repository, evaluator, model_io, run_controller, serial emulator, auth,
+bootstrap, etc.). CI (`.github/workflows/build.yml`) runs the full matrix on
+every push/PR — run `pytest` locally before pushing regardless, since CI
+turnaround is slower than your own machine. The suite is threading-fragile by
+design (see `tests/conftest.py`); don't parallelize it.
 
-**Python:** 3.10+. **Core deps:** pyserial, opencv-python, numpy, Pillow,
-requests, msal, platformdirs (+ `pygrabber` on Windows). **Optional ML deps:**
-torch, torchvision.
+**Python:** 3.12+ floor (`pyproject.toml`); `.python-version` pins the actual
+version uv provisions for the app itself, independent of that floor. **Core
+deps:** pyserial, opencv-python, numpy, Pillow, requests, msal, platformdirs
+(+ `pygrabber` on Windows). **Optional ML deps:** torch, torchvision.
 
 ```
 AI-Case-Sorter-Py/
 ├── main.py                  # entry point (+ `--apply-update` pre-launch hook)
-├── start.sh / start.bat     # bootstrap launchers (venv + system deps + update)
+├── bootstrap.py              # cross-platform launcher logic (Python+uv+deps+update)
+├── start.sh / start.bat     # thin per-OS shims that just call bootstrap.py
 ├── pyproject.toml           # package metadata; [ml] extra = torch/torchvision
-├── requirements.txt
+├── uv.lock                  # committed, exact dependency resolution
+├── .python-version           # Python version uv provisions for the app
 ├── sorter/                  # all application code
 │   ├── ui/                  # Tkinter UI (tabs + dialogs + theme)
 │   └── training/            # out-of-process ConvNeXt trainer
@@ -79,28 +96,32 @@ The data root lives **outside** the repo by default — see §6.
 The app separates **hardware I/O**, **control logic**, **persistence**, and
 **UI** into independent, testable layers, glued by a thread-safe event bus.
 
-```
-        ┌───────────────────────── UI (Tkinter, main thread) ─────────────────────────┐
-        │  app.MainWindow  ·  ttk.Notebook of tabs  ·  modal dialogs  ·  theme         │
-        └───────▲───────────────────────────────────────────────────────────▲─────────┘
-                │ subscribes (drained on main thread)        run_worker(fn)  │ spawns
-        ┌───────┴─────────── events.EventBus (Queue-backed pub/sub) ─────────┴─────────┐
-        │  post() from any worker thread → drain() pumps handlers on the Tk main loop  │
-        └───────▲──────────────▲───────────────▲────────────────▲─────────────────────┘
-                │              │               │                │
-        run_controller   serial_broker     camera          training.manager
-        (sort loop,      (UART protocol,   (cv2 grab        (subprocess +
-         daemon thread)   reader+ping       thread)          stdout JSON markers)
-                │         threads)              │                │
-                ▼                               ▼                ▼
-        classifier ──► local_inference (torch)  image_proc    train_convnext.py
-                  └──► api_client (HTTP)         (Hough crop)  (ConvNeXt, separate proc)
+```mermaid
+flowchart TB
+    UI["UI — Tkinter, main thread<br/>app.MainWindow · ttk.Notebook tabs · modal dialogs · theme"]
+    Bus["events.EventBus<br/>Queue-backed pub/sub"]
 
-        Persistence:  config.Config ──► repository.*Repo ──► db.Database (SQLite, WAL)
-        Filesystem:   paths.* defines data/ layout;  model_io (ZIP import/export)
-        Community:    auth.AuthManager (MSAL) ──► community_api.CommunityApi (HTTPS)
-                      feedback.FeedbackService (below-threshold image queue)
+    UI -- "subscribes (drained on main thread)" --> Bus
+    Bus -- "run_worker(fn) spawns" --> UI
+
+    Bus --> RC["run_controller<br/>sort loop, daemon thread"]
+    Bus --> SB["serial_broker<br/>UART protocol, reader+ping threads"]
+    Bus --> CAM["camera<br/>cv2 grab thread"]
+    Bus --> TM["training.manager<br/>subprocess + stdout JSON markers"]
+
+    RC --> CLF["classifier"]
+    CLF --> LI["local_inference (torch)"]
+    CLF --> API["api_client (HTTP)"]
+
+    CAM --> IP["image_proc<br/>Hough crop"]
+
+    TM --> TC["train_convnext.py<br/>ConvNeXt, separate process"]
 ```
+
+- **Persistence:** `config.Config` → `repository.*Repo` → `db.Database` (SQLite, WAL)
+- **Filesystem:** `paths.*` defines the `data/` layout; `model_io` handles ZIP import/export
+- **Community:** `auth.AuthManager` (MSAL) → `community_api.CommunityApi` (HTTPS);
+  `feedback.FeedbackService` owns the below-threshold image queue
 
 ### The event bus (`sorter/events.py`)
 A single `EventBus` with a thread-safe `Queue`. Workers call `bus.post(topic,
@@ -272,7 +293,10 @@ between them from the Run tab's template dropdown.
 - **`updater.py`** — GitHub Releases check, version comparison, and download →
   verify → stage. Needs `requests`. Never writes to the app folder.
 - **`apply_update.py`** — the pre-launch half: copies a staged tree over the app
-  folder, with backup/rollback. **Stdlib-only** — it runs before `pip install`.
+  folder, with backup/rollback. **Stdlib-only** — it runs before `uv sync`.
+  Also stamps `sorter/_version.py` with the applied version when the archive
+  didn't carry one, so an install updated from the source-archive fallback
+  doesn't keep reporting `0.0.0+unknown` and re-prompting forever.
 
 ### Community / cloud
 - **`auth.py`** — `AuthManager`: MSAL `PublicClientApplication` against Azure AD
@@ -337,7 +361,8 @@ Config shows in AI Config mode; Community is mounted only while signed in. The
 ### Dialogs (`dialog_*.py`)
 `dialog_training_progress` (live training console), `dialog_training_config`
 (hyperparameters), `dialog_model_editor` (create/edit model + feedback-loop
-opt-in), `dialog_install_torch` (pip-installs torch/torchvision into the venv),
+opt-in), `dialog_install_torch` (installs torch/torchvision into the venv via
+uv, falling back to pip),
 `dialog_login` (MSAL interactive sign-in), `dialog_model_evaluator` (run eval +
 HTML report + history), `dialog_model_images` + `dialog_image_preview` (training
 image browser/reclassify/delete), `dialog_share_model` (publish to community),
@@ -466,23 +491,44 @@ There is no git dependency anywhere in this path: a release ZIP over HTTPS has
 the same trust anchor as `git pull` over HTTPS, and the source tree is ~1 MB, so
 delta transfer buys nothing.
 
-**Version:** `sorter/__init__.py.__version__` is the single source.
-`pyproject.toml` reads it via `[tool.setuptools.dynamic]`, and the updater
-compares it against the latest release tag. **Bump it in the same commit you tag
-a release** — otherwise the updater re-offers a release users already have.
+**Version:** derived from the git tag at build time (`pyproject.toml`'s
+`[tool.hatch.version] source = "vcs"`, via hatch-vcs), not hand-bumped —
+removes the old "forgot to bump `__version__` in the release commit" footgun
+entirely; the manual step just doesn't exist anymore. hatch-vcs's build hook
+writes `sorter/_version.py` (gitignored, generated), which `sorter/__init__.py`
+imports as its first choice, falling back to `importlib.metadata` (an
+actual pip/uv install from a wheel) and finally a literal placeholder if
+neither is available — see that file's comments for why each tier exists.
+
+Two things this makes load-bearing that weren't before:
+
+- **hatch-vcs needs `.git` to derive a version, and a downloaded release has
+  none.** `bootstrap.py`'s `uv sync`/`uv run` therefore run with
+  `--no-install-project`/`--no-sync` specifically so the build hook never
+  fires for an end user at all — confirmed empirically that running it
+  without `.git` either hard-crashes the build, or (with a
+  `fallback-version` configured) silently *overwrites* an already-correct
+  `sorter/_version.py` with that fallback. See `bootstrap.py`'s docstring.
+- **The version has to reach the user some other way, then.** `publish.yml`
+  builds the app archive `updater.py`'s `_pick_asset` looks for by exact
+  name (`ai-case-sorter-py-<tag>.zip`) from a real `git archive` of the
+  tagged commit, with the `sorter/_version.py` that same CI run's `uv build`
+  step generated (real `.git` present there) copied in explicitly, since
+  `git archive` never includes untracked files. That's what makes a
+  downloaded release able to report its own version correctly with no `.git`
+  anywhere in it.
 
 **The flow is stage now, apply at next launch:**
 
-```
-updater.check_for_update()   GET /releases/latest, compare tags   [needs requests]
-        ↓
-updater.stage_update()       download → verify → <data>/updates/pending/
-        ↓                    (the app folder is NOT touched)
-     [restart]
-        ↓
-main.py --apply-update       run by start.bat/start.sh BEFORE pip  [stdlib ONLY]
-        ↓
-sorter.apply_update          backup → copy over app dir → prune → clear pending
+```mermaid
+flowchart TD
+    A["updater.check_for_update()<br/>GET /releases/latest, compare tags — needs requests"]
+    B["updater.stage_update()<br/>download → verify → &lt;data&gt;/updates/pending/<br/>(the app folder is NOT touched)"]
+    C(["restart"])
+    D["main.py --apply-update<br/>run by bootstrap.py BEFORE uv sync — stdlib ONLY"]
+    E["sorter.apply_update<br/>backup → copy over app dir → prune → clear pending"]
+
+    A --> B --> C --> D --> E
 ```
 
 - **`updater.py`** — check/download/stage. Traversal-safe extraction (same
@@ -490,29 +536,45 @@ sorter.apply_update          backup → copy over app dir → prune → clear pe
   `main.py` + `sorter/__init__.py` to be present before trusting an archive, and
   caps the archive size. Staging is atomic: `pending/` only ever exists complete.
 - **`apply_update.py`** — **must stay stdlib-only.** It runs against a venv that
-  may hold nothing but pip; importing `requests` here would break the very launch
-  it exists to fix. Backs up everything it will overwrite, rolls back on failure,
-  and **always exits 0** so a broken updater can never stop the app starting.
-  Pruning stale files is confined to `sorter/`; `PROTECTED_TOP_LEVEL` (`.git`,
-  `.venv`, `data`, `.env`, `.installed`, `portable.txt`) is never touched.
+  may hold nothing at all yet; importing `requests` here would break the very
+  launch it exists to fix. Backs up everything it will overwrite, rolls back on
+  failure, and **always exits 0** so a broken updater can never stop the app
+  starting. Pruning stale files is confined to `sorter/`; `PROTECTED_TOP_LEVEL`
+  (`.git`, `.venv`, `.uv`, `data`, `.env`, `portable.txt`) is never touched.
 - **Why a pre-launch step at all:** on Windows the venv's `.pyd`/`.dll` files
   (opencv, numpy) are locked while the app runs, so in-place replacement is
   unreliable. Applying before Python loads anything sidesteps locking — and puts
-  a new `requirements.txt` in place *before* the launcher's hash check, so
-  dependency changes install on the same restart.
+  a new `pyproject.toml`/`uv.lock` in place *before* `bootstrap.py` calls
+  `uv sync`, so dependency changes install on the same restart. There's no
+  hash-based marker to worry about anymore: `uv sync` reconciles against the
+  venv's actual contents, not a proxy for them.
 - **UI** — `dialog_update.py` (notes → progress → "Restart to update") reached
   from a status-bar button in `app.py` that appears only when there's something
   to do. A silent check runs 2.5 s after startup; opt out via the dialog's
   checkbox (`updates.check_on_startup`) or `CASESORTER_UPDATE_DISABLED=1`.
 - **`installer/`** — `install-windows.ps1` (+ `.bat` wrapper) provisions Python
   via winget or a silent python.org install, lays the app down in
-  `%LOCALAPPDATA%\Programs\CaseSorter`, and hands off to `start.bat`. Per-user,
-  no admin. See `installer/README.md`.
+  `%LOCALAPPDATA%\Programs\CaseSorter`, and hands off to `start.bat` (which just
+  calls `bootstrap.py`). Per-user, no admin. See `installer/README.md`.
 
 ---
 
 ## 8. Conventions & gotchas
 
+- **Conventional Commits are load-bearing, not cosmetic.** The commit type you
+  pick *is* the version bump — git-cliff derives the release version from it,
+  and there is no version string in the source to edit (§7). A mistyped `fix:`
+  ships a wrong version, not just a wrong changelog line. Full type list and
+  rules: `CONTRIBUTING.md`.
+  - The mapping is `fix` → patch, `feat` → minor, `!`/`BREAKING CHANGE:` →
+    major — **except that a breaking change below 1.0.0 bumps the minor**
+    (`0.1.0` + `feat!:` → `0.2.0`). `cliff.toml` sets
+    `breaking_always_bump_major = false` for this; git-cliff's default would
+    send that straight to `1.0.0`, letting one commit message declare the API
+    stable. **Reaching 1.0.0 requires passing `version` explicitly** to the
+    Release workflow — nothing auto-detects it. Verified against git-cliff
+    2.13.1 and pinned in `tests/test_cliff_config.py`, which runs the real
+    binary in CI (`release-config` job in `lint.yml`).
 - **Threading rule:** never touch Tk widgets off the main thread. Do blocking
   work in `run_worker`/daemon threads and `bus.post(...)`; the drain loop
   delivers handlers on the main thread. **`widget.after()` is not an escape
@@ -527,7 +589,8 @@ sorter.apply_update          backup → copy over app dir → prune → clear pe
   the legacy Windows app — preserve that compatibility when editing these.
 - **PyTorch is optional and lazily imported.** Guard any torch use; surface a
   friendly "install PyTorch" path rather than letting an `ImportError` escape.
-  Don't add torch to `requirements.txt` (it's the `[ml]` extra).
+  Don't add torch to the core `dependencies` in `pyproject.toml` — it's the
+  `[ml]` extra.
 - **DB access is shared across threads** via one connection + RLock. Wrap
   multi-statement work in `db.transaction()` (reentrant via SAVEPOINT).
 - **Headstamps are read fresh, not cached** — don't reintroduce a cached
@@ -538,17 +601,20 @@ sorter.apply_update          backup → copy over app dir → prune → clear pe
   local copy of the backend; the **Azure B2C tenant/client/scopes in `auth.py`
   are still hardcoded**, so a fork pointing at its own identity provider has to
   edit that file. The backend itself is a separate service, not in this repo.
-- **Releases drive the updater.** Bump `sorter/__init__.py.__version__` in the
-  same commit you tag a release, and keep the tag and that value in step.
-  `/releases/latest` excludes pre-releases, so tagging an rc won't reach
-  stable users.
+- **Releases drive the updater.** There is no version string to edit — tagging
+  *is* the bump (§7), and the release workflow derives the tag from the commit
+  types since the last one. `/releases/latest` excludes pre-releases, so
+  tagging an rc won't reach stable users. See `RELEASING.md`.
 - **The distribution path assumes a public repo.** The installer and updater
   both fetch anonymously over HTTPS; against a private repo every request
   404s and there is no in-band way to tell that apart from "no releases yet"
   (the API returns 404 for both). If the repo must stay private, distribution
   has to move off GitHub — see `installer/README.md`.
-- **No CI yet.** Run `pytest` before pushing. Most UI modules need a display —
-  `xvfb-run -a python -m pytest` covers them on a headless box; without
-  tkinter installed those modules skip rather than fail.
-- See **`OPEN_SOURCE_READINESS.md`** for the open-source readiness assessment and
-  **`CONTRIBUTING.md`** for how to set up and contribute.
+- **CI** (`.github/workflows/build.yml`) runs `pytest` across a
+  [3.12, 3.13, 3.14] × [Linux, Windows] matrix on every push and PR, plus a
+  `launcher-smoke` job that actually runs `start.sh`/`start.bat` end to end.
+  Still run `pytest` locally before pushing — faster feedback than waiting on
+  CI. Most UI modules need a display — `xvfb-run -a pytest` covers them on a
+  headless box; without tkinter installed those modules skip rather than
+  fail.
+- See **`CONTRIBUTING.md`** for how to set up and contribute.

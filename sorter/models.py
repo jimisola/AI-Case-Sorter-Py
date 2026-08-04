@@ -7,11 +7,11 @@ round-trips lossless. JSON-blob columns (`image_processing_json`,
 nested sub-objects so the SQL schema does not have to churn when those sub-
 objects gain fields.
 """
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any
-
 
 SUPPORTED_MODEL_MODES = (
     "convnext_tiny",
@@ -61,7 +61,7 @@ class Cartridge:
     name: str = ""
 
     @classmethod
-    def from_row(cls, row: Any) -> "Cartridge":
+    def from_row(cls, row: Any) -> Cartridge:
         return cls(id=row["id"], name=row["name"])
 
 
@@ -76,7 +76,7 @@ class Headstamp:
     parent_id: int | None = None
 
     @classmethod
-    def from_row(cls, row: Any) -> "Headstamp":
+    def from_row(cls, row: Any) -> Headstamp:
         keys = row.keys()
         return cls(
             id=row["id"],
@@ -96,13 +96,14 @@ class HeadstampParent:
     the physical bin this parent routes to when the model runs in parent-
     classification mode (analogous to ``Headstamp.slot`` for child routing).
     """
+
     id: int | None = None
     name: str = ""
     model_id: int = 0
     slot: int = 0
 
     @classmethod
-    def from_row(cls, row: Any) -> "HeadstampParent":
+    def from_row(cls, row: Any) -> HeadstampParent:
         keys = row.keys()
         return cls(
             id=row["id"],
@@ -131,6 +132,7 @@ class SlotTemplate:
     Names, not row ids, so a template survives a headstamp being deleted and
     re-added (e.g. a re-import). Unknown names are ignored when applied.
     """
+
     id: int | None = None
     model_id: int | None = None
     mode: str = "standard"
@@ -138,7 +140,7 @@ class SlotTemplate:
     assignments: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_row(cls, row: Any) -> "SlotTemplate":
+    def from_row(cls, row: Any) -> SlotTemplate:
         import json
 
         try:
@@ -164,20 +166,23 @@ class ImageProcessingConfig:
     the default pipeline, this one overrides for a specific model when
     `Model.enable_image_processing` is true.
     """
+
     strategy: str = "hough"
     primer_mode: str = "hide"
     primer_radius: int = 135
-    hough: dict[str, Any] = field(default_factory=lambda: {
-        "dp": 2.0,
-        "min_dist": 500,
-        "param1": 100,
-        "param2": 60,
-        "min_radius": 150,
-        "max_radius": 250,
-    })
+    hough: dict[str, Any] = field(
+        default_factory=lambda: {
+            "dp": 2.0,
+            "min_dist": 500,
+            "param1": 100,
+            "param2": 60,
+            "min_radius": 150,
+            "max_radius": 250,
+        }
+    )
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "ImageProcessingConfig":
+    def from_dict(cls, data: dict[str, Any] | None) -> ImageProcessingConfig:
         if not data:
             return cls()
         return cls(
@@ -194,6 +199,7 @@ class ImageProcessingConfig:
 @dataclass
 class AIModelConfig:
     """OpenAI-compatible HTTP endpoint settings, persisted per-model."""
+
     endpoint_url: str = ""
     api_key: str = ""
     model: str = ""
@@ -214,7 +220,7 @@ class AIModelConfig:
     }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "AIModelConfig":
+    def from_dict(cls, data: dict[str, Any] | None) -> AIModelConfig:
         if not data:
             return cls()
         known = {f.name for f in fields(cls)}
@@ -237,6 +243,7 @@ class TrainingConfig:
     Defaults follow the legacy defaults verbatim so an exported community
     model is round-trippable without coercion.
     """
+
     model_name: str = "convnext_tiny"
     image_directory: str = ""
     output_model_path: str = ""
@@ -298,7 +305,7 @@ class TrainingConfig:
     }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "TrainingConfig":
+    def from_dict(cls, data: dict[str, Any] | None) -> TrainingConfig:
         if not data:
             return cls()
         known = {f.name for f in fields(cls)}
@@ -340,7 +347,7 @@ class Model:
     model_path: str | None = None
 
     @classmethod
-    def from_row(cls, row: Any) -> "Model":
+    def from_row(cls, row: Any) -> Model:
         import json
 
         def _parse(s: str | None) -> dict[str, Any] | None:

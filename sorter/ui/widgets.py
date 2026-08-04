@@ -1,9 +1,11 @@
 """Reusable Tk widgets for the app."""
+
 from __future__ import annotations
 
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import ttk
-from typing import Any, Callable, Optional
+from typing import Any
 
 import cv2
 import numpy as np
@@ -80,7 +82,9 @@ class ScrollableFrame(ttk.Frame):
             # scrollbar's width.
             self._canvas.configure(width=viewport[0], height=viewport[1])
         self._scrollbar = ttk.Scrollbar(
-            self, orient=tk.VERTICAL, command=self._canvas.yview,
+            self,
+            orient=tk.VERTICAL,
+            command=self._canvas.yview,
         )
         self._canvas.configure(yscrollcommand=self._scrollbar.set)
         self._canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -88,7 +92,9 @@ class ScrollableFrame(ttk.Frame):
 
         self.body = ttk.Frame(self._canvas)
         self._window_id = self._canvas.create_window(
-            (0, 0), window=self.body, anchor=tk.NW,
+            (0, 0),
+            window=self.body,
+            anchor=tk.NW,
         )
 
         self.body.bind("<Configure>", self._on_body_configure)
@@ -151,15 +157,16 @@ class ImagePanel(ttk.Frame):
         # image panel reads as a "card" rather than a void.
         self.canvas = tk.Canvas(
             self,
-            width=width, height=height,
+            width=width,
+            height=height,
             bg=PALETTE["bg_input"],
             highlightthickness=1,
             highlightbackground=PALETTE["border"],
             borderwidth=0,
         )
         self.canvas.pack(fill=tk.BOTH, expand=True)
-        self._tk_image: Optional[ImageTk.PhotoImage] = None
-        self._last_frame: Optional[np.ndarray] = None
+        self._tk_image: ImageTk.PhotoImage | None = None
+        self._last_frame: np.ndarray | None = None
 
     def set_size(self, width: int, height: int) -> None:
         """Resize the canvas to ``width`` x ``height`` and re-render."""
@@ -171,7 +178,7 @@ class ImagePanel(ttk.Frame):
         if self._last_frame is not None:
             self.show_bgr(self._last_frame)
 
-    def show_bgr(self, frame_bgr: Optional[np.ndarray]) -> None:
+    def show_bgr(self, frame_bgr: np.ndarray | None) -> None:
         self._last_frame = frame_bgr
         if frame_bgr is None:
             self.canvas.delete("all")
@@ -220,6 +227,5 @@ def build_button_row(
     row = ttk.Frame(parent)
     for label, command in buttons:
         style = "Accent.TButton" if label == primary else "TButton"
-        ttk.Button(row, text=label, command=command, style=style)\
-            .pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(row, text=label, command=command, style=style).pack(side=tk.LEFT, padx=(0, 8))
     return row

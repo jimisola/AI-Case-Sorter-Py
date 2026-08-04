@@ -36,6 +36,7 @@ This module is deliberately **stdlib-only and import-light**: the pre-launch
 update step (``main.py --apply-update``) imports it before the virtualenv has
 any third-party packages in it.
 """
+
 from __future__ import annotations
 
 import os
@@ -61,6 +62,22 @@ _app_root = app_root
 def legacy_data_dir() -> Path:
     """The pre-0.2 location: ``<app>/data``."""
     return app_root() / "data"
+
+
+def find_uv() -> str | None:
+    """Locate the uv binary bootstrap.py uses to sync/run the app.
+
+    Checked in the same order bootstrap.py checks it: the project-local
+    install first (``.uv/bin/``, where bootstrap.py puts it -- and
+    deliberately does *not* add to PATH, see its module docstring), then
+    PATH. Used by anything that needs to invoke uv after launch -- e.g.
+    dialog_install_torch.py, since a uv-managed venv doesn't ship pip by
+    default and ``uv pip install --python <interpreter>`` is the equivalent.
+    """
+    local = app_root() / ".uv" / "bin" / ("uv.exe" if os.name == "nt" else "uv")
+    if local.exists():
+        return str(local)
+    return shutil.which("uv")
 
 
 def is_portable() -> bool:

@@ -2,13 +2,11 @@
 
 Uses a stubbed `requests.Session` so no network calls are made.
 """
+
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 import requests
@@ -20,14 +18,19 @@ from sorter.community_api import (
     CommunityApi,
     CommunityApiError,
     FeedbackUploadTicket,
-    ModelInfo,
     UserMetaData,
 )
 
 
 class _FakeResp:
-    def __init__(self, status_code: int = 200, json_data: Any = None, text: str = "",
-                 chunks: list[bytes] | None = None, headers: dict[str, str] | None = None):
+    def __init__(
+        self,
+        status_code: int = 200,
+        json_data: Any = None,
+        text: str = "",
+        chunks: list[bytes] | None = None,
+        headers: dict[str, str] | None = None,
+    ):
         self.status_code = status_code
         self._json = json_data
         self.text = text
@@ -44,8 +47,11 @@ class _FakeResp:
     def iter_content(self, chunk_size: int) -> list[bytes]:
         return list(self._chunks)
 
-    def __enter__(self): return self
-    def __exit__(self, *a): return False
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
 
 
 class _FakeSession:
@@ -94,7 +100,8 @@ class _FakeAuth(AuthManager):
     def acquire_token_silent(self, scopes=None) -> AuthResult | None:
         return AuthResult(
             access_token=self._token,
-            name="x", email="x@x.com",
+            name="x",
+            email="x@x.com",
             expires_in=3600,
             raw={},
         )
@@ -118,10 +125,7 @@ def test_authorization_header_added(tmp_path: Path) -> None:
 
 def test_get_models_query_string_built() -> None:
     s = _FakeSession()
-    expected_url = (
-        f"{API_BASE}/Models/GetModels?searchQuery=foo+bar"
-        "&ModelType=ModelAndImages&Cartridge=9mm"
-    )
+    expected_url = f"{API_BASE}/Models/GetModels?searchQuery=foo+bar&ModelType=ModelAndImages&Cartridge=9mm"
     s.next_responses[expected_url] = _FakeResp(json_data=[])
     _api(s).get_models("foo bar", "ModelAndImages", "9mm")
     assert s.get_calls[0][0] == expected_url
@@ -130,20 +134,24 @@ def test_get_models_query_string_built() -> None:
 def test_get_models_parses_results() -> None:
     s = _FakeSession()
     url = f"{API_BASE}/Models/GetModels?searchQuery=&ModelType=&Cartridge="
-    s.next_responses[url] = _FakeResp(json_data=[{
-        "ModelUID": "uid-1",
-        "ModelName": "Foo",
-        "CartridgeName": "9mm",
-        "CartridgeId": 1,
-        "ModelVersion": 3,
-        "ModelDescription": "desc",
-        "Author": "Anon",
-        "PublishDate": "2026-01-01",
-        "ImageCount": 100,
-        "HeadstampCount": 5,
-        "DownloadSize": 12345,
-        "ModelExportMode": "ModelAndImages",
-    }])
+    s.next_responses[url] = _FakeResp(
+        json_data=[
+            {
+                "ModelUID": "uid-1",
+                "ModelName": "Foo",
+                "CartridgeName": "9mm",
+                "CartridgeId": 1,
+                "ModelVersion": 3,
+                "ModelDescription": "desc",
+                "Author": "Anon",
+                "PublishDate": "2026-01-01",
+                "ImageCount": 100,
+                "HeadstampCount": 5,
+                "DownloadSize": 12345,
+                "ModelExportMode": "ModelAndImages",
+            }
+        ]
+    )
     results = _api(s).get_models()
     assert len(results) == 1
     m = results[0]
@@ -155,7 +163,8 @@ def test_download_streams_and_writes_atomically(tmp_path: Path) -> None:
     s = _FakeSession()
     download_url = "https://blob.example/sas?token=abc"
     s.next_responses[download_url] = _FakeResp(
-        chunks=[b"hello ", b"world"], headers={"Content-Length": "11"},
+        chunks=[b"hello ", b"world"],
+        headers={"Content-Length": "11"},
     )
     progress_calls: list[tuple[int, int | None]] = []
     api = _api(s)
@@ -187,12 +196,12 @@ def test_user_metadata_can_contribute_role_flag() -> None:
     can_contribute() must return True iff the Contribute bit is set,
     regardless of other bits."""
     assert UserMetaData(roles=0).can_contribute() is False
-    assert UserMetaData(roles=1).can_contribute() is False   # Read only
-    assert UserMetaData(roles=2).can_contribute() is True    # Contribute
-    assert UserMetaData(roles=3).can_contribute() is True    # Read+Contribute
-    assert UserMetaData(roles=4).can_contribute() is False   # Admin only
-    assert UserMetaData(roles=6).can_contribute() is True    # Contribute+Admin
-    assert UserMetaData(roles=7).can_contribute() is True    # FullControl
+    assert UserMetaData(roles=1).can_contribute() is False  # Read only
+    assert UserMetaData(roles=2).can_contribute() is True  # Contribute
+    assert UserMetaData(roles=3).can_contribute() is True  # Read+Contribute
+    assert UserMetaData(roles=4).can_contribute() is False  # Admin only
+    assert UserMetaData(roles=6).can_contribute() is True  # Contribute+Admin
+    assert UserMetaData(roles=7).can_contribute() is True  # FullControl
 
 
 def test_user_metadata_from_json_picks_up_roles() -> None:
@@ -209,15 +218,22 @@ def test_user_metadata_from_json_picks_up_roles() -> None:
 def test_request_feedback_upload_parses_ticket_and_posts_dto() -> None:
     s = _FakeSession()
     url = f"{API_BASE}/Models/FeedbackImageUploadRequest"
-    s.next_responses[url] = _FakeResp(json_data={
-        "SasToken": "st", "BlobPath": "bp", "ContainerName": "cn",
-        "ContainerURI": "https://acct.blob/cn", "AccountURI": "https://acct.blob",
-        "FullUrl": "https://acct.blob/cn/bp?st",
-        "ModelInfo": {"feedbackAccepted": True, "feedbackMessage": ""},
-    })
+    s.next_responses[url] = _FakeResp(
+        json_data={
+            "SasToken": "st",
+            "BlobPath": "bp",
+            "ContainerName": "cn",
+            "ContainerURI": "https://acct.blob/cn",
+            "AccountURI": "https://acct.blob",
+            "FullUrl": "https://acct.blob/cn/bp?st",
+            "ModelInfo": {"feedbackAccepted": True, "feedbackMessage": ""},
+        }
+    )
     ticket = _api(s).request_feedback_upload(
-        filename="WIN__1.jpg", community_model_uid="uid-1",
-        classification="WIN", confidence=42,
+        filename="WIN__1.jpg",
+        community_model_uid="uid-1",
+        classification="WIN",
+        confidence=42,
     )
     assert ticket is not None
     assert ticket.feedback_accepted is True
@@ -225,20 +241,27 @@ def test_request_feedback_upload_parses_ticket_and_posts_dto() -> None:
     sent_url, body = s.post_calls[0]
     assert sent_url == url
     assert body == {
-        "filename": "WIN__1.jpg", "CommunityModelUID": "uid-1",
-        "classification": "WIN", "confidence": 42,
+        "filename": "WIN__1.jpg",
+        "CommunityModelUID": "uid-1",
+        "classification": "WIN",
+        "confidence": 42,
     }
 
 
 def test_request_feedback_upload_declined_flag() -> None:
     s = _FakeSession()
     url = f"{API_BASE}/Models/FeedbackImageUploadRequest"
-    s.next_responses[url] = _FakeResp(json_data={
-        "SasToken": "x",
-        "ModelInfo": {"feedbackAccepted": False, "feedbackMessage": "limit"},
-    })
+    s.next_responses[url] = _FakeResp(
+        json_data={
+            "SasToken": "x",
+            "ModelInfo": {"feedbackAccepted": False, "feedbackMessage": "limit"},
+        }
+    )
     ticket = _api(s).request_feedback_upload(
-        filename="f", community_model_uid="u", classification="c", confidence=1,
+        filename="f",
+        community_model_uid="u",
+        classification="c",
+        confidence=1,
     )
     assert ticket is not None and ticket.feedback_accepted is False
     assert ticket.feedback_message == "limit"
@@ -250,7 +273,10 @@ def test_request_feedback_upload_html_returns_none() -> None:
     url = f"{API_BASE}/Models/FeedbackImageUploadRequest"
     s.next_responses[url] = _FakeResp(text="<!DOCTYPE html><html>nope</html>")
     ticket = _api(s).request_feedback_upload(
-        filename="f", community_model_uid="u", classification="c", confidence=1,
+        filename="f",
+        community_model_uid="u",
+        classification="c",
+        confidence=1,
     )
     assert ticket is None
 
@@ -258,7 +284,9 @@ def test_request_feedback_upload_html_returns_none() -> None:
 def test_upload_feedback_blob_puts_to_sas_url_with_headers(tmp_path: Path) -> None:
     s = _FakeSession()
     ticket = FeedbackUploadTicket(
-        sas_token="st", blob_path="bp", container_uri="https://acct.blob/cn",
+        sas_token="st",
+        blob_path="bp",
+        container_uri="https://acct.blob/cn",
     )
     f = tmp_path / "img.jpg"
     f.write_bytes(b"jpegbytes")
@@ -282,9 +310,13 @@ def test_complete_feedback_upload_posts_raw_payload() -> None:
 
 
 def test_feedback_ticket_from_json_camelcase_and_defaults() -> None:
-    t = FeedbackUploadTicket.from_json({
-        "sasToken": "s", "blobPath": "b", "containerURI": "c",
-    })
+    t = FeedbackUploadTicket.from_json(
+        {
+            "sasToken": "s",
+            "blobPath": "b",
+            "containerURI": "c",
+        }
+    )
     assert t.sas_token == "s" and t.blob_path == "b" and t.container_uri == "c"
     # No ModelInfo block → default to accepted so a sparse reply still uploads.
     assert t.feedback_accepted is True
@@ -307,12 +339,17 @@ def _manifest_req_url() -> str:
 
 def test_request_file_upload_posts_model_info() -> None:
     s = _FakeSession()
-    s.next_responses[_file_url()] = _FakeResp(json_data={
-        "SasToken": "zt", "BlobPath": "models/uid.zip",
-        "ContainerURI": "https://acct.blob/cn", "ModelInfo": {"ModelUID": "sv"},
-    })
+    s.next_responses[_file_url()] = _FakeResp(
+        json_data={
+            "SasToken": "zt",
+            "BlobPath": "models/uid.zip",
+            "ContainerURI": "https://acct.blob/cn",
+            "ModelInfo": {"ModelUID": "sv"},
+        }
+    )
     ticket = _api(s).request_file_upload(
-        filename="uid.zip", model_info={"ModelName": "M", "CommunityModelUID": "uid"},
+        filename="uid.zip",
+        model_info={"ModelName": "M", "CommunityModelUID": "uid"},
     )
     assert ticket is not None
     assert ticket.blob_path == "models/uid.zip"
@@ -324,19 +361,18 @@ def test_request_file_upload_posts_model_info() -> None:
 
 def test_upload_blob_puts_with_blob_headers(tmp_path: Path) -> None:
     from sorter.community_api import SasResponse
+
     s = _FakeSession()
-    ticket = SasResponse(sas_token="zt", blob_path="models/uid.zip",
-                         container_uri="https://acct.blob/cn")
+    ticket = SasResponse(sas_token="zt", blob_path="models/uid.zip", container_uri="https://acct.blob/cn")
     f = tmp_path / "uid.zip"
     f.write_bytes(b"zipdata")
     seen: list[tuple[int, int]] = []
-    _api(s).upload_blob(f, ticket, content_type="application/zip",
-                        progress=lambda a, b: seen.append((a, b)))
+    _api(s).upload_blob(f, ticket, content_type="application/zip", progress=lambda a, b: seen.append((a, b)))
     put_url, headers = s.put_calls[0]
     assert put_url == "https://acct.blob/cn/models/uid.zip?zt"
     assert headers["x-ms-blob-type"] == "BlockBlob"
     assert headers["Content-Type"] == "application/zip"
-    assert seen and seen[-1] == (7, 7)   # 7 bytes streamed
+    assert seen and seen[-1] == (7, 7)  # 7 bytes streamed
 
 
 def test_upload_blob_sends_sized_body_not_chunked(tmp_path: Path) -> None:
@@ -392,15 +428,24 @@ def test_upload_blob_retries_on_ssl_error(tmp_path: Path) -> None:
 
 def test_share_model_runs_full_sequence_in_order(tmp_path: Path) -> None:
     s = _FakeSession()
-    s.next_responses[_file_url()] = _FakeResp(json_data={
-        "SasToken": "zt", "BlobPath": "models/uid.zip", "ContainerName": "cn",
-        "ContainerURI": "https://acct.blob/cn", "ModelInfo": {"ModelUID": "server-uid"},
-    })
+    s.next_responses[_file_url()] = _FakeResp(
+        json_data={
+            "SasToken": "zt",
+            "BlobPath": "models/uid.zip",
+            "ContainerName": "cn",
+            "ContainerURI": "https://acct.blob/cn",
+            "ModelInfo": {"ModelUID": "server-uid"},
+        }
+    )
     s.next_responses[_complete_url()] = _FakeResp(status_code=200, text="true")
-    s.next_responses[_manifest_req_url()] = _FakeResp(json_data={
-        "SasToken": "mt", "BlobPath": "models/uid.manifest.json", "ContainerName": "cn",
-        "ContainerURI": "https://acct.blob/cn",
-    })
+    s.next_responses[_manifest_req_url()] = _FakeResp(
+        json_data={
+            "SasToken": "mt",
+            "BlobPath": "models/uid.manifest.json",
+            "ContainerName": "cn",
+            "ContainerURI": "https://acct.blob/cn",
+        }
+    )
     zip_path = tmp_path / "uid.zip"
     zip_path.write_bytes(b"zipdata")
     manifest_path = tmp_path / "uid.manifest.json"
@@ -408,7 +453,8 @@ def test_share_model_runs_full_sequence_in_order(tmp_path: Path) -> None:
 
     prog: list[tuple[int, int]] = []
     uid = _api(s).share_model(
-        zip_path=zip_path, manifest_path=manifest_path,
+        zip_path=zip_path,
+        manifest_path=manifest_path,
         model_info={"CommunityModelUID": "uid"},
         progress=lambda a, b: prog.append((a, b)),
     )
@@ -430,10 +476,14 @@ def test_share_model_runs_full_sequence_in_order(tmp_path: Path) -> None:
 
 def test_share_model_skips_manifest_when_no_sas(tmp_path: Path) -> None:
     s = _FakeSession()
-    s.next_responses[_file_url()] = _FakeResp(json_data={
-        "SasToken": "zt", "BlobPath": "models/uid.zip",
-        "ContainerURI": "https://acct.blob/cn", "ModelInfo": {},
-    })
+    s.next_responses[_file_url()] = _FakeResp(
+        json_data={
+            "SasToken": "zt",
+            "BlobPath": "models/uid.zip",
+            "ContainerURI": "https://acct.blob/cn",
+            "ModelInfo": {},
+        }
+    )
     s.next_responses[_complete_url()] = _FakeResp(status_code=200, text="true")
     s.next_responses[_manifest_req_url()] = _FakeResp(status_code=500)
     zip_path = tmp_path / "uid.zip"
@@ -441,11 +491,12 @@ def test_share_model_skips_manifest_when_no_sas(tmp_path: Path) -> None:
     manifest_path = tmp_path / "uid.manifest.json"
     manifest_path.write_text("{}")
     uid = _api(s).share_model(
-        zip_path=zip_path, manifest_path=manifest_path,
+        zip_path=zip_path,
+        manifest_path=manifest_path,
         model_info={"CommunityModelUID": "fallback-uid"},
     )
-    assert uid == "fallback-uid"          # no ModelUID from server → local UID
-    assert len(s.put_calls) == 1          # only the ZIP was PUT
+    assert uid == "fallback-uid"  # no ModelUID from server → local UID
+    assert len(s.put_calls) == 1  # only the ZIP was PUT
 
 
 def test_share_model_raises_when_file_request_refused(tmp_path: Path) -> None:
@@ -455,7 +506,8 @@ def test_share_model_raises_when_file_request_refused(tmp_path: Path) -> None:
     zip_path.write_bytes(b"z")
     with pytest.raises(CommunityApiError):
         _api(s).share_model(
-            zip_path=zip_path, manifest_path=tmp_path / "m.json",
+            zip_path=zip_path,
+            manifest_path=tmp_path / "m.json",
             model_info={},
         )
 
@@ -490,6 +542,7 @@ def test_fetch_wish_list_drops_blank_and_non_string_entries() -> None:
 
 def test_fetch_wish_list_fails_open() -> None:
     """Every failure mode answers [] — a run is never blocked on this call."""
+
     class _RaisingResp(_FakeResp):
         def json(self) -> Any:
             raise ValueError("not json")
@@ -498,20 +551,20 @@ def test_fetch_wish_list_fails_open() -> None:
         def get(self, url, headers=None, timeout=None, **kw):
             raise requests.exceptions.ConnectionError("offline")
 
-    assert _api(_FakeSession()).fetch_wish_list("") == []           # no UID
-    assert _api(_BoomSession()).fetch_wish_list("uid-1") == []      # network error
+    assert _api(_FakeSession()).fetch_wish_list("") == []  # no UID
+    assert _api(_BoomSession()).fetch_wish_list("uid-1") == []  # network error
 
     s = _FakeSession()
     s.next_responses[_wish_url()] = _FakeResp(status_code=500, text="boom")
-    assert _api(s).fetch_wish_list("uid-1") == []                   # non-200
+    assert _api(s).fetch_wish_list("uid-1") == []  # non-200
 
     s = _FakeSession()
     s.next_responses[_wish_url()] = _RaisingResp(text="<html>")
-    assert _api(s).fetch_wish_list("uid-1") == []                   # non-JSON body
+    assert _api(s).fetch_wish_list("uid-1") == []  # non-JSON body
 
     s = _FakeSession()
     s.next_responses[_wish_url()] = _FakeResp(json_data={"nope": 1})
-    assert _api(s).fetch_wish_list("uid-1") == []                   # wrong shape
+    assert _api(s).fetch_wish_list("uid-1") == []  # wrong shape
 
 
 def test_fetch_wish_list_signed_out_returns_empty() -> None:

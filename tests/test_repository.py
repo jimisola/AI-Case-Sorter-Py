@@ -1,4 +1,5 @@
 """Repository CRUD and constraint tests."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -78,9 +79,13 @@ def test_cannot_delete_active_model_without_replacement(tmp_path: Path) -> None:
     # not pre-empt the active-model rule.
     seed_model = repo.list()[0]
     settings.set_active_model_id(seed_model.id)
-    sibling = repo.create(Model(
-        name="sibling", cartridge_id=seed_model.cartridge_id, model_mode="convnext_tiny",
-    ))
+    sibling = repo.create(
+        Model(
+            name="sibling",
+            cartridge_id=seed_model.cartridge_id,
+            model_mode="convnext_tiny",
+        )
+    )
     with pytest.raises(ValueError):
         repo.delete(seed_model.id)
     repo.delete(seed_model.id, replacement_active_id=sibling.id)
@@ -107,10 +112,13 @@ def test_headstamp_replace_atomically(tmp_path: Path) -> None:
     repo.add(model_id, "ALPHA", slot=1)
     repo.add(model_id, "BETA", slot=2)
 
-    repo.replace_for_model(model_id, [
-        {"name": "GAMMA", "slot": 3},
-        {"name": "DELTA", "slot": 4},
-    ])
+    repo.replace_for_model(
+        model_id,
+        [
+            {"name": "GAMMA", "slot": 3},
+            {"name": "DELTA", "slot": 4},
+        ],
+    )
     names = sorted(h.name for h in repo.list_for_model(model_id))
     assert names == ["DELTA", "GAMMA"]
 
@@ -133,10 +141,8 @@ def test_find_by_community_uid_prefers_the_active_duplicate(tmp_path: Path) -> N
     db = _new_db(tmp_path)
     cart = CartridgeRepo(db).get_or_create("9mm")
     repo = ModelRepo(db)
-    first = repo.create(Model(name="Comm", cartridge_id=cart.id,
-                              community_model_uid="uid-dup"))
-    second = repo.create(Model(name="Comm (2)", cartridge_id=cart.id,
-                               community_model_uid="uid-dup"))
+    first = repo.create(Model(name="Comm", cartridge_id=cart.id, community_model_uid="uid-dup"))
+    second = repo.create(Model(name="Comm (2)", cartridge_id=cart.id, community_model_uid="uid-dup"))
 
     # No active model: oldest wins.
     assert repo.find_by_community_uid("uid-dup").id == first.id

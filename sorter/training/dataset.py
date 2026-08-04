@@ -9,18 +9,17 @@ where `ticks` is the .NET ``DateTime.Ticks`` value (100-nanosecond intervals
 since 0001-01-01).  Inference, training, and community export/import all
 depend on this exact format.
 """
+
 from __future__ import annotations
 
 import os
 import re
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable
 
 import cv2
 import numpy as np
-
 
 # Classification labels can come from an untrusted source — in AI Config mode
 # the label is whatever free text the HTTP classification server returns — yet
@@ -29,7 +28,10 @@ import numpy as np
 # traverse directories, name a Windows device, or contain illegal characters.
 _UNSAFE_LABEL_CHARS = re.compile(r'[\x00-\x1f\x7f/\\:*?"<>|]')
 _RESERVED_WIN_NAMES = {
-    "CON", "PRN", "AUX", "NUL",
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
     *(f"COM{i}" for i in range(1, 10)),
     *(f"LPT{i}" for i in range(1, 10)),
 }
@@ -71,9 +73,9 @@ _DOTNET_EPOCH_OFFSET_TICKS = 621_355_968_000_000_000
 def dotnet_ticks(when: datetime | None = None) -> int:
     """Return a .NET ``DateTime.Ticks`` value for the given moment (default now)."""
     if when is None:
-        when = datetime.now(timezone.utc)
+        when = datetime.now(UTC)
     elif when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
+        when = when.replace(tzinfo=UTC)
     unix_seconds = when.timestamp()
     return int(unix_seconds * 10_000_000) + _DOTNET_EPOCH_OFFSET_TICKS
 
@@ -112,9 +114,7 @@ def save_training_image(
     return dest
 
 
-def feedback_filename(
-    label: str, confidence: float, *, ext: str = ".jpg", when: datetime | None = None
-) -> str:
+def feedback_filename(label: str, confidence: float, *, ext: str = ".jpg", when: datetime | None = None) -> str:
     """Build a ``{label}__{confidence}__{ticks}{ext}`` feedback-image filename.
 
     Confidence is a rounded integer percent. Uses the legacy feedback-loop

@@ -4,6 +4,7 @@ The queue is the on-disk ``data/models/<id>/feedback_images/`` folder — no DB
 rows. The upload path is exercised with a fake ``CommunityApi`` (monkeypatched
 onto the module the service lazily imports) and a fake auth — no network.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -30,9 +31,13 @@ def db(tmp_path, monkeypatch):
 def _model(db, *, enabled=True, floor=95, mode="Instant", community="uid-1") -> Model:
     cart = CartridgeRepo(db).get_or_create("9mm")
     m = Model(
-        name="Comm", cartridge_id=cart.id, community_model_uid=community,
-        model_version=2, feedback_loop_enabled=enabled,
-        feedback_loop_confidence_floor=floor, feedback_loop_upload_mode=mode,
+        name="Comm",
+        cartridge_id=cart.id,
+        community_model_uid=community,
+        model_version=2,
+        feedback_loop_enabled=enabled,
+        feedback_loop_confidence_floor=floor,
+        feedback_loop_upload_mode=mode,
     )
     return ModelRepo(db).create(m)
 
@@ -52,7 +57,7 @@ class _FakeTicket:
 
 class _FakeApi:
     accept = True
-    last: "_FakeApi | None" = None
+    last: _FakeApi | None = None
 
     def __init__(self, auth=None, **kw) -> None:
         self.requests: list[dict] = []
@@ -87,7 +92,7 @@ def test_feedback_filename_round_trips() -> None:
 
 
 def test_parse_feedback_filename_rejects_non_feedback_names() -> None:
-    assert parse_feedback_filename("WIN__639180.jpg") is None   # training name (2 parts)
+    assert parse_feedback_filename("WIN__639180.jpg") is None  # training name (2 parts)
     assert parse_feedback_filename("nope.jpg") is None
 
 
@@ -112,9 +117,9 @@ def test_should_capture_matrix(db) -> None:
     m = _model(db, floor=95)
     assert svc.should_capture(m, 80.0) is True
     assert svc.should_capture(m, 94.9) is True
-    assert svc.should_capture(m, 95.0) is False   # at floor → not captured
+    assert svc.should_capture(m, 95.0) is False  # at floor → not captured
     assert svc.should_capture(m, 99.0) is False
-    assert svc.should_capture(m, -1) is False      # unknown confidence
+    assert svc.should_capture(m, -1) is False  # unknown confidence
     assert svc.should_capture(_model(db, enabled=False, community="u2"), 10) is False
     assert svc.should_capture(_model(db, community=None), 10) is False
     assert svc.should_capture(None, 10) is False
@@ -123,8 +128,8 @@ def test_should_capture_matrix(db) -> None:
 def test_should_capture_floor_below_50_is_clamped(db) -> None:
     svc = FeedbackService(db)
     m = _model(db, floor=30)
-    assert svc.should_capture(m, 40) is True     # < 50 effective floor
-    assert svc.should_capture(m, 55) is False    # >= 50 effective floor
+    assert svc.should_capture(m, 40) is True  # < 50 effective floor
+    assert svc.should_capture(m, 55) is False  # >= 50 effective floor
 
 
 # ----- capture ---------------------------------------------------------------
@@ -181,7 +186,7 @@ def test_upload_pending_declined_stops_and_drops(db, monkeypatch) -> None:
     result = svc.upload_pending(m.id, auth=_OkAuth())
     assert result["declined"] is True
     assert result["uploaded"] == 0
-    assert svc.count_pending(m.id) == 0   # remaining files dropped
+    assert svc.count_pending(m.id) == 0  # remaining files dropped
 
 
 def test_upload_pending_no_auth_drops_silently(db) -> None:
@@ -197,7 +202,7 @@ def test_upload_pending_opted_out_drops(db) -> None:
     svc = FeedbackService(db)
     m = _model(db)
     svc.capture(m, _img(), "WIN", 10)
-    m.feedback_loop_enabled = False           # user opts out after capture
+    m.feedback_loop_enabled = False  # user opts out after capture
     ModelRepo(db).update(m)
     result = svc.upload_pending(m.id, auth=_OkAuth())
     assert result["uploaded"] == 0
@@ -216,6 +221,7 @@ def test_upload_pending_empty_queue_is_noop(db) -> None:
 
 class _WishApi:
     """Fake CommunityApi that records the UID it was asked about."""
+
     names: list[str] = []
     boom = False
     calls: list[str] = []
@@ -233,6 +239,7 @@ class _WishApi:
 @pytest.fixture
 def wish_api(monkeypatch):
     import sorter.community_api as ca
+
     _WishApi.names, _WishApi.boom, _WishApi.calls = [], False, []
     monkeypatch.setattr(ca, "CommunityApi", _WishApi)
     return _WishApi
@@ -262,7 +269,7 @@ def test_wish_list_ignored_outside_a_continuous_run(db) -> None:
     m = _model(db, floor=95)
     svc.set_wish_list(m.id, ["WIN"])
     assert svc.should_capture(m, 100.0, "WIN") is False
-    assert svc.should_capture(m, 90.0, "WIN") is True    # confidence rule still applies
+    assert svc.should_capture(m, 90.0, "WIN") is True  # confidence rule still applies
 
 
 def test_wish_list_is_bound_to_its_model(db) -> None:
@@ -282,6 +289,7 @@ def test_wish_list_requires_a_feedback_model(db) -> None:
 
 def test_wish_list_capped_per_label_per_run(db) -> None:
     from sorter.feedback import MAX_WISH_LIST_CAPTURES_PER_LABEL as CAP
+
     svc = FeedbackService(db)
     m = _model(db, floor=95)
     svc.set_wish_list(m.id, ["WIN", "FC"])
@@ -298,6 +306,7 @@ def test_wish_list_capped_per_label_per_run(db) -> None:
 
 def test_below_floor_capture_does_not_spend_wish_quota(db) -> None:
     from sorter.feedback import MAX_WISH_LIST_CAPTURES_PER_LABEL as CAP
+
     svc = FeedbackService(db)
     m = _model(db, floor=95)
     svc.set_wish_list(m.id, ["WIN"])
@@ -332,4 +341,4 @@ def test_refresh_wish_list_fails_open_on_error(db, wish_api) -> None:
     svc.set_wish_list(m.id, ["stale"])
     wish_api.boom = True
     assert svc.refresh_wish_list(m, auth=_OkAuth()) == []
-    assert svc.wish_list() == []          # the stale list is dropped too
+    assert svc.wish_list() == []  # the stale list is dropped too

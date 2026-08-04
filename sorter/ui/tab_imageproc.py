@@ -5,6 +5,7 @@ present in sorter.image_proc (LineScanParams, linescan_crop). To bring it
 back, restore the strategy radio + line-scan parameters section here and
 uncomment the dispatch in sorter.image_proc.crop_headstamp.
 """
+
 from __future__ import annotations
 
 import tkinter as tk
@@ -29,33 +30,59 @@ class ImageProcTab(ttk.Frame):
         h = ip.get("hough", {})
 
         self.hough_dp = NumericField(
-            hough, "Accumulator scale (dp)", from_=1, to=10, increment=0.5,
-            initial=float(h.get("dp", 2.0)), is_float=True,
+            hough,
+            "Accumulator scale (dp)",
+            from_=1,
+            to=10,
+            increment=0.5,
+            initial=float(h.get("dp", 2.0)),
+            is_float=True,
         )
         self.hough_min_dist = NumericField(
-            hough, "Min center separation (px)", from_=1, to=4000,
+            hough,
+            "Min center separation (px)",
+            from_=1,
+            to=4000,
             initial=int(h.get("min_dist", 500)),
         )
         self.hough_p1 = NumericField(
-            hough, "Edge strength (param1)", from_=1, to=500,
+            hough,
+            "Edge strength (param1)",
+            from_=1,
+            to=500,
             initial=int(h.get("param1", 100)),
         )
         self.hough_p2 = NumericField(
-            hough, "Detection threshold (param2)", from_=1, to=500,
+            hough,
+            "Detection threshold (param2)",
+            from_=1,
+            to=500,
             initial=int(h.get("param2", 60)),
         )
         self.hough_min_r = NumericField(
-            hough, "Min case radius (px)", from_=1, to=4000,
+            hough,
+            "Min case radius (px)",
+            from_=1,
+            to=4000,
             initial=int(h.get("min_radius", 150)),
         )
         self.hough_max_r = NumericField(
-            hough, "Max case radius (px)", from_=1, to=4000,
+            hough,
+            "Max case radius (px)",
+            from_=1,
+            to=4000,
             initial=int(h.get("max_radius", 250)),
         )
-        for idx, w in enumerate((
-            self.hough_dp, self.hough_min_dist, self.hough_p1,
-            self.hough_p2, self.hough_min_r, self.hough_max_r,
-        )):
+        for idx, w in enumerate(
+            (
+                self.hough_dp,
+                self.hough_min_dist,
+                self.hough_p1,
+                self.hough_p2,
+                self.hough_min_r,
+                self.hough_max_r,
+            )
+        ):
             w.grid(row=idx // 3, column=idx % 3, padx=6, pady=6, sticky=tk.W)
 
         # ----- Primer mask ---------------------------------------------------
@@ -63,16 +90,28 @@ class ImageProcTab(ttk.Frame):
         primer.pack(side=tk.TOP, fill=tk.X, padx=8, pady=8)
         self.primer_mode_var = tk.StringVar(value=ip.get("primer_mode", "hide"))
         ttk.Radiobutton(
-            primer, text="None", variable=self.primer_mode_var, value="none",
+            primer,
+            text="None",
+            variable=self.primer_mode_var,
+            value="none",
         ).pack(side=tk.LEFT, padx=8, pady=4)
         ttk.Radiobutton(
-            primer, text="Keep primer area only", variable=self.primer_mode_var, value="use",
+            primer,
+            text="Keep primer area only",
+            variable=self.primer_mode_var,
+            value="use",
         ).pack(side=tk.LEFT, padx=8, pady=4)
         ttk.Radiobutton(
-            primer, text="Hide primer", variable=self.primer_mode_var, value="hide",
+            primer,
+            text="Hide primer",
+            variable=self.primer_mode_var,
+            value="hide",
         ).pack(side=tk.LEFT, padx=8, pady=4)
         self.primer_radius = NumericField(
-            primer, "Primer radius (px)", from_=1, to=240,
+            primer,
+            "Primer radius (px)",
+            from_=1,
+            to=240,
             initial=int(ip.get("primer_radius", 135)),
         )
         self.primer_radius.pack(side=tk.LEFT, padx=12, pady=4)
@@ -92,7 +131,11 @@ class ImageProcTab(ttk.Frame):
         self._led_last_sent: int | None = None
 
         self.led_scale = ttk.Scale(
-            led_box, from_=1, to=255, orient=tk.HORIZONTAL, length=220,
+            led_box,
+            from_=1,
+            to=255,
+            orient=tk.HORIZONTAL,
+            length=220,
             command=self._on_led_changed,
         )
         self.led_scale.set(initial_led)
@@ -101,16 +144,20 @@ class ImageProcTab(ttk.Frame):
         row = ttk.Frame(led_box)
         row.pack(side=tk.TOP, fill=tk.X, padx=8, pady=(0, 8))
         ttk.Label(row, text="Value").pack(side=tk.LEFT)
-        ttk.Label(row, textvariable=self.led_value_var, style="Accent.TLabel")\
-            .pack(side=tk.LEFT, padx=4)
-        ttk.Label(row, text="(sends cameraledlevel:N once idle for 500 ms)",
-                  style="Subtle.TLabel").pack(side=tk.LEFT, padx=10)
+        ttk.Label(row, textvariable=self.led_value_var, style="Accent.TLabel").pack(side=tk.LEFT, padx=4)
+        ttk.Label(row, text="(sends cameraledlevel:N once idle for 500 ms)", style="Subtle.TLabel").pack(
+            side=tk.LEFT, padx=10
+        )
 
         # ----- Actions + previews -------------------------------------------
-        build_button_row(self, [
-            ("Save", self.save),
-            ("Capture Image", self.test_on_frame),
-        ], primary="Capture Image").pack(side=tk.TOP, anchor=tk.W, padx=8, pady=4)
+        build_button_row(
+            self,
+            [
+                ("Save", self.save),
+                ("Capture Image", self.test_on_frame),
+            ],
+            primary="Capture Image",
+        ).pack(side=tk.TOP, anchor=tk.W, padx=8, pady=4)
 
         preview_row = ttk.Frame(self)
         preview_row.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=8, pady=8)
@@ -151,9 +198,7 @@ class ImageProcTab(ttk.Frame):
         cfg = self.config.image_proc
         # Overlay the detected circle on the source preview so the operator
         # can see exactly what got picked while tuning the parameters.
-        detection = image_proc.hough_detect(
-            frame, image_proc.HoughParams.from_dict(cfg.get("hough", {}))
-        )
+        detection = image_proc.hough_detect(frame, image_proc.HoughParams.from_dict(cfg.get("hough", {})))
         preview = image_proc.overlay_detection(frame, detection)
         if detection is None:
             self.app.set_status("No circle detected within radius bounds.")
@@ -161,9 +206,7 @@ class ImageProcTab(ttk.Frame):
             cx, cy, r = detection
             self.app.set_status(f"Detected circle: r={r:.0f} px at ({cx:.0f}, {cy:.0f}).")
         cropped = image_proc.crop_headstamp(frame, cfg)
-        cropped = image_proc.apply_primer_mask(
-            cropped, self.primer_mode_var.get(), int(self.primer_radius.get())
-        )
+        cropped = image_proc.apply_primer_mask(cropped, self.primer_mode_var.get(), int(self.primer_radius.get()))
         self.before_panel.show_bgr(preview)
         self.after_panel.show_bgr(cropped)
 

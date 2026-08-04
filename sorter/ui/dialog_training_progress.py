@@ -5,11 +5,13 @@ Spawned by `tab_train.py` when the user clicks Train. Subscribes to the
 subprocess emits markers. Closes automatically on terminal events
 (`training/done`, `training/failed`, `training/cancelled`).
 """
+
 from __future__ import annotations
 
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import ttk
-from typing import Any, Callable
+from typing import Any
 
 from ..events import EventBus
 from .theme import PALETTE
@@ -39,32 +41,30 @@ class TrainingProgressDialog(tk.Toplevel):
         wrap.pack(fill=tk.BOTH, expand=True)
 
         self.status_var = tk.StringVar(value="Starting…")
-        ttk.Label(wrap, textvariable=self.status_var,
-                  style="Header.TLabel").pack(side=tk.TOP, anchor="w")
+        ttk.Label(wrap, textvariable=self.status_var, style="Header.TLabel").pack(side=tk.TOP, anchor="w")
 
         console_wrap = ttk.Frame(wrap, style="Card.TFrame", padding=4)
         console_wrap.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(8, 8))
         self.console = tk.Text(
-            console_wrap, height=14, wrap=tk.NONE,
-            bg=PALETTE["bg_input"], fg=PALETTE["text"],
+            console_wrap,
+            height=14,
+            wrap=tk.NONE,
+            bg=PALETTE["bg_input"],
+            fg=PALETTE["text"],
             insertbackground=PALETTE["accent"],
-            highlightthickness=0, borderwidth=0,
+            highlightthickness=0,
+            borderwidth=0,
             state=tk.DISABLED,
         )
         self.console.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        ttk.Scrollbar(console_wrap, orient=tk.VERTICAL,
-                      command=self.console.yview).pack(side=tk.RIGHT, fill=tk.Y)
+        ttk.Scrollbar(console_wrap, orient=tk.VERTICAL, command=self.console.yview).pack(side=tk.RIGHT, fill=tk.Y)
         self.console.config(yscrollcommand=lambda *a: None)  # detached scrollbar
 
         btns = ttk.Frame(wrap)
         btns.pack(side=tk.BOTTOM, fill=tk.X)
-        self._cancel_btn = ttk.Button(btns, text="Cancel training",
-                                      command=self._cancel,
-                                      style="Danger.TButton")
+        self._cancel_btn = ttk.Button(btns, text="Cancel training", command=self._cancel, style="Danger.TButton")
         self._cancel_btn.pack(side=tk.LEFT)
-        self._close_btn = ttk.Button(btns, text="Close",
-                                     command=self._user_close,
-                                     state=tk.DISABLED)
+        self._close_btn = ttk.Button(btns, text="Close", command=self._user_close, state=tk.DISABLED)
         self._close_btn.pack(side=tk.RIGHT)
 
         # Bus subscriptions — we collect (topic, handler) pairs so we can
@@ -118,10 +118,12 @@ class TrainingProgressDialog(tk.Toplevel):
         tl = payload.get("train_loss")
         ta = payload.get("train_acc")
         va = payload.get("val_acc")
-        bits = [f"Epoch {ep}/{tot}",
-                f"train_loss={tl:.4f}" if isinstance(tl, (int, float)) else "",
-                f"train_acc={ta:.4f}" if isinstance(ta, (int, float)) else "",
-                f"val_acc={va:.4f}" if isinstance(va, (int, float)) else ""]
+        bits = [
+            f"Epoch {ep}/{tot}",
+            f"train_loss={tl:.4f}" if isinstance(tl, (int, float)) else "",
+            f"train_acc={ta:.4f}" if isinstance(ta, (int, float)) else "",
+            f"val_acc={va:.4f}" if isinstance(va, (int, float)) else "",
+        ]
         self.status_var.set("  ".join(b for b in bits if b))
         self._append(f"[epoch] {payload}\n")
 

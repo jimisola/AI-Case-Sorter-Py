@@ -1,9 +1,10 @@
 """Tests for the SQLite-backed Config shim."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
-from sorter.config import Config, DEFAULTS, DEFAULT_INIT_SETTINGS
+from sorter.config import DEFAULT_INIT_SETTINGS, DEFAULTS, Config
 from sorter.db import Database
 from sorter.repository import ModelRepo, SettingsRepo
 
@@ -39,7 +40,7 @@ def test_add_remove_headstamps_via_helpers(tmp_path: Path) -> None:
     cfg = Config(db).load()
 
     assert cfg.add_headstamp("WIN", slot=3)
-    assert not cfg.add_headstamp("WIN")           # duplicate
+    assert not cfg.add_headstamp("WIN")  # duplicate
     assert cfg.add_headstamp("FC", slot=5)
 
     reloaded = Config(db).load()
@@ -47,7 +48,7 @@ def test_add_remove_headstamps_via_helpers(tmp_path: Path) -> None:
     assert names == ["FC", "WIN"]
 
     assert cfg.remove_headstamp("WIN")
-    assert not cfg.remove_headstamp("WIN")        # already gone
+    assert not cfg.remove_headstamp("WIN")  # already gone
     assert [h["name"] for h in Config(db).load().headstamps] == ["FC"]
 
     cfg.clear_headstamps()
@@ -97,10 +98,10 @@ def test_partial_settings_filled_with_defaults(tmp_path: Path) -> None:
 def test_run_confidence_floor_default_and_persist(tmp_path: Path) -> None:
     db = _new_db(tmp_path)
     cfg = Config(db).load()
-    assert cfg.run_confidence_floor == 30          # default
+    assert cfg.run_confidence_floor == 30  # default
     cfg.set_run_confidence_floor(75)
     assert Config(db).load().run_confidence_floor == 75
-    cfg.set_run_confidence_floor(150)              # clamped to 0..100
+    cfg.set_run_confidence_floor(150)  # clamped to 0..100
     assert Config(db).load().run_confidence_floor == 100
     cfg.set_run_confidence_floor(-5)
     assert Config(db).load().run_confidence_floor == 0
@@ -109,10 +110,10 @@ def test_run_confidence_floor_default_and_persist(tmp_path: Path) -> None:
 def test_run_store_images_default_and_persist(tmp_path: Path) -> None:
     db = _new_db(tmp_path)
     cfg = Config(db).load()
-    assert cfg.run_store_images == "none"          # default
+    assert cfg.run_store_images == "none"  # default
     cfg.set_run_store_images("above")
     assert Config(db).load().run_store_images == "above"
-    cfg.set_run_store_images("bogus")              # invalid -> ignored
+    cfg.set_run_store_images("bogus")  # invalid -> ignored
     assert Config(db).load().run_store_images == "above"
 
 
@@ -185,9 +186,7 @@ def test_headstamps_track_active_model(tmp_path: Path) -> None:
     cfg.add_headstamp("FOR-MODEL-1", slot=1)
 
     # Create a second cartridge + model and switch active.
-    cart_row = db.conn.execute(
-        "INSERT INTO cartridges(name) VALUES ('45ACP')"
-    ).lastrowid
+    cart_row = db.conn.execute("INSERT INTO cartridges(name) VALUES ('45ACP')").lastrowid
     new_model_id = db.conn.execute(
         "INSERT INTO models(name, cartridge_id, model_mode) VALUES ('Other', ?, 'convnext_tiny')",
         (cart_row,),

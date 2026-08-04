@@ -3,6 +3,7 @@
 The insecure-TLS switch is the interesting part — it must apply for a loopback
 backend and must NOT apply to anything else, however it is spelled.
 """
+
 from __future__ import annotations
 
 import os
@@ -64,7 +65,7 @@ def test_load_dotenv_is_a_noop_without_files(tmp_path, monkeypatch) -> None:
 def test_load_dotenv_survives_an_unreadable_file(tmp_path, monkeypatch) -> None:
     """A developer convenience must never stop the app from starting."""
     bad = tmp_path / "dir.env"
-    bad.mkdir()                      # is_file() is False → skipped, not raised
+    bad.mkdir()  # is_file() is False → skipped, not raised
     monkeypatch.setenv("CASESORTER_ENV_FILE", str(bad))
     monkeypatch.setenv("CASESORTER_DATA_DIR", str(tmp_path / "data"))
     assert appenv.load_dotenv() == []
@@ -76,9 +77,9 @@ def test_load_dotenv_survives_an_unreadable_file(tmp_path, monkeypatch) -> None:
 def test_api_base_default_and_override(monkeypatch) -> None:
     assert appenv.api_base() == "https://www.reloadingrecipes.com/api"
     monkeypatch.setenv("CASESORTER_API_BASE", "https://localhost:7043/api/")
-    assert appenv.api_base() == "https://localhost:7043/api"   # trailing / trimmed
+    assert appenv.api_base() == "https://localhost:7043/api"  # trailing / trimmed
     monkeypatch.setenv("CASESORTER_API_BASE", "   ")
-    assert appenv.api_base() == appenv.DEFAULT_API_BASE        # blank → default
+    assert appenv.api_base() == appenv.DEFAULT_API_BASE  # blank → default
 
 
 # ----- tls trust -------------------------------------------------------------
@@ -129,7 +130,7 @@ def test_insecure_ignored_for_remote_hosts(monkeypatch) -> None:
     for base in (
         appenv.DEFAULT_API_BASE,
         "https://evil.example.com/api",
-        "https://localhost.evil.example.com/api",   # not a loopback host
+        "https://localhost.evil.example.com/api",  # not a loopback host
     ):
         monkeypatch.setenv("CASESORTER_API_BASE", base)
         appenv._warned.clear()
@@ -137,15 +138,22 @@ def test_insecure_ignored_for_remote_hosts(monkeypatch) -> None:
 
 
 def test_insecure_ignored_with_the_default_base(monkeypatch) -> None:
-    monkeypatch.setenv("CASESORTER_API_INSECURE", "1")   # no base override at all
+    monkeypatch.setenv("CASESORTER_API_INSECURE", "1")  # no base override at all
     assert appenv.tls_verify() is True
 
 
 def test_insecure_flag_spellings(monkeypatch) -> None:
     monkeypatch.setenv("CASESORTER_API_BASE", "https://localhost/api")
     for value, expected in (
-        ("1", False), ("true", False), ("TRUE", False), ("yes", False), ("on", False),
-        ("0", True), ("false", True), ("", True), ("maybe", True),
+        ("1", False),
+        ("true", False),
+        ("TRUE", False),
+        ("yes", False),
+        ("on", False),
+        ("0", True),
+        ("false", True),
+        ("", True),
+        ("maybe", True),
     ):
         monkeypatch.setenv("CASESORTER_API_INSECURE", value)
         appenv._warned.clear()
@@ -175,7 +183,8 @@ def test_community_api_picks_up_the_override(monkeypatch) -> None:
     from sorter.community_api import API_BASE, CommunityApi
 
     class _Auth:
-        def acquire_token_silent(self, scopes=None): return None
+        def acquire_token_silent(self, scopes=None):
+            return None
 
     class _Session:
         verify = True
@@ -189,7 +198,8 @@ def test_community_api_resolves_tls_trust(tmp_path, monkeypatch) -> None:
     from sorter.community_api import CommunityApi
 
     class _Auth:
-        def acquire_token_silent(self, scopes=None): return None
+        def acquire_token_silent(self, scopes=None):
+            return None
 
     class _Session:
         verify = True
@@ -204,7 +214,8 @@ def test_explicit_verify_argument_wins(monkeypatch) -> None:
     from sorter.community_api import CommunityApi
 
     class _Auth:
-        def acquire_token_silent(self, scopes=None): return None
+        def acquire_token_silent(self, scopes=None):
+            return None
 
     class _Session:
         verify = True
@@ -231,7 +242,7 @@ def test_verify_is_passed_per_request_not_on_the_session(tmp_path, monkeypatch) 
     on any machine that sets one (corporate proxies do). Only a per-request
     ``verify=`` wins.
     """
-    from tests.test_community_api import _FakeResp, _FakeSession, _api
+    from tests.test_community_api import _api, _FakeResp, _FakeSession
 
     pem = tmp_path / "devcert.pem"
     pem.write_text("x")
@@ -247,7 +258,7 @@ def test_verify_is_passed_per_request_not_on_the_session(tmp_path, monkeypatch) 
 
 def test_default_verify_stays_true_so_env_ca_bundles_still_work(tmp_path) -> None:
     """Passing True (not None) keeps requests' own env-bundle handling intact."""
-    from tests.test_community_api import _FakeResp, _FakeSession, _api
+    from tests.test_community_api import _api, _FakeResp, _FakeSession
 
     s = _FakeSession()
     api = _api(s)
@@ -287,7 +298,7 @@ def test_env_file_applies_whatever_the_editor_saved(name, tmp_path, monkeypatch)
 
     assert appenv.load_dotenv() == [env_file]
     assert appenv.api_base() == "https://localhost:5001/api"
-    assert appenv.tls_verify() is False        # loopback + insecure
+    assert appenv.tls_verify() is False  # loopback + insecure
     # The commented-out line stays commented out.
     assert not os.environ.get("CASESORTER_API_CA_BUNDLE")
 
@@ -298,14 +309,12 @@ def test_unparseable_env_file_never_crashes_startup(raw, tmp_path, monkeypatch) 
     env_file = tmp_path / "dev.env"
     env_file.write_bytes(raw)
     monkeypatch.setenv("CASESORTER_ENV_FILE", str(env_file))
-    appenv.load_dotenv()                        # must not raise
+    appenv.load_dotenv()  # must not raise
     assert appenv.api_base() == appenv.DEFAULT_API_BASE
 
 
 def test_parse_drops_keys_that_are_not_env_var_names() -> None:
-    parsed = appenv.parse_env_text(
-        "GOOD=1\nbad key=2\n\x00NUL=3\n9LEADING=4\ndot.ted=5\n"
-    )
+    parsed = appenv.parse_env_text("GOOD=1\nbad key=2\n\x00NUL=3\n9LEADING=4\ndot.ted=5\n")
     assert parsed == {"GOOD": "1"}
 
 

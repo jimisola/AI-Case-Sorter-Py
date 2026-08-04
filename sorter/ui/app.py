@@ -1,18 +1,20 @@
 """Main Tk application shell — notebook + status bar + cross-thread wiring."""
+
 from __future__ import annotations
 
 import threading
 import tkinter as tk
 import traceback
+from collections.abc import Callable
 from tkinter import ttk
-from typing import Any, Callable
+from typing import Any
 
-from .. import serial_broker
+from .. import __version__, serial_broker
 from ..camera import Camera
 from ..config import Config
 from ..events import EventBus
 from ..run_controller import RunController
-from ..serial_emulator import EmulatorBroker, EMULATED_PORT
+from ..serial_emulator import EMULATED_PORT, EmulatorBroker
 from .tab_ai import AiTab
 from .tab_camera import CameraTab
 from .tab_community import CommunityTab
@@ -36,7 +38,6 @@ from .theme import (
 )
 from .widgets import ScrollableFrame
 
-
 PREVIEW_FPS = 20
 HEADER_HEIGHT = 36
 # Gap between the theme picker and the right edge of the title bar.
@@ -54,7 +55,7 @@ class MainWindow:
         self.db = db if db is not None else getattr(config, "db", None)
         self.bus = EventBus()
         self.root = tk.Tk()
-        self.root.title("AI Case Sorter - v2.0.1")
+        self.root.title(f"AI Case Sorter - v{__version__}")
         self.root.geometry("1024x768")
         self.root.minsize(960, 660)
 
@@ -95,15 +96,24 @@ class MainWindow:
         )
         self.theme_combo.bind("<<ComboboxSelected>>", self._on_theme_selected)
         self._theme_window = self.header_canvas.create_window(
-            0, HEADER_HEIGHT // 2, anchor=tk.E, window=self.theme_combo,
+            0,
+            HEADER_HEIGHT // 2,
+            anchor=tk.E,
+            window=self.theme_combo,
         )
         self.theme_new_button = ttk.Button(
-            self.header_canvas, text="\u2699", width=2,
-            style="HeaderIcon.TButton", takefocus=False,
+            self.header_canvas,
+            text="\u2699",
+            width=2,
+            style="HeaderIcon.TButton",
+            takefocus=False,
             command=self.open_theme_editor,
         )
         self._theme_new_window = self.header_canvas.create_window(
-            0, HEADER_HEIGHT // 2, anchor=tk.E, window=self.theme_new_button,
+            0,
+            HEADER_HEIGHT // 2,
+            anchor=tk.E,
+            window=self.theme_new_button,
         )
         self.header_canvas.bind("<Configure>", self._repaint_header)
 
@@ -115,13 +125,17 @@ class MainWindow:
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
         ttk.Separator(status_bar, orient=tk.HORIZONTAL).pack(side=tk.TOP, fill=tk.X)
         ttk.Label(
-            status_bar, textvariable=self.status_var,
-            anchor=tk.W, style="Status.TLabel",
+            status_bar,
+            textvariable=self.status_var,
+            anchor=tk.W,
+            style="Status.TLabel",
         ).pack(side=tk.LEFT, padx=12, pady=6)
         # Sign-in / sign-out button on the right side of the status bar.
         self.signin_var = tk.StringVar(value="Sign in")
         self.signin_button = ttk.Button(
-            status_bar, textvariable=self.signin_var, command=self._on_signin_click,
+            status_bar,
+            textvariable=self.signin_var,
+            command=self._on_signin_click,
         )
         self.signin_button.pack(side=tk.RIGHT, padx=12, pady=4)
         # Update affordance — created here but not packed: it appears only once
@@ -132,8 +146,10 @@ class MainWindow:
         self._pending_update: Any | None = None
         self.update_button_var = tk.StringVar(value="Update available")
         self.update_button = ttk.Button(
-            status_bar, textvariable=self.update_button_var,
-            style="Update.TButton", command=self.open_update_dialog,
+            status_bar,
+            textvariable=self.update_button_var,
+            style="Update.TButton",
+            command=self.open_update_dialog,
         )
         # Pack serial first so it ends up rightmost; camera sits to its left.
         # Each indicator is a [dot][text] pair grouped in a sub-frame so the
@@ -157,7 +173,10 @@ class MainWindow:
         self.page.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         notebook = ttk.Notebook(self.page)
         self._notebook_window = self.page.create_window(
-            0, 0, window=notebook, anchor=tk.NW,
+            0,
+            0,
+            window=notebook,
+            anchor=tk.NW,
         )
         self._page_size = (0, 0)
         self.page.bind("<Configure>", self._layout_page)
@@ -197,6 +216,7 @@ class MainWindow:
         self._community_container: ttk.Frame | None = None
         self._add_scrolled = _add_scrolled
         from ..auth import AuthManager
+
         try:
             self.auth: AuthManager | None = AuthManager()
         except Exception:
@@ -305,7 +325,9 @@ class MainWindow:
         from .dialog_update import UpdateDialog
 
         UpdateDialog(
-            self.root, info=self._update_info, app=self,
+            self.root,
+            info=self._update_info,
+            app=self,
             pending=self._pending_update,
         )
 
@@ -318,6 +340,7 @@ class MainWindow:
         if self.db is None:
             return
         from ..repository import SettingsRepo
+
         active_id = SettingsRepo(self.db).get_active_model_id()
         try:
             if active_id is None:
@@ -357,6 +380,7 @@ class MainWindow:
         if self.db is None:
             return
         from ..repository import SettingsRepo
+
         active_id = SettingsRepo(self.db).get_active_model_id()
         try:
             if active_id is None:
@@ -419,13 +443,16 @@ class MainWindow:
             self.set_status("Signed out.")
             return
         from .dialog_login import LoginDialog
+
         LoginDialog(self.root, self)
 
     def set_status(self, message: str) -> None:
         self.status_var.set(message)
 
     def _build_status_indicator(
-        self, parent: tk.Misc, text_var: tk.StringVar,
+        self,
+        parent: tk.Misc,
+        text_var: tk.StringVar,
     ) -> tk.Label:
         """[●][text] pair on the right side of the status bar.
 
@@ -492,13 +519,16 @@ class MainWindow:
         # the rest this clears the field and costs nothing. It fades in from
         # the right so the screen never lands under the app title.
         paint_halftone(
-            canvas, color=halftone_ink(), fade_from="right",
+            canvas,
+            color=halftone_ink(),
+            fade_from="right",
             fade_span=max(1, canvas.winfo_width()) * 0.55,
         )
         canvas.delete("title")
         self._place_theme_picker()
         title_id = canvas.create_text(
-            18, HEADER_HEIGHT // 2,
+            18,
+            HEADER_HEIGHT // 2,
             anchor=tk.W,
             text="AI Case Sorter",
             fill=PALETTE["text"],
@@ -509,7 +539,8 @@ class MainWindow:
         bbox = canvas.bbox(title_id)
         subtitle_x = (bbox[2] + 12) if bbox else 200
         canvas.create_text(
-            subtitle_x, HEADER_HEIGHT // 2 + 3,
+            subtitle_x,
+            HEADER_HEIGHT // 2 + 3,
             anchor=tk.W,
             text="Open Source Client",
             fill=PALETTE["text_muted"],
@@ -578,8 +609,12 @@ class MainWindow:
         )
         for i, (box, edge) in enumerate(bands):
             paint_halftone(
-                self.page, color=ink, box=box, fade_from=edge,
-                fade_span=margin * 1.4, clear=(i == 0),
+                self.page,
+                color=ink,
+                box=box,
+                fade_from=edge,
+                fade_span=margin * 1.4,
+                clear=(i == 0),
             )
 
     # ----- theme --------------------------------------------------------------
@@ -677,8 +712,7 @@ class MainWindow:
         self.camera.stop()
         cam_cfg = self.config.camera
         self.camera = Camera(
-            device_index=int(device_index if device_index is not None
-                             else cam_cfg.get("device_index", 0)),
+            device_index=int(device_index if device_index is not None else cam_cfg.get("device_index", 0)),
             width=int(width if width is not None else cam_cfg.get("width", 640)),
             height=int(height if height is not None else cam_cfg.get("height", 480)),
         )
@@ -722,11 +756,7 @@ class MainWindow:
             return
 
         baud = int(self.config.serial.get("baud", 9600))
-        probe_timeout = float(
-            self.config.serial.get(
-                "handshake_timeout_s", serial_broker.HANDSHAKE_READ_TIMEOUT_S
-            )
-        )
+        probe_timeout = float(self.config.serial.get("handshake_timeout_s", serial_broker.HANDSHAKE_READ_TIMEOUT_S))
 
         def _probe() -> tuple[object, str] | tuple[None, None]:
             for port in candidates:
@@ -745,9 +775,7 @@ class MainWindow:
                     return broker, port
             return None, None
 
-        self.set_status(
-            f"Auto-connecting to serial — {len(candidates)} port(s) to try…"
-        )
+        self.set_status(f"Auto-connecting to serial — {len(candidates)} port(s) to try…")
         self.run_worker(
             _probe,
             on_done=self._finalize_auto_connect,
@@ -777,9 +805,7 @@ class MainWindow:
             f"Serial: connected ({port}) — {broker.firmware_version}",
             connected=True,
         )
-        self.set_status(
-            f"{'Auto-connected' if source == 'auto' else 'Connected'} to {port}."
-        )
+        self.set_status(f"{'Auto-connected' if source == 'auto' else 'Connected'} to {port}.")
         self._rebuild_run_controller()
 
         if self.config.serial.get("init_on_startup", False):
@@ -787,9 +813,7 @@ class MainWindow:
             settings = dict(self.config.serial.get("init_settings", {}))
             self.run_worker(
                 lambda: broker.update_init_settings(settings),
-                on_done=lambda _r: self.set_status(
-                    f"Connected to {port}. Init settings pushed."
-                ),
+                on_done=lambda _r: self.set_status(f"Connected to {port}. Init settings pushed."),
                 on_error=lambda err: self.set_status(f"Init push failed: {err}"),
             )
 
