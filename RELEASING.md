@@ -36,7 +36,7 @@
    target branch. (Publishing a release also triggers whatever's wired to `release: published`
    in the future -- e.g. attaching build artifacts and, if enabled, publishing to PyPI.
    Artifact attachment is live; PyPI publishing ships disabled, gated on the repo variable
-   `PYPI_PUBLISH_ENABLED` -- see `.github/REPO_SETUP.md`.)
+   `PYPI_PUBLISH_ENABLED`, which is unset by default.)
 
 ## Versioning
 
