@@ -62,3 +62,19 @@ filter_commits = false
 # stray v-tag would then silently be picked up as a release boundary.
 tag_pattern = "^[0-9]+\\.[0-9]+\\.[0-9]+"
 sort_commits = "newest"
+
+[bump]
+# Reaching 1.0.0 is a decision, not a side effect of a commit message.
+#
+# git-cliff defaults this to true, which means a single `type!:` while the
+# project is at 0.x bumps straight to 1.0.0 -- so an ordinary breaking change
+# during pre-1.0 development would silently declare the API stable. That is
+# backwards: 0.x exists precisely because breaking changes are still expected,
+# and 1.0.0 should be published deliberately by passing `version` explicitly
+# to the Release workflow.
+#
+# With this false, a breaking change below 1.0.0 bumps the *minor* instead
+# (0.1.0 + `feat!:` -> 0.2.0). Behaviour at 1.0.0 and above is unchanged --
+# `feat!:` still bumps the major there (1.2.3 -> 2.0.0). Verified against
+# git-cliff 2.13.1 for both regimes; pinned in tests/test_cliff_config.py.
+breaking_always_bump_major = false

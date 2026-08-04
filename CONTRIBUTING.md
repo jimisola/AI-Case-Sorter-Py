@@ -123,22 +123,25 @@ have been a `feat:` produces a wrong changelog entry *and* a wrong version
 bump. Commits that don't parse as Conventional Commits are dropped from the
 changelog entirely.
 
-The mapping, which holds at every version including `0.x`:
+The mapping:
 
-| Commit | Bump |
-|---|---|
-| `fix:` | patch |
-| `feat:` | minor |
-| `type!:` / `BREAKING CHANGE:` | major |
+| Commit | While `0.x` (today) | From `1.0.0` on |
+|---|---|---|
+| `fix:` | patch | patch |
+| `feat:` | minor | minor |
+| `type!:` / `BREAKING CHANGE:` | **minor** | major |
 
-Note that **a breaking change bumps the major even while the project is
-pre-1.0** — `0.1.0` + `feat!:` gives `1.0.0`, not `0.2.0`. git-cliff's
-`features_always_bump_minor` and `breaking_always_bump_major` both default to
-true, so it does not apply the looser "anything goes below 1.0" convention
-some tools do. Verified against git-cliff 2.13.1 with this repo's `cliff.toml`
-across `0.0.1`, `0.1.0`, `0.9.3` and `1.2.3` base tags. If you want a breaking
-change that does *not* leave 0.x, it needs an explicit `version` input on the
-Release workflow.
+**No commit message can take the project to 1.0.0.** git-cliff would do that
+by default — a single `feat!:` at `0.1.0` bumps straight to `1.0.0` — which
+would let an ordinary breaking change during pre-1.0 development silently
+declare the API stable. `cliff.toml` sets `breaking_always_bump_major = false`
+to prevent it, so a breaking change below 1.0.0 bumps the minor instead
+(`0.1.0` + `feat!:` → `0.2.0`). Releasing 1.0.0 is a deliberate act: pass
+`version` explicitly to the Release workflow. Behaviour at 1.0.0 and above is
+ordinary semver, unaffected.
+
+Verified against git-cliff 2.13.1 and pinned in `tests/test_cliff_config.py`,
+which runs the real binary in CI.
 
 ## Releasing
 

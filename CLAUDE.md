@@ -567,12 +567,14 @@ flowchart TD
   ships a wrong version, not just a wrong changelog line. Full type list and
   rules: `CONTRIBUTING.md`.
   - The mapping is `fix` → patch, `feat` → minor, `!`/`BREAKING CHANGE:` →
-    major, and it **holds at every version, including 0.x** —
-    `0.1.0` + `feat!:` gives `1.0.0`, not `0.2.0`. git-cliff does not apply
-    the looser "anything goes below 1.0" convention
-    (`features_always_bump_minor` / `breaking_always_bump_major` both default
-    to true). Verified empirically against git-cliff 2.13.1 with this repo's
-    `cliff.toml`; don't assume 0.x is lenient here.
+    major — **except that a breaking change below 1.0.0 bumps the minor**
+    (`0.1.0` + `feat!:` → `0.2.0`). `cliff.toml` sets
+    `breaking_always_bump_major = false` for this; git-cliff's default would
+    send that straight to `1.0.0`, letting one commit message declare the API
+    stable. **Reaching 1.0.0 requires passing `version` explicitly** to the
+    Release workflow — nothing auto-detects it. Verified against git-cliff
+    2.13.1 and pinned in `tests/test_cliff_config.py`, which runs the real
+    binary in CI (`release-config` job in `lint.yml`).
 - **Threading rule:** never touch Tk widgets off the main thread. Do blocking
   work in `run_worker`/daemon threads and `bus.post(...)`; the drain loop
   delivers handlers on the main thread. **`widget.after()` is not an escape

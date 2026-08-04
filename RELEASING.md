@@ -13,10 +13,10 @@
 3. When ready, run the **Release** workflow manually (Actions tab -> Release -> Run workflow):
    - `version`: **leave empty to auto-detect.** git-cliff computes the next version from the
      Conventional Commits since the last tag -- a `feat:` bumps the minor, a `fix:` the patch,
-     a `!`/`BREAKING CHANGE:` the major. **That holds at 0.x too**: `0.1.0` + a `feat!:`
-     auto-detects as `1.0.0`, not `0.2.0`, so if you want a breaking change that stays in 0.x
-     you have to pass `version` explicitly (with `force`). See CONTRIBUTING.md. Passing a
-     version always overrides auto-detection.
+     a `!`/`BREAKING CHANGE:` the major. **While the project is pre-1.0 a breaking change
+     bumps the minor instead** (`0.1.0` + `feat!:` -> `0.2.0`), so no commit message can push
+     the project to 1.0.0 on its own -- see CONTRIBUTING.md. Passing a version explicitly
+     always overrides auto-detection.
    - `ref`: branch to release from. Empty means the branch you dispatched on. **Must be
      `main`, `hotfix/*`, or `release/*`** — anything else is rejected before a tag is
      created. A raw commit SHA is rejected for the same reason: release from the branch
@@ -59,6 +59,18 @@ How the version reaches a user who never has `.git`:
 
 See `CLAUDE.md` §7 for why `bootstrap.py` passes `--no-install-project`/`--no-sync`: without
 them, a launch from a git-less release would silently overwrite the correct baked version.
+
+### Getting to 1.0.0
+
+Auto-detection will never propose it. While the project is at 0.x, `cliff.toml`'s
+`breaking_always_bump_major = false` makes a `!`/`BREAKING CHANGE:` commit bump the *minor*
+(`0.1.0` -> `0.2.0`) rather than jumping to `1.0.0` -- otherwise a routine breaking change
+during pre-1.0 development would declare the API stable as a side effect of a commit message.
+
+So 1.0.0 is cut deliberately: run the Release workflow with `version: 1.0.0` and `force: true`
+(`force` is required precisely because the value disagrees with what git-cliff computed --
+that guard is what makes this an explicit decision rather than a typo). From the first 1.x tag
+onward the mapping is ordinary semver again, with no config change needed.
 
 ## Commit-type -> changelog section mapping
 

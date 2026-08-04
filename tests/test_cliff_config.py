@@ -63,25 +63,47 @@ def _bumped_version(repo: Path) -> str:
 @pytest.mark.parametrize(
     ("base", "subject", "expected"),
     [
-        # Full semver, and it applies at 0.x too -- git-cliff does NOT use the
-        # looser "anything goes below 1.0" convention some tools do, because
-        # features_always_bump_minor/breaking_always_bump_major default to true.
+        # --- pre-1.0: a breaking change must NOT leave 0.x ---
+        # cliff.toml sets breaking_always_bump_major = false for this. Without
+        # it git-cliff's default sends 0.1.0 + `feat!:` straight to 1.0.0,
+        # i.e. one commit message silently declares the API stable.
+        ("0.0.1", "fix: a bug", "0.0.2"),
+        ("0.0.1", "feat: a feature", "0.1.0"),
+        ("0.0.1", "feat!: a breaking feature", "0.1.0"),
         ("0.1.0", "fix: a bug", "0.1.1"),
         ("0.1.0", "feat: a feature", "0.2.0"),
-        ("0.1.0", "feat!: a breaking feature", "1.0.0"),
-        ("0.0.1", "feat: a feature", "0.1.0"),
+        ("0.1.0", "feat!: a breaking feature", "0.2.0"),
         ("0.9.3", "feat: a feature", "0.10.0"),
+        ("0.9.3", "feat!: a breaking feature", "0.10.0"),
+        # --- 1.0.0 and above: ordinary semver, unaffected by that setting ---
         ("1.2.3", "fix: a bug", "1.2.4"),
         ("1.2.3", "feat: a feature", "1.3.0"),
         ("1.2.3", "feat!: a breaking feature", "2.0.0"),
+        ("2.0.0", "feat!: a breaking feature", "3.0.0"),
     ],
 )
 def test_bump_mapping_is_what_the_docs_claim(tmp_path: Path, base: str, subject: str, expected: str) -> None:
     """CONTRIBUTING.md publishes this table and RELEASING.md repeats it; a
-    contributor picks their commit type from it. The `0.1.0` + `feat!:` ->
-    `1.0.0` row is the counter-intuitive one and the reason this test exists.
+    contributor picks their commit type from it.
+
+    The rows that matter most are the pre-1.0 `feat!:` ones: they assert that
+    no commit message can promote the project to 1.0.0 on its own. Getting to
+    1.0.0 requires passing `version` explicitly to the Release workflow.
     """
     assert _bumped_version(_repo(tmp_path, base, [subject])) == expected
+
+
+def test_no_commit_can_reach_1_0_0_on_its_own(tmp_path: Path) -> None:
+    """The invariant behind the table above, stated directly: from any 0.x
+    tag, no combination of conventional commits auto-detects as 1.0.0.
+    """
+    repo = _repo(
+        tmp_path,
+        "0.9.9",
+        ["feat!: breaking one", "feat: a feature", "fix: a bug", "feat!: breaking two"],
+    )
+    version = _bumped_version(repo)
+    assert version.startswith("0."), f"a breaking change escaped 0.x: {version}"
 
 
 def test_tag_pattern_ignores_a_v_prefixed_tag(tmp_path: Path) -> None:
