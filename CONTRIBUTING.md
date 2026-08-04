@@ -151,11 +151,11 @@ the detail. The short version:
 - **Nothing to bump by hand.** The git tag is the single source of truth; the
   version is derived from it at build time (hatch-vcs). There is no version
   string in the source to edit.
-- **Preview before you cut.** The **Release Preview** workflow (Actions →
-  Release Preview → Run workflow) shows the version a release would get right
-  now and the changelog it would generate, for any branch or SHA. It's the
-  fastest way to notice a mistyped commit type before it becomes a wrong
-  version bump.
+- **Preview by dry-running the release.** The Release workflow defaults to
+  `dry-run`, which shows the version a release would get right now and the
+  changelog it would generate — without pushing a tag or creating anything.
+  It's the fastest way to notice a mistyped commit type before it becomes a
+  wrong version bump.
 - **Cutting a release** is the manual **Release** workflow (Actions → Release →
   Run workflow). It defaults to a dry run, auto-detects the version from
   Conventional Commits if you leave `version` empty, and only ever opens a

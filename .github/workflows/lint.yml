@@ -22,14 +22,9 @@ jobs:
           python-version: "3.13"
           enable-cache: true
 
-      # ruff comes from the project's own dev group, so uv.lock is the single
-      # source of truth for which version lints this repo -- and Renovate
-      # bumps it deliberately, in a PR, instead of a new ruff release turning
-      # every open PR red without anything here having changed.
-      #
-      # --no-install-project for the same reason bootstrap.py passes it: the
-      # package itself isn't needed to lint it, and building it would fire
-      # hatch-vcs's hook, which needs tags this shallow checkout doesn't have.
+      # From uv.lock, so a new ruff release can't turn open PRs red on its
+      # own. --no-install-project: building would fire hatch-vcs's hook,
+      # which needs tags this checkout lacks.
       - name: Install ruff from the lockfile
         run: uv sync --locked --only-group dev --no-install-project
 
@@ -47,10 +42,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # Digest-pinned, not just version-pinned: a GitHub release asset stays
-      # mutable by its upstream owner, so the version in the URL is not on its
-      # own a pin. Digest cross-checked against upstream's published
-      # actionlint_1.7.7_checksums.txt.
+      # Digest-pinned: a release asset is mutable upstream.
       - name: Install actionlint
         env:
           ACTIONLINT_VERSION: "1.7.7"
@@ -66,14 +58,12 @@ jobs:
       - name: actionlint
         run: actionlint .github/workflows/*.yml
 
-      # Pinned exactly, like every other tool in this workflow: a linter that
-      # silently changes version is a linter that can fail a PR which changed
-      # nothing.
+      # Pinned: an unpinned linter can fail a PR that changed nothing.
       - name: Install zizmor
         run: pip install zizmor==1.29.0
 
       - name: zizmor
-        run: zizmor --min-severity medium .github/workflows/
+        run: zizmor --min-severity medium .github/workflows/ .github/actions/
 
       - name: Install yamllint
         run: pip install yamllint==1.38.0
@@ -81,14 +71,10 @@ jobs:
       - name: yamllint
         run: |
           yamllint -d "{extends: relaxed, rules: {line-length: {max: 200}}}" \
-            .github/workflows/
+            .github/workflows/ .github/actions/
 
-  # cliff.toml decides the released version number, and nothing else in the
-  # repo encodes a version -- so a wrong answer here ships a wrong release
-  # rather than just a wrong changelog line. tests/test_cliff_config.py
-  # asserts the real binary's behaviour against the mapping CONTRIBUTING.md
-  # publishes; it skips when git-cliff is absent, so it needs a job that
-  # installs it or it would quietly never run anywhere.
+  # cliff.toml decides the released version, so a wrong answer here ships a
+  # wrong release. The test skips without git-cliff, hence a job that installs it.
   release-config:
     name: release version mapping
     runs-on: ubuntu-latest
@@ -102,24 +88,12 @@ jobs:
           python-version: "3.13"
           enable-cache: true
 
-      # Same digest-pinned install as release.yml/release-preview.yml; keep the
-      # three in step when bumping the version.
-      - name: Install git-cliff
-        env:
-          GIT_CLIFF_VERSION: "2.13.1"
-          GIT_CLIFF_SHA256: "9a1263f24e59a2f508c7b3d3283c9dea94a8bf697f96dbc18cc783cac6284546"
-        run: |
-          curl -fsSL -o git-cliff.tar.gz \
-            "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
-          echo "${GIT_CLIFF_SHA256}  git-cliff.tar.gz" | sha256sum -c -
-          sudo tar -xzf git-cliff.tar.gz --strip-components=1 -C /usr/local/bin \
-            "git-cliff-${GIT_CLIFF_VERSION}/git-cliff"
-          rm git-cliff.tar.gz
+      # Same build the release uses -- this job asserts its bump mapping.
+      - uses: ./.github/actions/setup-git-cliff
 
       - name: Install pytest from the lockfile
         run: uv sync --locked --only-group dev --no-install-project
 
-      # -p no:randomly etc. deliberately not needed: this module builds its own
-      # throwaway repos and shares no state with the rest of the suite.
+      # Builds throwaway repos; shares no state with the rest of the suite.
       - name: Assert the bump mapping the docs publish
         run: uv run --no-sync pytest tests/test_cliff_config.py -q

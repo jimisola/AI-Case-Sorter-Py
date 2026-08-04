@@ -42,30 +42,18 @@ jobs:
           fetch-tags: true
           ref: ${{ inputs.ref || github.ref }}
 
-      # Same direct install as release-preview.yml, for the same reason:
-      # orhun/git-cliff-action's `version` output is the latest *existing*
-      # release, not what the passed args compute, so --bumped-version has to
-      # be read from the binary's own stdout. Using it for the changelog too
-      # keeps one tool in this workflow instead of a binary plus an action.
-      #
-      # Pinned by digest, not just by version: a GitHub release asset is
-      # mutable by its upstream owner, and this job holds contents: write plus
-      # a token that can push tags and create releases -- i.e. it can reach the
-      # very artifacts the in-app updater installs on users' machines. Every
-      # *action* here is SHA-pinned for that reason; a raw download deserves
-      # the same. The digest was cross-checked against upstream's published
-      # .sha512 for the same asset.
-      - name: Install git-cliff
-        env:
-          GIT_CLIFF_VERSION: "2.13.1"
-          GIT_CLIFF_SHA256: "9a1263f24e59a2f508c7b3d3283c9dea94a8bf697f96dbc18cc783cac6284546"
+      - uses: ./.github/actions/setup-git-cliff
+
+      - uses: ./.github/actions/check-version
+        with:
+          version: ${{ inputs.version }}
+
+      # Captured before "Push tag" creates the new tag at HEAD -- git
+      # describe run after that would find the just-created tag instead.
+      - name: Record previous tag
+        id: previous
         run: |
-          curl -fsSL -o git-cliff.tar.gz \
-            "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
-          echo "${GIT_CLIFF_SHA256}  git-cliff.tar.gz" | sha256sum -c -
-          tar -xzf git-cliff.tar.gz --strip-components=1 -C /usr/local/bin \
-            "git-cliff-${GIT_CLIFF_VERSION}/git-cliff"
-          rm git-cliff.tar.gz
+          echo "tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "")" >> "$GITHUB_OUTPUT"
 
       - name: Resolve version
         id: resolve
@@ -74,17 +62,13 @@ jobs:
           FORCE: ${{ inputs.force }}
         run: |
           AUTO="$(git-cliff --config cliff.toml --bumped-version)"
-          PEP440='^[0-9]+(\.[0-9]+)*(a[0-9]+|b[0-9]+|rc[0-9]+)?(\.post[0-9]+)?(\.dev[0-9]+)?$'
 
           if [ -z "$REQUESTED" ]; then
             VERSION="$AUTO"
             SOURCE="auto-detected from Conventional Commits"
           else
+            # Already validated by check-version above.
             VERSION="$REQUESTED"
-            if ! echo "$VERSION" | grep -qE "$PEP440"; then
-              echo "::error::Version '$VERSION' is not a valid PEP 440 version (e.g. 0.2.0, 0.2.0rc1)"
-              exit 1
-            fi
             if [ "$VERSION" != "$AUTO" ]; then
               if [ "$FORCE" != "true" ]; then
                 echo "::error::Version '$VERSION' disagrees with the auto-detected '$AUTO'. Re-run with force enabled if that is deliberate."
@@ -111,23 +95,11 @@ jobs:
             echo "source=$SOURCE"
           } >> "$GITHUB_OUTPUT"
 
-      # Same rule check-release.yml enforces, but *before* anything is
-      # created rather than after. check-release.yml fires on
-      # `release: published` -- by which point the tag is pushed and the
-      # draft exists, so it can only report a mistake that already happened.
-      # Checking here means a release from the wrong branch simply doesn't
-      # get made. Both are kept: this one prevents, that one catches a
-      # release created by any other route (e.g. by hand in the UI).
-      - name: Check the ref is a releasable branch
-        env:
-          REF: ${{ inputs.ref || github.ref }}
-        run: |
-          BRANCH="${REF#refs/heads/}"
-          if [[ "$BRANCH" != "main" && "$BRANCH" != hotfix/* && "$BRANCH" != release/* ]]; then
-            echo "::error::Releases must come from main, hotfix/*, or release/* (got: '$BRANCH')."
-            echo "::error::If you passed a raw commit SHA, release from the branch containing it instead."
-            exit 1
-          fi
+      # Also enforced in check-release.yml: this prevents before tagging,
+      # that catches a release made by hand in the UI.
+      - uses: ./.github/actions/check-release-branch
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Check tag does not already exist
         env:
@@ -143,10 +115,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: git-cliff --config cliff.toml --latest --unreleased --strip all --output NOTES.md
 
-      # The checkout above sets persist-credentials: false, so `origin` carries
-      # no auth -- a bare `git push origin` here would 403. Pushing to an
-      # explicit tokenised URL keeps the hardening (no credential left behind
-      # in .git/config for later steps to leak) while still authenticating.
+      # persist-credentials: false means `origin` has no auth; push to an
+      # explicit tokenised URL rather than leaving one in .git/config.
       - name: Push tag
         if: ${{ !inputs.dry-run }}
         env:
@@ -165,8 +135,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.resolve.outputs.version }}
         run: |
-          # `gh release create` prints the release URL on stdout; it has no
-          # --json/--jq of its own (those live on `release view`/`list`).
+          # gh release create has no --json; it prints the URL on stdout.
           DRAFT_URL=$(gh release create "$VERSION" \
             --title "$VERSION" \
             --notes-file NOTES.md \
@@ -189,9 +158,10 @@ jobs:
           SOURCE: ${{ steps.resolve.outputs.source }}
           REF: ${{ inputs.ref || github.ref }}
           DRY_RUN: ${{ inputs.dry-run }}
+          LATEST: ${{ steps.previous.outputs.tag }}
         run: |
-          # Both "true" and "false" are non-empty strings, so test the value
-          # explicitly -- ${DRY_RUN:+...} would expand in both cases.
+          # Test the value: "false" is non-empty, so ${DRY_RUN:+...} would
+          # expand for both.
           if [ "$DRY_RUN" = "true" ]; then
             HEADING="Release (dry run)"
             MODE="dry run -- no tag pushed, no release created"
@@ -208,9 +178,22 @@ jobs:
             echo "| Auto-detected | \`$AUTO\` |"
             echo "| Source | $SOURCE |"
             echo "| Ref | \`$REF\` |"
+            echo "| Previous tag | \`${LATEST:-(none yet)}\` |"
             echo "| Mode | $MODE |"
             echo ""
             echo "#### Release notes"
             echo ""
             cat NOTES.md 2>/dev/null || echo "_(not generated -- an earlier step failed)_"
+            echo ""
+            # Anything here but missing above was dropped as unconventional
+            # or as a skipped ci:/build: type.
+            echo "<details><summary>Commits since \`${LATEST:-the beginning}\`</summary>"
+            echo ""
+            if [ -n "$LATEST" ]; then
+              git log "${LATEST}..HEAD" --format="- %h %s"
+            else
+              git log --format="- %h %s" | head -40
+            fi
+            echo ""
+            echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"

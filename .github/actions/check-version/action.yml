@@ -1,0 +1,22 @@
+name: Check version
+description: Fail unless the value is a PEP 440 version with no v prefix. Empty passes.
+
+inputs:
+  version:
+    description: "Version to validate. Empty is accepted (nothing to check)."
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        [ -z "$VERSION" ] && exit 0
+        if ! echo "$VERSION" | grep -qE '^[0-9]+(\.[0-9]+)*(a[0-9]+|b[0-9]+|rc[0-9]+)?(\.post[0-9]+)?(\.dev[0-9]+)?$'; then
+          echo "::error::'$VERSION' is not a valid PEP 440 version (e.g. 1.2.3, 1.2.3rc1, 1.2.3.post1 -- no v prefix)"
+          exit 1
+        fi
