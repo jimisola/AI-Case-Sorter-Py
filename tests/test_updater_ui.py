@@ -94,9 +94,12 @@ def _pump_until(root, predicate, *, timeout: float = 5.0) -> bool:
 
 
 class _StreamResp:
-    def __init__(self, payload: bytes) -> None:
+    def __init__(self, payload: bytes, url: str = "https://x/app.tar.gz") -> None:
         self._payload = payload
         self.headers = {"Content-Length": str(len(payload))}
+        # requests exposes the *final* URL after redirects; _download
+        # re-checks it, since a redirect can downgrade https -> http.
+        self.url = url
 
     def raise_for_status(self) -> None: ...
 
