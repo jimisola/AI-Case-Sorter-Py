@@ -487,9 +487,9 @@ where `ticks` is the .NET `DateTime.Ticks` value.
 ## 7. Updates & Windows install
 
 Non-developers get the app without git, and keep it current from inside the app.
-There is no git dependency anywhere in this path: a release ZIP over HTTPS has
-the same trust anchor as `git pull` over HTTPS, and the source tree is ~1 MB, so
-delta transfer buys nothing.
+There is no git dependency anywhere in this path: a release tarball over HTTPS
+has the same trust anchor as `git pull` over HTTPS, and the source tree is
+~1 MB, so delta transfer buys nothing.
 
 **Version:** derived from the git tag at build time (`pyproject.toml`'s
 `[tool.hatch.version] source = "vcs"`, via hatch-vcs), not hand-bumped —
@@ -509,14 +509,18 @@ Two things this makes load-bearing that weren't before:
   without `.git` either hard-crashes the build, or (with a
   `fallback-version` configured) silently *overwrites* an already-correct
   `sorter/_version.py` with that fallback. See `bootstrap.py`'s docstring.
-- **The version has to reach the user some other way, then.** `publish.yml`
-  builds the app archive `updater.py`'s `_pick_asset` looks for by exact
-  name (`ai-case-sorter-py-<tag>.zip`) from a real `git archive` of the
-  tagged commit, with the `sorter/_version.py` that same CI run's `uv build`
-  step generated (real `.git` present there) copied in explicitly, since
-  `git archive` never includes untracked files. That's what makes a
-  downloaded release able to report its own version correctly with no `.git`
-  anywhere in it.
+- **The version has to reach the user some other way, then.** `updater.py`'s
+  `_pick_asset` downloads the release's own **sdist** by exact name
+  (`ai_case_sorter_py-<tag>.tar.gz`) — the same file `uv build` already
+  produces and `publish.yml` already attaches, not a separately built
+  artifact. hatch-vcs's build hook stamps `sorter/_version.py` into every
+  build target it runs against, sdist included, so it already carries the
+  correct version with nothing to copy in by hand. (An earlier revision
+  built a bespoke `git archive`-based zip for this instead; that second
+  build path was the actual cause of a real version mismatch once the tree
+  looked "dirty" to git for unrelated reasons — gone rather than fixed
+  again.) That's what makes a downloaded release able to report its own
+  version correctly with no `.git` anywhere in it.
 
 **The flow is stage now, apply at next launch:**
 

@@ -1,9 +1,16 @@
 """In-app updater — check GitHub Releases, download, stage.
 
 Deliberately **git-free**: `git clone`/`git pull` over HTTPS and a release
-ZIP over HTTPS have the same trust anchor (TLS to github.com), and at this
-repo's size the delta-transfer advantage is worth nothing. Dropping git means
-non-developers never install a 60 MB dependency to receive a 1 MB update.
+tarball over HTTPS have the same trust anchor (TLS to github.com), and at
+this repo's size the delta-transfer advantage is worth nothing. Dropping git
+means non-developers never install a 60 MB dependency to receive a 1 MB
+update.
+
+The downloaded archive is the project's own **sdist** (`ai_case_sorter_py-
+<tag>.tar.gz`) — the same file `uv build`/`publish.yml` already produce and
+attach to every release, not a separately built artifact. hatch-vcs's build
+hook stamps `sorter/_version.py` into every build target, so the sdist
+already carries the correct version with nothing extra to keep in sync.
 
 The flow is **stage now, apply at next launch**:
 
@@ -30,7 +37,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import zipfile
+import tarfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -72,7 +79,7 @@ class UpdateInfo:
 
     version: str  # normalized, no leading "v"
     tag: str  # the tag as GitHub reports it
-    url: str  # ZIP to download
+    url: str  # tarball to download
     notes: str = ""  # release body (markdown)
     size: int | None = None
     published_at: str = ""
@@ -184,20 +191,24 @@ def _strip_tag_prefix(tag: str) -> str:
 
 
 def _expected_asset_name(tag: str) -> str:
-    return f"ai-case-sorter-py-{_strip_tag_prefix(tag)}.zip"
+    # The sdist's normalized distribution name -- hatchling replaces the
+    # hyphens in "ai-case-sorter-py" with underscores per PEP 503/625. This
+    # is the same file `uv build` already produces and publish.yml already
+    # attaches; there is no separate app-archive asset to build.
+    return f"ai_case_sorter_py-{_strip_tag_prefix(tag)}.tar.gz"
 
 
 def _pick_asset(release: dict[str, Any], tag: str) -> tuple[str, int | None]:
-    """Match the purpose-built app archive by its exact name, not "any .zip".
+    """Match the sdist by its exact name, not "any .tar.gz".
 
-    A release also carries a wheel and an sdist (see the publish workflow) --
-    neither matches this, since a wheel ends in ``.whl`` and an sdist in
-    ``.tar.gz``. But "the first .zip asset" was never a safe rule on its own:
-    the day anyone attached an unrelated ``.zip`` to a release, in upload
-    order ahead of the real one, it would have silently become the tree
-    unpacked over the app folder. Falls back to the tag source archive if the
-    named asset isn't published, same as before -- a release with no assets
-    still updates correctly.
+    A release also carries a wheel (``.whl``), which never matches this. But
+    "the first .tar.gz asset" was never a safe rule on its own: the day
+    anyone attached an unrelated ``.tar.gz`` to a release, in upload order
+    ahead of the real one, it would have silently become the tree unpacked
+    over the app folder. Falls back to the tag source archive if the named
+    asset isn't published, same as before -- a release with no assets still
+    updates correctly, just without a baked-in version (see apply_update's
+    ``_stamp_version``).
     """
     expected = _expected_asset_name(tag)
     for asset in release.get("assets") or []:
@@ -207,7 +218,7 @@ def _pick_asset(release: dict[str, Any], tag: str) -> tuple[str, int | None]:
             size = asset.get("size")
             return str(url), int(size) if isinstance(size, int) else None
     repo = update_repo()
-    return f"https://github.com/{repo}/archive/refs/tags/{tag}.zip", None
+    return f"https://github.com/{repo}/archive/refs/tags/{tag}.tar.gz", None
 
 
 def check_for_update(
@@ -313,27 +324,36 @@ def clear_pending() -> None:
         pass
 
 
-def _safe_members(zf: zipfile.ZipFile) -> list[tuple[zipfile.ZipInfo, PurePosixPath]]:
-    """Validate archive entries and strip GitHub's top-level folder.
+def _safe_members(tf: tarfile.TarFile) -> list[tuple[tarfile.TarInfo, PurePosixPath]]:
+    """Validate archive entries and strip the sdist's top-level folder.
 
     Rejects the same shapes ``model_io`` rejects — ``..`` traversal and
     absolute paths — because this archive is written straight into the app
-    folder. GitHub's source archives nest everything under
-    ``<repo>-<tag>/``; that single wrapper is stripped so the tree lines up
-    with the app folder.
+    folder. A tarball can additionally contain symlinks, hardlinks, and
+    device/fifo entries, none of which a ZIP can express; unlike the
+    traversal checks below, a symlink pointing outside the extraction
+    directory is a real, well-known tarfile attack class, so anything that
+    isn't a plain regular file is rejected outright rather than skipped —
+    silently ignoring a symlink could still let it shadow a real file's
+    resolution elsewhere in the tree. Both hatch's sdist and GitHub's
+    tag-archive fallback nest everything under one top-level directory
+    (``<name>-<version>/`` / ``<repo>-<tag>/``); that wrapper is stripped so
+    the tree lines up with the app folder.
     """
-    raw: list[tuple[zipfile.ZipInfo, PurePosixPath]] = []
+    raw: list[tuple[tarfile.TarInfo, PurePosixPath]] = []
     total = 0
-    for entry in zf.infolist():
-        name = entry.filename.replace("\\", "/")
-        if name.endswith("/"):
+    for entry in tf.getmembers():
+        name = entry.name.replace("\\", "/")
+        if entry.isdir():
             continue
+        if not entry.isreg():
+            raise UpdateError(f"Update archive contains a non-regular-file entry: {entry.name}")
         if name.startswith("/") or (len(name) > 1 and name[1] == ":"):
-            raise UpdateError(f"Update archive contains an absolute path: {entry.filename}")
+            raise UpdateError(f"Update archive contains an absolute path: {entry.name}")
         rel = PurePosixPath(name.lstrip("/"))
         if any(part == ".." for part in rel.parts):
-            raise UpdateError(f"Update archive contains a traversal path: {entry.filename}")
-        total += entry.file_size
+            raise UpdateError(f"Update archive contains a traversal path: {entry.name}")
+        total += entry.size
         if total > MAX_ARCHIVE_BYTES:
             raise UpdateError("Update archive is implausibly large; refusing to extract.")
         raw.append((entry, rel))
@@ -406,18 +426,18 @@ def stage_update(
     """
     updates = paths.updates_dir()
     updates.mkdir(parents=True, exist_ok=True)
-    archive = updates / "download.zip"
+    archive = updates / "download.tar.gz"
     staging = updates / "staging"
 
     shutil.rmtree(staging, ignore_errors=True)
     try:
         _download(info.url, archive, progress, session, timeout)
 
-        if not zipfile.is_zipfile(archive):
-            raise UpdateError("Downloaded file is not a valid ZIP archive.")
+        if not tarfile.is_tarfile(archive):
+            raise UpdateError("Downloaded file is not a valid tar.gz archive.")
 
-        with zipfile.ZipFile(archive) as zf:
-            members = _safe_members(zf)
+        with tarfile.open(archive, mode="r:gz") as tf:
+            members = _safe_members(tf)
             names = {str(rel) for _, rel in members}
             missing = [e for e in REQUIRED_ENTRIES if e not in names]
             if missing:
@@ -426,7 +446,10 @@ def stage_update(
             for entry, rel in members:
                 out = staging / Path(*rel.parts)
                 out.parent.mkdir(parents=True, exist_ok=True)
-                with zf.open(entry) as src, open(out, "wb") as dst:
+                src = tf.extractfile(entry)
+                if src is None:
+                    raise UpdateError(f"Could not read {entry.name} from the update archive.")
+                with src, open(out, "wb") as dst:
                     shutil.copyfileobj(src, dst)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)

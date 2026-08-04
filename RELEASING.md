@@ -52,8 +52,9 @@ all -- three different answers to "what version is this?", one of them shown to 
 
 How the version reaches a user who never has `.git`:
 
-- **A downloaded release** gets `ai-case-sorter-py-<tag>.zip`, which `publish.yml` builds from
-  a `git archive` of the tagged commit with the CI-generated `sorter/_version.py` copied in.
+- **A downloaded release** gets `ai_case_sorter_py-<tag>.tar.gz` -- the project's own sdist,
+  the same file `uv build` already produces for every push to `main`, not a separately built
+  artifact. hatch-vcs's build hook stamps `sorter/_version.py` into it automatically.
   `sorter/updater.py` looks for that asset by exact name.
 - **A pip/uv install** (if PyPI is ever enabled) reads it from package metadata.
 - **A plain `git clone` that was never built** falls back to `0.0.0+unknown`. Expected -- it's

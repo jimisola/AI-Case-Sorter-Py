@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import io
+import tarfile
 import time
-import zipfile
 from pathlib import Path
 
 import pytest
@@ -58,14 +58,22 @@ class _FakeApp:
 
 
 def _info() -> UpdateInfo:
-    return UpdateInfo(version="9.9.9", tag="v9.9.9", url="https://x/app.zip", notes="- Faster sorting", size=2_500_000)
+    return UpdateInfo(
+        version="9.9.9", tag="v9.9.9", url="https://x/app.tar.gz", notes="- Faster sorting", size=2_500_000
+    )
 
 
 def _archive() -> bytes:
     buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr("AI-Case-Sorter-Py-v9.9.9/main.py", "new\n")
-        zf.writestr("AI-Case-Sorter-Py-v9.9.9/sorter/__init__.py", '__version__ = "9.9.9"\n')
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        for name, content in {
+            "ai_case_sorter_py-9.9.9/main.py": "new\n",
+            "ai_case_sorter_py-9.9.9/sorter/__init__.py": '__version__ = "9.9.9"\n',
+        }.items():
+            data = content.encode("utf-8")
+            info = tarfile.TarInfo(name=name)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
     return buf.getvalue()
 
 
@@ -164,13 +172,13 @@ def test_download_stages_and_switches_to_restart(root, monkeypatch) -> None:
 
 
 def test_download_failure_offers_a_retry(root, monkeypatch) -> None:
-    monkeypatch.setattr(requests, "get", lambda *a, **k: _StreamResp(b"not a zip"))
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _StreamResp(b"not a tarball"))
     dlg = UpdateDialog(root, info=_info(), app=_FakeApp())
 
     dlg._on_primary()
     assert _pump_until(root, lambda: dlg._primary.cget("text") == "Try Again"), "failure was never surfaced"
     assert str(dlg._primary.cget("state")) == "normal"
-    assert "ZIP" in dlg._progress_var.get()
+    assert "tar.gz" in dlg._progress_var.get()
     assert updater.pending_update() is None
     dlg.destroy()
 

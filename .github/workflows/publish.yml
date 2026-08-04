@@ -67,44 +67,24 @@ jobs:
           name: dist
           path: dist/
 
-      # The purpose-built app archive sorter/updater.py's _pick_asset looks
-      # for by exact name (ai-case-sorter-py-<tag>.zip). This is what makes
-      # git-tag-derived versioning (pyproject.toml's [tool.hatch.version])
-      # reach a user at all: the wheel/sdist above aren't an app tree the
-      # updater can unpack over the app folder, and GitHub's own
-      # auto-generated source archive (the fallback when this asset is
-      # absent) has no .git in it, so a version derived at unpack time there
-      # would have nothing to derive from. `uv build` above already ran
-      # hatch-vcs's hook against this real checkout's real git history, so
-      # sorter/_version.py -- gitignored, never committed -- exists on disk
-      # right now with the correct version; git archive alone wouldn't
-      # include it, so it's added explicitly. Verified this exact sequence
-      # locally before writing it here: extracted a real git archive of this
-      # repo, confirmed sorter/_version.py was (correctly) absent from it,
-      # copied it in, and confirmed the resulting zip carries it.
-      - name: Build the app archive
-        if: github.event_name == 'release'
-        env:
-          TAG: ${{ github.event.release.tag_name }}
-        run: |
-          VERSION="${TAG#v}"
-          ASSET_NAME="ai-case-sorter-py-${VERSION}.zip"
-          mkdir -p /tmp/app-archive
-          git archive HEAD | tar -x -C /tmp/app-archive
-          cp sorter/_version.py /tmp/app-archive/sorter/_version.py
-          (cd /tmp/app-archive && zip -q -r "$GITHUB_WORKSPACE/$ASSET_NAME" .)
-          echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
-
-      # Attaches the wheel + sdist + app archive to the release that
-      # triggered this run -- a real "pre-built download" story with zero
-      # PyPI dependency, live regardless of whether publish-to-pypi below is
-      # ever turned on.
+      # No separate app-archive build step: sorter/updater.py's _pick_asset
+      # downloads the sdist above by exact name (ai_case_sorter_py-<tag>.tar.gz).
+      # hatch-vcs's build hook already stamps sorter/_version.py into every
+      # build target, sdist included, so it carries the correct version with
+      # nothing extra to keep in sync. This used to be a hand-built zip
+      # (git archive + a manual copy of _version.py); that second build path
+      # was the actual cause of a real version mismatch once, so it's gone
+      # rather than fixed again.
+      #
+      # Attaches the wheel + sdist to the release that triggered this run --
+      # a real "pre-built download" story with zero PyPI dependency, live
+      # regardless of whether publish-to-pypi below is ever turned on.
       - name: Attach artifacts to the release
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$TAG" dist/* "$ASSET_NAME"
+        run: gh release upload "$TAG" dist/*
 
   # Gated behind a repo variable, unset = off, so merging this workflow
   # changes nothing until a maintainer deliberately opts in (Settings ->
