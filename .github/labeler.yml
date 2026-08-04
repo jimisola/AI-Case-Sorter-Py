@@ -6,7 +6,8 @@
 #
 # NOTE: actions/labeler does not create labels -- every label named here must
 # already exist in the repo or the action errors. They are declared in
-# .github/settings.yml; .github/REPO_SETUP.md has the `gh label create` form.
+# .github/settings.yml, which repository-settings/app applies for you; without
+# that app they have to be created by hand.
 
 ui:
   - changed-files:
