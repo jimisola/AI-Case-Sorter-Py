@@ -4,7 +4,8 @@ description: Fail unless the value is a PEP 440 version with no v prefix. Empty 
 inputs:
   version:
     description: "Version to validate. Empty is accepted (nothing to check)."
-    required: true
+    required: false
+    default: ""
 
 runs:
   using: composite

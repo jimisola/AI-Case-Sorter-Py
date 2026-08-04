@@ -14,10 +14,10 @@ inputs:
 runs:
   using: composite
   steps:
-    # Digest-pinned: a release asset is mutable upstream, and callers hold
-    # contents: write. Plain binary rather than orhun/git-cliff-action because
-    # that action's `version` output is the latest existing release, not what
-    # --bumped-version computes.
+    # Digest-pinned: a release asset is mutable upstream, and at least one
+    # caller (release.yml) holds contents: write. Plain binary rather than
+    # orhun/git-cliff-action because that action's `version` output is the
+    # latest existing release, not what --bumped-version computes.
     - name: Install git-cliff
       shell: bash
       env:
@@ -33,7 +33,7 @@ runs:
         # $GITHUB_PATH write (zizmor flags the latter).
         tar -xzf "$TARBALL" --strip-components=1 -C /usr/local/bin \
           "git-cliff-${GIT_CLIFF_VERSION}/git-cliff"
-        rm -f "$TARBALL"
+        rm -rf "$(dirname "$TARBALL")"
 
     - name: Verify
       shell: bash

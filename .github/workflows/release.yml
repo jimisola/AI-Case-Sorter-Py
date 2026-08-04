@@ -48,6 +48,13 @@ jobs:
         with:
           version: ${{ inputs.version }}
 
+      # Captured before "Push tag" creates the new tag at HEAD -- git
+      # describe run after that would find the just-created tag instead.
+      - name: Record previous tag
+        id: previous
+        run: |
+          echo "tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "")" >> "$GITHUB_OUTPUT"
+
       - name: Resolve version
         id: resolve
         env:
@@ -151,6 +158,7 @@ jobs:
           SOURCE: ${{ steps.resolve.outputs.source }}
           REF: ${{ inputs.ref || github.ref }}
           DRY_RUN: ${{ inputs.dry-run }}
+          LATEST: ${{ steps.previous.outputs.tag }}
         run: |
           # Test the value: "false" is non-empty, so ${DRY_RUN:+...} would
           # expand for both.
@@ -161,7 +169,6 @@ jobs:
             HEADING="Release"
             MODE="tag pushed, draft release created"
           fi
-          LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
           {
             echo "### $HEADING"
             echo ""
