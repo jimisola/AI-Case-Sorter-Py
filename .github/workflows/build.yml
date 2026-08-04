@@ -92,10 +92,13 @@ jobs:
           sudo apt-get install -y xvfb
 
       # main.py has no headless flag, so a full run blocks on the Tk main
-      # loop. This starts the real launcher, gives it a generous window to
-      # get through uv install + dependency sync, then kills it -- not a
-      # substitute for an interactive run, but it does exercise the same
-      # bootstrap.py every user goes through, on a stock runner image.
+      # loop and the launcher never exits on its own. So wait for the line
+      # bootstrap.py prints when it hands off to the app rather than for the
+      # process: everything under test (uv install, dependency sync, the
+      # Linux runtime-lib check) has happened by then, and the previous
+      # fixed 60x5s loop could only ever end by exhausting all 300 seconds.
+      # 300s stays, as a ceiling rather than a floor.
+      #
       # Output is redirected and dumped afterward unconditionally (not just on
       # failure): a backgrounded/hidden process's stdout doesn't reliably
       # surface in the step log otherwise, verified the hard way -- neither
@@ -109,14 +112,28 @@ jobs:
           export DISPLAY=:99
           timeout 300 ./start.sh --auto > bootstrap.log 2>&1 &
           LAUNCH_PID=$!
-          for _ in $(seq 1 60); do
+          READY=0
+          for _ in $(seq 1 300); do
+            if grep -q 'Starting the app' bootstrap.log 2>/dev/null; then
+              READY=1
+              break
+            fi
+            # The launcher exiting before that line means it failed; stop
+            # waiting and let the dumped log below show why.
             kill -0 "$LAUNCH_PID" 2>/dev/null || break
-            sleep 5
+            sleep 1
           done
+          # Give Tk a moment to initialize, so an immediate crash still lands
+          # in the log rather than being killed before it can be printed.
+          sleep 10
           kill "$LAUNCH_PID" 2>/dev/null || true
           wait "$LAUNCH_PID" 2>/dev/null || true
           echo "----- bootstrap.py output -----"
           cat bootstrap.log || true
+          if [ "$READY" -ne 1 ]; then
+            echo "::error::bootstrap.py never reached the app-launch step."
+            exit 1
+          fi
 
       # A PowerShell background Job, not Start-Process -RedirectStandardOutput:
       # the previous attempt at this (Start-Process -WindowStyle Hidden +
@@ -124,6 +141,11 @@ jobs:
       # either redirect file and no clear error -- the combination is a known
       # flaky one for launching a .bat this way. Start-Job captures the
       # child's streams natively, no file redirection involved.
+      #
+      # Same reason as the Linux step for polling rather than waiting: the job
+      # never completes on its own, so Wait-Job -Timeout 300 always waited the
+      # full five minutes. -Keep leaves the output on the job so the dump
+      # below still shows everything.
       - name: Launch and wait (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -132,11 +154,23 @@ jobs:
             Set-Location $using:PWD
             & .\start.bat --auto 2>&1
           }
-          Wait-Job -Job $job -Timeout 300 | Out-Null
+          $ready = $false
+          foreach ($i in 1..300) {
+            $sofar = Receive-Job -Job $job -Keep | Out-String
+            if ($sofar -match 'Starting the app') { $ready = $true; break }
+            if ($job.State -ne 'Running') { break }
+            Start-Sleep -Seconds 1
+          }
+          # Let Tk initialize, so an immediate crash still reaches the log.
+          Start-Sleep -Seconds 10
           Write-Host "----- bootstrap.py output (job state: $($job.State)) -----"
-          Receive-Job -Job $job
+          Receive-Job -Job $job -Keep
           Stop-Job -Job $job -ErrorAction SilentlyContinue
           Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+          if (-not $ready) {
+            Write-Host "::error::bootstrap.py never reached the app-launch step."
+            exit 1
+          }
 
       # The real assertion: not "a file exists" but "the resulting environment
       # actually works". Two separate checks, since `uv run` rejects

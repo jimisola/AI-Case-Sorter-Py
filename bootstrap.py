@@ -320,6 +320,14 @@ def main(argv: list[str] | None = None) -> int:
 
     ensure_linux_runtime_libs(uv, auto_install)
 
+    # Everything this file is responsible for is done at this point; from
+    # here on the process is just the app. Worth saying out loud on a first
+    # launch, where the sync above can run for minutes and the Tk window
+    # takes a few more seconds to appear -- and build.yml's launcher-smoke
+    # waits for exactly this line rather than a fixed timeout, since the
+    # app never exits on its own.
+    log("Starting the app ...")
+
     # --no-sync, not --frozen: `uv run` syncs implicitly by default even with
     # --frozen (frozen only constrains *how* it syncs, not whether), which
     # would silently redo the project build this function just went out of
