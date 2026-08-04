@@ -1,4 +1,4 @@
-name: Installer Smoke
+name: Verify Installer
 
 # install-windows.ps1 is not part of the normal dev loop the way
 # start.sh/start.bat are -- nobody runs it while iterating on the app, it is
