@@ -64,12 +64,20 @@ UV_VERSION = "0.12.1"
 UV_INSTALL_DIR = ROOT / ".uv" / "bin"
 
 
+# flush=True because stdout is block-buffered whenever it isn't a terminal,
+# and this process ends by being killed while still inside main.py's Tk loop
+# -- so an unflushed buffer is never written at all. That is not theoretical:
+# build.yml's launcher-smoke redirects to a file and dumped it afterwards,
+# and the file came back empty every run, which is why its comment used to
+# say no [bootstrap] lines ever appeared. It also matters to a user watching
+# a multi-minute first-launch sync: block-buffered progress messages arrive
+# in 4 KB lumps, which reads as a hang.
 def log(msg: str) -> None:
-    print(f"[bootstrap] {msg}")
+    print(f"[bootstrap] {msg}", flush=True)
 
 
 def warn(msg: str) -> None:
-    print(f"[bootstrap] {msg}", file=sys.stderr)
+    print(f"[bootstrap] {msg}", file=sys.stderr, flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +327,14 @@ def main(argv: list[str] | None = None) -> int:
         ) from exc
 
     ensure_linux_runtime_libs(uv, auto_install)
+
+    # Everything this file is responsible for is done at this point; from
+    # here on the process is just the app. Worth saying out loud on a first
+    # launch, where the sync above can run for minutes and the Tk window
+    # takes a few more seconds to appear -- and build.yml's launcher-smoke
+    # waits for exactly this line rather than a fixed timeout, since the
+    # app never exits on its own.
+    log("Starting the app ...")
 
     # --no-sync, not --frozen: `uv run` syncs implicitly by default even with
     # --frozen (frozen only constrains *how* it syncs, not whether), which
