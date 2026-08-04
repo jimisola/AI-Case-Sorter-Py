@@ -575,6 +575,9 @@ flowchart TD
     Release workflow — nothing auto-detects it. Verified against git-cliff
     2.13.1 and pinned in `tests/test_cliff_config.py`, which runs the real
     binary in CI (`release-config` job in `lint.yml`).
+  - Each changelog line also carries `by @user` and, for a **squash-merged**
+    PR only, `in #N` — see `RELEASING.md` for why the two resolve
+    independently.
 - **Threading rule:** never touch Tk widgets off the main thread. Do blocking
   work in `run_worker`/daemon threads and `bus.post(...)`; the drain loop
   delivers handlers on the main thread. **`widget.after()` is not an escape

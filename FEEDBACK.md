@@ -254,7 +254,9 @@ it's all in repo/org settings or third-party app installs.
    so this can be decided later — but it determines what gets attached to a release.
 2. **PyPI name.** PyPI has no reservation mechanism; a name is yours only once you've published.
    If `ai-case-sorter-py` matters, someone should push a `0.0.1` placeholder.
-3. **DCO sign-off** — want it required on contributions? Affects the PR template.
+3. ~~**DCO sign-off** — want it required on contributions? Affects the PR template.~~ Resolved:
+   CONTRIBUTING.md already required it; the PR template checklist just never mentioned it. Fixed
+   in jimisola/AI-Case-Sorter-Py#2.
 4. **`CODEOWNERS`** — `* @sjseth`, or something narrower?
 
 ---
