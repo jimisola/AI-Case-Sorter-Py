@@ -56,6 +56,11 @@ Settings → Code security.
 
 - [ ] **Install the Renovate GitHub App** on this repository — `.github/renovate.json5`
       does nothing until the app is installed; it won't self-activate
+- [ ] **Enable Issues** (Settings → General → Features). `.github/settings.yml` declares
+      `has_issues: true`, but that only takes effect once `repository-settings/app` is
+      installed — without it, or until then, this needs toggling by hand. The issue
+      templates, `triage`/subsystem labels, and `labeler.yml` all depend on Issues being on;
+      none of them do anything on a repo where it's off.
 - [ ] Enable GitHub Discussions (the issue templates route support questions there
       instead of Issues)
 - [ ] Approve the first CI run on a new contributor's PR — GitHub holds workflow runs
