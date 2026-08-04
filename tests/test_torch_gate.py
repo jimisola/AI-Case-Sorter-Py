@@ -52,21 +52,32 @@ def test_active_model_with_checkpoint_uses_local_inference(tmp_path: Path) -> No
     assert classifier.uses_local_inference(db) is True
 
 
-def test_untrained_active_model_does_not_use_local_inference(tmp_path: Path) -> None:
-    """No checkpoint yet → classify goes over HTTP, so no torch is needed."""
+def test_an_active_model_routes_locally_even_without_a_checkpoint(
+    tmp_path: Path,
+) -> None:
+    """Routing follows the active model, not the checkpoint.
+
+    A missing checkpoint is a failure to report, not a reason to switch to
+    HTTP — so this still counts as local, and `checkpoint_problem` is what
+    tells the user it won't work.
+    """
     db = _seed_db(tmp_path)
     seed = ModelRepo(db).list()[0]
     SettingsRepo(db).set_active_model_id(seed.id)
     assert seed.model_path in (None, "")
-    assert classifier.uses_local_inference(db) is False
+    assert classifier.uses_local_inference(db) is True
+    assert classifier.has_local_checkpoint(seed) is False
+    assert classifier.checkpoint_problem(db) is not None
 
 
-def test_missing_checkpoint_file_does_not_use_local_inference(tmp_path: Path) -> None:
-    """A model_path pointing at a deleted file falls back to HTTP, not a crash."""
+def test_a_deleted_checkpoint_is_reported_not_routed_to_http(
+    tmp_path: Path,
+) -> None:
     db = _seed_db(tmp_path)
     model = _local_model(db, tmp_path)
     Path(model.model_path).unlink()
-    assert classifier.uses_local_inference(db) is False
+    assert classifier.uses_local_inference(db) is True
+    assert classifier.checkpoint_problem(db) is not None
 
 
 def test_no_db_does_not_use_local_inference() -> None:

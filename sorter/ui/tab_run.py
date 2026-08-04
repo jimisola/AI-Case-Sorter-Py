@@ -1523,6 +1523,19 @@ class RunTab(ttk.Frame):
         """
         return classifier.uses_local_inference(self.app.db)
 
+    def _model_ready(self) -> bool:
+        """Refuse to start when the active model has no usable checkpoint.
+
+        `classify_active` would raise anyway, but only after the machine has
+        fed and imaged a case. Catching it here keeps the brass in the hopper
+        and puts the explanation in a dialog instead of the status bar.
+        """
+        problem = classifier.checkpoint_problem(self.app.db)
+        if problem is None:
+            return True
+        messagebox.showerror("Model not ready", problem, parent=self)
+        return False
+
     def _toggle_run(self) -> None:
         controller = self.app.run_controller
         if controller is None:
@@ -1536,6 +1549,8 @@ class RunTab(ttk.Frame):
             return
         if self._is_running:
             controller.stop()
+            return
+        if not self._model_ready():
             return
         # A local model can't classify without torch, and the failure would
         # otherwise land after the machine has already fed a case. Offer the
@@ -1564,6 +1579,8 @@ class RunTab(ttk.Frame):
                 "AI not configured",
                 "Set endpoint, API key and model on the AI Config tab first.",
             )
+            return
+        if not self._model_ready():
             return
         if self._needs_torch() and not torch_gate.ensure_torch(
             self, self._manual_feed, reason="Sorting needs PyTorch",

@@ -308,7 +308,10 @@ class TrainTab(ttk.Frame):
         if self._torch_prompt_shown:
             return True
         active = self._active_model()
-        if not classifier.model_uses_local_inference(active):
+        # No checkpoint → Feed predicts nothing either way, so there's nothing
+        # for torch to do. Capturing images for an untrained model is the
+        # normal path here, not an error.
+        if not classifier.has_local_checkpoint(active):
             return True
         if local_inference.is_installed():
             return True

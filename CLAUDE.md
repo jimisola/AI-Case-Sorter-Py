@@ -205,17 +205,26 @@ between them from the Run tab's template dropdown.
   → `classifier.classify_active` → `_resolve_destination(label, confidence)` →
   `broker.sort_and_move(slot)`. Handles the 5-position wheel pipeline
   (`_last_classified_slot`), the **confidence floor** (below → catch-all slot 0),
+  a `NoLocalCheckpointError` from `classify_active` (stops the run with the
+  reason; the Run tab also pre-flights this at Start so no case is fed),
   **auto-select trays**, **package/batch mode** (`_package_counts` under a lock),
   optional run-image storage, and feedback capture. Also `cycle_once()` (manual
   feed) and `test_once()` (feed+classify, no sort). Posts `run/*` and `test/*`.
 
 ### Classification
-- **`classifier.py`** — `classify_active`: routes to **local inference** when the
-  active model has a valid `model_path`, else to the **HTTP API**. Passes the
-  trained `image_size` through. `active_local_model` / `uses_local_inference`
-  expose that routing decision alone, so the UI can ask "does this action need
-  PyTorch?" before starting a run — keep them in lock-step with
-  `classify_active` or the install gate (§5) drifts from reality.
+- **`classifier.py`** — `classify_active`: **the active model alone picks the
+  backend.** A model is active → local inference; AI Config mode (no active
+  model) → HTTP. Passes the trained `image_size` through. A local model whose
+  checkpoint is missing raises `NoLocalCheckpointError` — it does **not**
+  degrade to HTTP. That fallback existed and was a trap: a renamed data folder
+  or an images-only community share left `model_path` unusable and the app
+  quietly POSTed case images to whatever the AI Config tab last pointed at,
+  surfacing only as a connection error naming a host the user wasn't knowingly
+  using. Switching backends is the user's call, on the Models tab. `active_model`
+  / `uses_local_inference` / `has_local_checkpoint` / `checkpoint_problem`
+  expose the decision alone, so the UI can ask "does this need PyTorch?" and
+  "can this model actually classify?" before starting a run — keep them in
+  lock-step with `classify_active` or the install gate (§5) drifts from reality.
 - **`local_inference.py`** — lazy-imports torch; picks the device once; caches
   loaded models by `(path, mtime)`; runs all inference through a single-threaded
   executor to keep cuDNN state warm. Detects the checkpoint's classifier layout

@@ -226,6 +226,94 @@ def test_stopping_a_run_is_never_gated(
         tab.destroy()
 
 
+def test_start_refuses_a_model_whose_checkpoint_is_missing(
+    root, tmp_path, monkeypatch, fake_dialog, no_torch,
+) -> None:
+    """The data-folder-rename case: refuse, don't quietly sort via HTTP.
+
+    Also must not offer the torch install — torch isn't the problem, and
+    installing 2 GB wouldn't fix a missing checkpoint.
+    """
+    db = _db(tmp_path, monkeypatch)
+    m = _activate_local_model(db, tmp_path)
+    Path(m.model_path).unlink()          # data folder renamed / model deleted
+    app = _FakeApp(db)
+    tab = RunTab(root, config=Config(db).load(), bus=EventBus(), app=app)
+    try:
+        errors = []
+        monkeypatch.setattr(
+            "sorter.ui.tab_run.messagebox.showerror",
+            lambda *a, **k: errors.append(a),
+        )
+        tab._toggle_run()
+        assert app.run_controller.started == 0
+        assert fake_dialog.instances == []
+        assert errors and "isn't there" in errors[0][1]
+    finally:
+        tab.destroy()
+
+
+def test_manual_feed_refuses_a_model_whose_checkpoint_is_missing(
+    root, tmp_path, monkeypatch, fake_dialog, no_torch,
+) -> None:
+    db = _db(tmp_path, monkeypatch)
+    m = _activate_local_model(db, tmp_path)
+    Path(m.model_path).unlink()
+    app = _FakeApp(db)
+    tab = RunTab(root, config=Config(db).load(), bus=EventBus(), app=app)
+    try:
+        monkeypatch.setattr(
+            "sorter.ui.tab_run.messagebox.showerror", lambda *a, **k: None,
+        )
+        tab._manual_feed()
+        assert app.run_controller.cycles == 0
+    finally:
+        tab.destroy()
+
+
+def test_ai_config_start_is_not_blocked_by_the_checkpoint_check(
+    root, tmp_path, monkeypatch, fake_dialog, no_torch,
+) -> None:
+    """AI Config mode has no checkpoint by definition — it must still run."""
+    db = _db(tmp_path, monkeypatch)
+    SettingsRepo(db).clear_active_model()
+    app = _FakeApp(db)
+    tab = RunTab(root, config=Config(db).load(), bus=EventBus(), app=app)
+    try:
+        errors = []
+        monkeypatch.setattr(
+            "sorter.ui.tab_run.messagebox.showerror",
+            lambda *a, **k: errors.append(a),
+        )
+        tab._toggle_run()
+        assert errors == []
+        assert app.run_controller.started == 1
+    finally:
+        tab.destroy()
+
+
+def test_stop_still_works_with_a_missing_checkpoint(
+    root, tmp_path, monkeypatch, fake_dialog, no_torch,
+) -> None:
+    """Never trap a running machine behind a dialog it can't clear."""
+    db = _db(tmp_path, monkeypatch)
+    m = _activate_local_model(db, tmp_path)
+    Path(m.model_path).unlink()
+    app = _FakeApp(db)
+    stopped = []
+    app.run_controller.stop = lambda: stopped.append(1)
+    tab = RunTab(root, config=Config(db).load(), bus=EventBus(), app=app)
+    try:
+        monkeypatch.setattr(
+            "sorter.ui.tab_run.messagebox.showerror", lambda *a, **k: None,
+        )
+        tab._set_running(True)
+        tab._toggle_run()
+        assert stopped == [1]
+    finally:
+        tab.destroy()
+
+
 # ----- Train tab ------------------------------------------------------------
 
 
