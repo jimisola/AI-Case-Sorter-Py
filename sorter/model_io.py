@@ -42,6 +42,7 @@ from .models import (
     Headstamp,
     ImageProcessingConfig,
     Model,
+    is_foreign_model,
     normalize_upload_mode,
     SUPPORTED_MODEL_MODES,
     TrainingConfig,
@@ -393,6 +394,12 @@ def _merge_onto_installed(incoming: Model, existing: Model, *, name: str) -> Mod
     incoming.id = existing.id
     incoming.name = name
     incoming.ai_model_config = existing.ai_model_config
+    # Ownership never downgrades on update. Without this, re-importing a
+    # community model from a plain ZIP (whose manifest says `Standard`, since
+    # that's what the publisher's own copy is) would quietly hand the user
+    # training rights on someone else's model.
+    if is_foreign_model(existing):
+        incoming.model_type = existing.model_type
     # Overwritten during extraction if the archive ships a checkpoint; keep
     # the installed one so an images-only archive doesn't orphan the model.
     incoming.model_path = existing.model_path
@@ -416,11 +423,19 @@ def import_model(
     images_target_dir: Path | str | None = None,
     models_target_dir: Path | str | None = None,
     update_existing: bool = True,
+    community_download: bool = False,
     progress: Callable[[int, int], None] | None = None,
 ) -> tuple[int, int]:
     """Import a model archive.
 
     Returns (cartridge_id, model_id).
+
+    Pass ``community_download=True`` when the archive came from the Community
+    tab. That marks the installed model `CommunityManaged`, which is what
+    makes it read-only for training — it belongs to whoever published it.
+    The default is False because a plain ZIP import is just as likely to be
+    the user restoring their *own* model onto a new machine, and that model
+    must stay trainable.
 
     An archive that carries a community UID already installed locally is an
     **update of that model**, not a new one: with ``update_existing`` (the
@@ -489,6 +504,13 @@ def import_model(
         model = model_from_export_dict(manifest.get("ModelInfo") or {})
         if model.model_mode not in SUPPORTED_MODEL_MODES:
             model.model_mode = "convnext_tiny"
+
+        # Ownership is decided by how the archive reached this machine, not by
+        # what its manifest claims. A publisher's own copy is `Standard` and
+        # that's what they export, so trusting the manifest would hand every
+        # downloader a trainable model.
+        if community_download:
+            model.model_type = "CommunityManaged"
 
         # Is this archive an update of something already installed?
         existing = (

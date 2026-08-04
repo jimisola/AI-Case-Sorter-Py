@@ -1,14 +1,18 @@
 """Modal that installs PyTorch + torchvision into the active venv.
 
-Training is gated on this so AI-Config-only users never pay the ~2 GB
-torch install cost. On open we detect a supported Nvidia GPU (compute
-capability ≥ 8.0). If one is present, the user gets to pick between
-the GPU build (CUDA 12.8 wheels) and the CPU build; otherwise only
-the CPU build is offered.
+Every local-model action is gated on this — training *and* inference — so
+AI-Config-only users never pay the ~2 GB torch install cost. Callers reach it
+through `torch_gate.ensure_torch` rather than constructing it directly; pass
+`reason` to say which action is asking, since "Training needs PyTorch" is the
+wrong headline when the user just pressed Start on the Run tab.
+
+On open we detect a supported Nvidia GPU (compute capability ≥ 8.0). If one is
+present, the user gets to pick between the GPU build (CUDA 12.8 wheels) and the
+CPU build; otherwise only the CPU build is offered.
 
 `pip install` runs in a subprocess and streams its output to the dialog's
-console. On success the calling tab's `on_success` callback fires and the
-training run proceeds; on cancel/failure the venv is left as-is.
+console. On success the caller's `on_success` callback fires and the gated
+action proceeds; on cancel/failure the venv is left as-is.
 """
 from __future__ import annotations
 
@@ -31,6 +35,10 @@ _TARGETS = ("torch==2.9.1", "torchvision==0.24.1")
 _CPU_TARGETS = _TARGETS
 _CUDA_INDEX = "https://download.pytorch.org/whl/cu128"
 
+# Shown when the caller doesn't name the action. Deliberately generic: this
+# dialog now fronts inference as well as training.
+DEFAULT_REASON = "This model needs PyTorch"
+
 
 class TorchInstallDialog(tk.Toplevel):
     def __init__(
@@ -39,6 +47,7 @@ class TorchInstallDialog(tk.Toplevel):
         *,
         on_success: Callable[[], None] | None = None,
         on_cancel: Callable[[], None] | None = None,
+        reason: str | None = None,
     ) -> None:
         super().__init__(parent)
         self.title("Install PyTorch")
@@ -51,6 +60,7 @@ class TorchInstallDialog(tk.Toplevel):
 
         self._on_success = on_success
         self._on_cancel = on_cancel
+        self._reason = reason or DEFAULT_REASON
         self._proc: subprocess.Popen | None = None
         self._installing = False
         self._gpu: GpuInfo | None = detect_supported_nvidia_gpu()
@@ -70,12 +80,13 @@ class TorchInstallDialog(tk.Toplevel):
     # ----- UI build -----------------------------------------------------------
 
     def _build_header(self, parent: tk.Misc) -> None:
-        ttk.Label(parent, text="Training needs PyTorch",
+        ttk.Label(parent, text=self._reason,
                   style="Header.TLabel").pack(anchor="w")
 
         body = (
-            "Local training and local inference require PyTorch and torchvision. "
-            "The download is large and only happens once."
+            "Running or training a model on this computer requires PyTorch and "
+            "torchvision. The download is large and only happens once. "
+            "(Models classified by an AI Config server don't need it.)"
         )
         ttk.Label(parent, text=body, style="Muted.TLabel",
                   wraplength=660, justify=tk.LEFT).pack(

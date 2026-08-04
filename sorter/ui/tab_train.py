@@ -36,14 +36,14 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any
 
-from .. import image_proc, local_inference, paths
+from .. import classifier, image_proc, local_inference, paths
 from ..config import Config
 from ..events import EventBus
-from ..models import Model
+from ..models import Model, is_trainable
 from ..repository import HeadstampRepo, ModelRepo, SettingsRepo
 from ..training.dataset import class_counts, save_training_image
 from ..training.manager import TrainingJob, TrainingManager
-from .dialog_install_torch import TorchInstallDialog
+from . import torch_gate
 from .dialog_training_config import TrainingConfigDialog
 from .dialog_training_progress import TrainingProgressDialog
 from .theme import PALETTE
@@ -103,6 +103,9 @@ class TrainTab(ttk.Frame):
         self._pending_output: tuple[int, str] | None = None
         self._feed_in_flight = False
         self._lock = threading.Lock()
+        # Feed offers the torch install at most once per session — see
+        # `_offer_torch_for_predictions`.
+        self._torch_prompt_shown = False
 
         self._build_top_row()
         self._build_main_split()
@@ -287,7 +290,39 @@ class TrainTab(ttk.Frame):
 
     # ----- feed/capture/save workflow ----------------------------------------
 
+    def _offer_torch_for_predictions(self, sort_label: str | None) -> bool:
+        """Offer the torch install before a Feed that would predict a label.
+
+        Returns True if the caller should carry on with the feed now.
+
+        Unlike the Run tab this is an *offer*, not a gate. Capturing and
+        labelling images works perfectly well without torch — it's how you
+        build a training set in the first place — so declining must not cost
+        the user the feed. Only the predicted-label convenience is lost, and
+        the training run they eventually start is gated properly anyway.
+
+        Asked at most once per session so a user who said no isn't nagged on
+        every case. Cancelling re-enters the feed with the flag already set,
+        which is what makes "no thanks" stick.
+        """
+        if self._torch_prompt_shown:
+            return True
+        active = self._active_model()
+        if not classifier.model_uses_local_inference(active):
+            return True
+        if local_inference.is_installed():
+            return True
+        self._torch_prompt_shown = True
+        resume = lambda: self._feed(sort_label=sort_label)  # noqa: E731
+        return torch_gate.ensure_torch(
+            self, resume,
+            reason="Predicting labels needs PyTorch",
+            on_cancel=resume,
+        )
+
     def _feed(self, sort_label: str | None = None) -> None:
+        if not self._offer_torch_for_predictions(sort_label):
+            return
         with self._lock:
             if self._feed_in_flight:
                 return
@@ -491,6 +526,19 @@ class TrainTab(ttk.Frame):
             messagebox.showinfo("Pick a model first",
                                 "Activate a model on the Models tab.", parent=self)
             return
+        if not is_trainable(m):
+            # The tab is hidden for these, so reaching here means the active
+            # model changed while the tab was open. Refuse rather than fork
+            # someone else's model.
+            messagebox.showinfo(
+                "Community model",
+                f"“{m.name}” was downloaded from the community and is managed "
+                "by its publisher, so it can't be trained here.\n\n"
+                "To build on it, export it from the Models tab and import the "
+                "archive back as your own model.",
+                parent=self,
+            )
+            return
         if self.training_manager.is_running:
             messagebox.showinfo("Training in progress",
                                 "Cancel the current run first.", parent=self)
@@ -504,8 +552,9 @@ class TrainTab(ttk.Frame):
         # Torch isn't shipped in the base venv (~2 GB; AI-Config-only users
         # don't need it). Prompt for the install once on first Train click,
         # then re-enter this method when it finishes.
-        if not local_inference.is_available():
-            TorchInstallDialog(self, on_success=self._start_training, on_cancel=None)
+        if not torch_gate.ensure_torch(
+            self, self._start_training, reason="Training needs PyTorch",
+        ):
             return
 
         paths.ensure_model_subtree(m.id)

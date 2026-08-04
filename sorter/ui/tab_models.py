@@ -27,7 +27,7 @@ from ..config import Config
 from ..db import Database
 from ..events import EventBus
 from ..model_io import ExportMode, export_model, find_update_target, import_model
-from ..models import Headstamp, HeadstampParent, Model
+from ..models import Headstamp, HeadstampParent, Model, is_foreign_model
 from ..repository import (
     CartridgeRepo,
     HeadstampParentRepo,
@@ -313,7 +313,7 @@ class ModelsTab(ttk.Frame):
 
         def match_type(m: Model) -> bool:
             is_community = bool(m.community_model_uid)
-            is_readonly = m.model_type == "ReadOnly"
+            is_readonly = is_foreign_model(m)
             if type_filter == FILTER_TYPE_COMMUNITY:
                 return is_community
             if type_filter == FILTER_TYPE_READONLY:
@@ -335,8 +335,13 @@ class ModelsTab(ttk.Frame):
         return out
 
     def _describe_type(self, m: Model) -> str:
+        # A community *download* can't be trained here (it's the publisher's
+        # model), so say "read-only" — that's the user's only clue as to why
+        # the Train tab disappears when they activate it. A model the user
+        # shared themselves has a UID but is still theirs, and reads
+        # "Community".
         is_community = bool(m.community_model_uid)
-        is_readonly = m.model_type == "ReadOnly"
+        is_readonly = is_foreign_model(m)
         if is_community and is_readonly:
             return "Community (read-only)"
         if is_community:

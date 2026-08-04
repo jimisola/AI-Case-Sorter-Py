@@ -87,6 +87,12 @@ def _torch():
     """Lazy importer. Raises LocalInferenceError with a friendly message if missing."""
     global _torch_mod, _models_mod, _F_mod, _env_dumped
     if _torch_mod is None:
+        # torch is usually installed by the in-app dialog *while this process
+        # is running*, so the import-system's cached directory listing for
+        # site-packages predates it. Without this the first post-install
+        # import fails and the user is told to install what they just did.
+        import importlib
+        importlib.invalidate_caches()
         try:
             import torch
             from torchvision import models
@@ -501,8 +507,42 @@ def current_device_label() -> str:
     return _device_cache.type if _device_cache is not None else "n/a"
 
 
+def is_installed() -> bool:
+    """Is torch present, *without* importing it?
+
+    This is the check the install gate wants. `is_available()` fully imports
+    torch and, on the first call, probes the device and runs the environment
+    dump's synthetic benchmarks — seconds of work on a CUDA box. That is fine
+    on the inference thread, where it's paid once and the user is already
+    waiting on a classification, but it must never run on a button handler
+    just to decide whether to offer the install: it would freeze the UI every
+    time the user presses Start.
+
+    `find_spec` answers the same question for free. A torch that is present
+    but broken still gets caught downstream by `_torch()`, which raises
+    `LocalInferenceError` as it always has.
+    """
+    import importlib.util
+    # Same rationale as _torch(): a just-installed torch is invisible to a
+    # stale finder cache.
+    importlib.invalidate_caches()
+    try:
+        return (
+            importlib.util.find_spec("torch") is not None
+            and importlib.util.find_spec("torchvision") is not None
+        )
+    except (ImportError, ValueError):
+        # ImportError: a parent package is missing. ValueError: the module is
+        # in sys.modules with a None __spec__. Both mean "not usable".
+        return False
+
+
 def is_available() -> bool:
-    """Cheap check — does importing torch succeed?"""
+    """Does importing torch succeed?
+
+    Imports torch as a side effect — see `is_installed()` for the cheap
+    presence check to use from the UI thread.
+    """
     try:
         _torch()
         return True

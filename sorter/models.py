@@ -378,3 +378,33 @@ class Model:
             ),
             model_path=row["model_path"],
         )
+
+
+# `model_type` values that mean "this model belongs to someone else". A
+# download from the Community tab is stamped `CommunityManaged` by
+# `model_io.import_model(..., community_download=True)`; `ReadOnly` is the
+# legacy app's equivalent marker and is honoured the same way.
+#
+# NOTE: `community_model_uid` is deliberately NOT part of this test. Sharing
+# your own model stamps a UID onto your local copy (`dialog_share_model`), so
+# a UID means "this model exists in the community", not "this model is not
+# yours". Ownership is decided by how the model arrived on *this* machine.
+FOREIGN_MODEL_TYPES = frozenset({"CommunityManaged", "ReadOnly"})
+
+
+def is_foreign_model(model: "Model | None") -> bool:
+    """True when `model` was installed from the community rather than authored here."""
+    return bool(model is not None and model.model_type in FOREIGN_MODEL_TYPES)
+
+
+def is_trainable(model: "Model | None") -> bool:
+    """Can this model be trained (and have training images added) locally?
+
+    False for community downloads. The local checkpoint is a copy of the
+    publisher's: retraining it forks it away from the version they keep
+    updating, the archive usually ships without the training images the
+    model was built from, and the next published update would overwrite the
+    result anyway. Users who want to build on someone else's model export it
+    and import it back as their own.
+    """
+    return model is not None and not is_foreign_model(model)
