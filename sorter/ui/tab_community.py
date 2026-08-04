@@ -432,8 +432,11 @@ class CommunityTab(ttk.Frame):
                             f"Importing {name}: {pct}% ({step} / {total} files)"
                         )
 
+                # community_download=True marks the install as belonging to
+                # its publisher, which is what keeps the Train tab off it.
                 result = import_model(
-                    zip_path, db=self.db, progress=_import_progress,
+                    zip_path, db=self.db, community_download=True,
+                    progress=_import_progress,
                 )
                 self._record_installed_version(result[1], info)
                 return result

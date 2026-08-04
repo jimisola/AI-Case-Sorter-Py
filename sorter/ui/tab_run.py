@@ -30,9 +30,11 @@ from collections import defaultdict
 from tkinter import messagebox, ttk
 from typing import Callable
 
+from .. import classifier
 from ..events import EventBus
 from ..feedback import FeedbackService, debug_log, is_feedback_model
 from ..repository import ModelRepo
+from . import torch_gate
 from .theme import PALETTE, row_style
 from .widgets import ImagePanel
 
@@ -1512,6 +1514,28 @@ class RunTab(ttk.Frame):
 
     # ----- run actions --------------------------------------------------------
 
+    def _needs_torch(self) -> bool:
+        """Will the next classify in this run go through local inference?
+
+        Asks `classifier` rather than re-deriving the rule, so the install
+        prompt appears in exactly the cases where the run would otherwise
+        fail — and stays silent for AI Config users.
+        """
+        return classifier.uses_local_inference(self.app.db)
+
+    def _model_ready(self) -> bool:
+        """Refuse to start when the active model has no usable checkpoint.
+
+        `classify_active` would raise anyway, but only after the machine has
+        fed and imaged a case. Catching it here keeps the brass in the hopper
+        and puts the explanation in a dialog instead of the status bar.
+        """
+        problem = classifier.checkpoint_problem(self.app.db)
+        if problem is None:
+            return True
+        messagebox.showerror("Model not ready", problem, parent=self)
+        return False
+
     def _toggle_run(self) -> None:
         controller = self.app.run_controller
         if controller is None:
@@ -1525,9 +1549,18 @@ class RunTab(ttk.Frame):
             return
         if self._is_running:
             controller.stop()
-        else:
-            self._begin_wish_list_fetch(controller)
-            controller.start()
+            return
+        if not self._model_ready():
+            return
+        # A local model can't classify without torch, and the failure would
+        # otherwise land after the machine has already fed a case. Offer the
+        # install here; on success this method re-runs and starts the run.
+        if self._needs_torch() and not torch_gate.ensure_torch(
+            self, self._toggle_run, reason="Sorting needs PyTorch",
+        ):
+            return
+        self._begin_wish_list_fetch(controller)
+        controller.start()
 
     def _manual_feed(self) -> None:
         """Run one full classify+sort cycle (same flow as a continuous run)."""
@@ -1546,6 +1579,12 @@ class RunTab(ttk.Frame):
                 "AI not configured",
                 "Set endpoint, API key and model on the AI Config tab first.",
             )
+            return
+        if not self._model_ready():
+            return
+        if self._needs_torch() and not torch_gate.ensure_torch(
+            self, self._manual_feed, reason="Sorting needs PyTorch",
+        ):
             return
         self.app.run_worker(controller.cycle_once)
 

@@ -26,6 +26,7 @@ from .. import eval_report, evaluator, paths
 from ..db import Database
 from ..models import Model
 from ..repository import CartridgeRepo, HeadstampRepo, SettingsRepo
+from . import torch_gate
 from .dialog_image_preview import ImagePreviewDialog
 from .theme import PALETTE
 from .widgets import ImagePanel, ScrollableFrame
@@ -372,6 +373,13 @@ class ModelEvaluatorDialog(tk.Toplevel):
             return
         if not evaluator.list_images(folder):
             messagebox.showinfo("No images", "That folder has no images to evaluate.", parent=self)
+            return
+        # Evaluation is inference over a whole folder — offer the install here
+        # rather than letting the worker raise once it's under way. On success
+        # this method re-runs and the evaluation starts.
+        if not torch_gate.ensure_torch(
+            self, self._run, reason="Evaluating needs PyTorch",
+        ):
             return
 
         # Snapshot everything the worker needs on the UI thread — the worker
