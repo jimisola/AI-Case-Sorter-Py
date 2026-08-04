@@ -60,6 +60,17 @@ def _bumped_version(repo: Path) -> str:
     return result.stdout.strip()
 
 
+def _changelog(repo: Path) -> str:
+    result = subprocess.run(
+        ["git-cliff", "--config", "cliff.toml", "--unreleased", "--offline"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
+
+
 @pytest.mark.parametrize(
     ("base", "subject", "expected"),
     [
@@ -118,3 +129,20 @@ def test_tag_pattern_ignores_a_v_prefixed_tag(tmp_path: Path) -> None:
     subprocess.run(["git", "tag", "v1.0.0"], cwd=repo, check=True, capture_output=True)
 
     assert _bumped_version(repo) == "0.2.0"
+
+
+def test_changelog_line_degrades_gracefully_without_a_github_remote(tmp_path: Path) -> None:
+    """The `by @user in #N` attribution suffix reads commit.remote.username /
+    commit.remote.pr_number, both populated only by git-cliff's GitHub
+    integration (a real token, network access, and -- for pr_number
+    specifically -- a squash merge; see the comment above `body` in
+    cliff.toml). None of that is available to these throwaway repos, which
+    have no GitHub remote at all. The line must still render cleanly with
+    neither piece of attribution, not error out or leave a dangling "by @"
+    or "in #" with nothing after it -- that's what the {% if %} guards around
+    each field are for.
+    """
+    changelog = _changelog(_repo(tmp_path, "0.1.0", ["fix: a bug fix"]))
+    assert "- A bug fix" in changelog
+    assert "by @" not in changelog
+    assert " in #" not in changelog
