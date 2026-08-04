@@ -24,6 +24,7 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
+          # Twin of the PEP440 regex in release.yml -- keep them identical.
           if ! echo "$TAG" | grep -qE '^[0-9]+(\.[0-9]+)*(a[0-9]+|b[0-9]+|rc[0-9]+)?(\.post[0-9]+)?(\.dev[0-9]+)?$'; then
             echo "::error::Tag '$TAG' is not a valid PEP 440 version (e.g. 1.2.3, 1.2.3rc1, 1.2.3.post1 -- no v prefix)"
             exit 1
@@ -33,6 +34,12 @@ jobs:
         env:
           BRANCH: ${{ github.event.release.target_commitish }}
         run: |
+          # Twin of the branch guard in release.yml, and the duplication is
+          # deliberate rather than accidental: that one *prevents* a release
+          # from the wrong branch before a tag exists, this one *catches* one
+          # created by any other route -- e.g. by hand in the GitHub UI,
+          # which never runs release.yml at all. Two independent enforcement
+          # points is the point; keep the condition identical.
           if [[ "$BRANCH" != "main" && "$BRANCH" != hotfix/* && "$BRANCH" != release/* ]]; then
             echo "::error::Release must target main, hotfix/*, or release/* (got: '$BRANCH')"
             exit 1

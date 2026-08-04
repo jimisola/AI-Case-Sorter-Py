@@ -102,19 +102,10 @@ jobs:
           python-version: "3.13"
           enable-cache: true
 
-      # Same digest-pinned install as release.yml/release-preview.yml; keep the
-      # three in step when bumping the version.
-      - name: Install git-cliff
-        env:
-          GIT_CLIFF_VERSION: "2.13.1"
-          GIT_CLIFF_SHA256: "9a1263f24e59a2f508c7b3d3283c9dea94a8bf697f96dbc18cc783cac6284546"
-        run: |
-          curl -fsSL -o git-cliff.tar.gz \
-            "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
-          echo "${GIT_CLIFF_SHA256}  git-cliff.tar.gz" | sha256sum -c -
-          sudo tar -xzf git-cliff.tar.gz --strip-components=1 -C /usr/local/bin \
-            "git-cliff-${GIT_CLIFF_VERSION}/git-cliff"
-          rm git-cliff.tar.gz
+      # Version and digest live in the composite action -- one place to bump.
+      # This job asserts the bump mapping the docs promise, so it has to run
+      # the same git-cliff build the release actually uses.
+      - uses: ./.github/actions/setup-git-cliff
 
       - name: Install pytest from the lockfile
         run: uv sync --locked --only-group dev --no-install-project

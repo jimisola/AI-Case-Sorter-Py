@@ -5,12 +5,14 @@
 1. Merge whatever should be in the release to `main`. Commit subjects must follow
    [Conventional Commits](CONTRIBUTING.md#commit-messages-and-pr-titles-conventional-commits) --
    `check-semantic-pr.yml` already enforces that on every PR, so this should already be true.
-2. Every PR shows a **Release Preview** in its job summary: the next version git-cliff would
-   compute and a draft of the changelog, computed from `main` plus that PR's commits. Use it
-   to sanity-check what a release right now would look like, before actually cutting one. It
-   can also be run manually (Actions -> Release Preview -> Run workflow) against any `ref`,
-   which is how you preview a `release/*` or `hotfix/*` branch that has no open PR.
-3. When ready, run the **Release** workflow manually (Actions tab -> Release -> Run workflow):
+2. **Preview by running Release with `dry-run` left on** (it defaults to on). It resolves the
+   version, generates the changelog, and shows both in the job summary alongside the raw
+   commits they were derived from -- without pushing a tag or creating anything. That is the
+   sanity check: anything in the commit list but missing from the notes was dropped for a
+   reason (an unconventional subject, or a skipped `ci:`/`build:` type), which is how a
+   mistyped commit type gets caught before it becomes a wrong version bump.
+3. When ready, run the same **Release** workflow with `dry-run` unchecked
+   (Actions tab -> Release -> Run workflow):
    - `version`: **leave empty to auto-detect.** git-cliff computes the next version from the
      Conventional Commits since the last tag -- a `feat:` bumps the minor, a `fix:` the patch,
      a `!`/`BREAKING CHANGE:` the major. **While the project is pre-1.0 a breaking change

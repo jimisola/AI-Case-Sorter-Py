@@ -42,30 +42,8 @@ jobs:
           fetch-tags: true
           ref: ${{ inputs.ref || github.ref }}
 
-      # Same direct install as release-preview.yml, for the same reason:
-      # orhun/git-cliff-action's `version` output is the latest *existing*
-      # release, not what the passed args compute, so --bumped-version has to
-      # be read from the binary's own stdout. Using it for the changelog too
-      # keeps one tool in this workflow instead of a binary plus an action.
-      #
-      # Pinned by digest, not just by version: a GitHub release asset is
-      # mutable by its upstream owner, and this job holds contents: write plus
-      # a token that can push tags and create releases -- i.e. it can reach the
-      # very artifacts the in-app updater installs on users' machines. Every
-      # *action* here is SHA-pinned for that reason; a raw download deserves
-      # the same. The digest was cross-checked against upstream's published
-      # .sha512 for the same asset.
-      - name: Install git-cliff
-        env:
-          GIT_CLIFF_VERSION: "2.13.1"
-          GIT_CLIFF_SHA256: "9a1263f24e59a2f508c7b3d3283c9dea94a8bf697f96dbc18cc783cac6284546"
-        run: |
-          curl -fsSL -o git-cliff.tar.gz \
-            "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
-          echo "${GIT_CLIFF_SHA256}  git-cliff.tar.gz" | sha256sum -c -
-          tar -xzf git-cliff.tar.gz --strip-components=1 -C /usr/local/bin \
-            "git-cliff-${GIT_CLIFF_VERSION}/git-cliff"
-          rm git-cliff.tar.gz
+      # Version and digest live in the composite action -- one place to bump.
+      - uses: ./.github/actions/setup-git-cliff
 
       - name: Resolve version
         id: resolve
@@ -74,6 +52,10 @@ jobs:
           FORCE: ${{ inputs.force }}
         run: |
           AUTO="$(git-cliff --config cliff.toml --bumped-version)"
+          # Twin of the regex in check-release.yml -- keep them identical.
+          # Deliberately not factored into a shared action: a composite can
+          # export a step output but not a shell constant, so the indirection
+          # would cost more than the four duplicated characters save.
           PEP440='^[0-9]+(\.[0-9]+)*(a[0-9]+|b[0-9]+|rc[0-9]+)?(\.post[0-9]+)?(\.dev[0-9]+)?$'
 
           if [ -z "$REQUESTED" ]; then
@@ -199,6 +181,7 @@ jobs:
             HEADING="Release"
             MODE="tag pushed, draft release created"
           fi
+          LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
           {
             echo "### $HEADING"
             echo ""
@@ -208,9 +191,25 @@ jobs:
             echo "| Auto-detected | \`$AUTO\` |"
             echo "| Source | $SOURCE |"
             echo "| Ref | \`$REF\` |"
+            echo "| Previous tag | \`${LATEST:-(none yet)}\` |"
             echo "| Mode | $MODE |"
             echo ""
             echo "#### Release notes"
             echo ""
             cat NOTES.md 2>/dev/null || echo "_(not generated -- an earlier step failed)_"
+            echo ""
+            # The raw commit list the changelog is derived from. Worth showing
+            # next to it: anything here that is missing above was dropped for a
+            # reason (unconventional subject, or a skipped ci:/build: type), and
+            # seeing both together is how you catch a mistyped commit type
+            # before it becomes a wrong version bump.
+            echo "<details><summary>Commits since \`${LATEST:-the beginning}\`</summary>"
+            echo ""
+            if [ -n "$LATEST" ]; then
+              git log "${LATEST}..HEAD" --format="- %h %s"
+            else
+              git log --format="- %h %s" | head -40
+            fi
+            echo ""
+            echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,62 @@
+name: Setup git-cliff
+description: >-
+  Install a pinned, checksum-verified git-cliff onto PATH. Single source of the
+  version and digest, so a bump is one edit rather than one-per-caller.
+
+inputs:
+  version:
+    description: "git-cliff version, without the leading v."
+    required: false
+    default: "2.13.1"
+  sha256:
+    description: >-
+      Expected SHA-256 of the x86_64-unknown-linux-gnu tarball. Must be changed
+      together with `version` -- the default below belongs to the default above.
+    required: false
+    default: "9a1263f24e59a2f508c7b3d3283c9dea94a8bf697f96dbc18cc783cac6284546"
+
+runs:
+  using: composite
+  steps:
+    # Pinned by digest, not just by version: a GitHub release asset is mutable
+    # by its upstream owner, and the workflows calling this hold contents:
+    # write plus a token that can push tags and create releases -- i.e. they
+    # can reach the very artifacts the in-app updater installs on users'
+    # machines. Every *action* in this repo is SHA-pinned for that reason; a
+    # raw download deserves the same. The digest was cross-checked against
+    # upstream's published .sha512 for the same asset.
+    #
+    # Installed as a plain binary rather than via orhun/git-cliff-action:
+    # that action's `version` output is the latest *existing* release, not
+    # what the passed args compute, so `--bumped-version` has to be read from
+    # the binary's own stdout.
+    - name: Install git-cliff
+      shell: bash
+      env:
+        GIT_CLIFF_VERSION: ${{ inputs.version }}
+        GIT_CLIFF_SHA256: ${{ inputs.sha256 }}
+      run: |
+        set -euo pipefail
+        TARBALL="$(mktemp -d)/git-cliff.tar.gz"
+        curl -fsSL -o "$TARBALL" \
+          "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+        echo "${GIT_CLIFF_SHA256}  ${TARBALL}" | sha256sum -c -
+        # /usr/local/bin, no sudo, no $GITHUB_PATH write. It is already on
+        # PATH and writable by the runner user on ubuntu-latest -- proven by
+        # the release.yml call site this replaces, which did exactly this and
+        # ran green. The other call site used `sudo tar` into the same
+        # directory; that drift is resolved here in favour of the form that
+        # is demonstrably sufficient.
+        #
+        # Appending to $GITHUB_PATH would work too, but zizmor flags it (its
+        # github-env audit, high severity) because a PATH prepend is a code
+        # execution vector when the value is attacker-influenced. It isn't
+        # here, but not writing to it at all is better than arguing the point
+        # in a suppression comment.
+        tar -xzf "$TARBALL" --strip-components=1 -C /usr/local/bin \
+          "git-cliff-${GIT_CLIFF_VERSION}/git-cliff"
+        rm -f "$TARBALL"
+
+    - name: Verify
+      shell: bash
+      run: git-cliff --version
