@@ -127,6 +127,9 @@ known-first-party = ["sorter"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+    "integration: exercises a real external tool (uv build, git-cliff) instead of a synthetic fixture",
+]
 # The suite is threading-fragile by design (see tests/conftest.py): Tk widget
 # garbage collected on a worker thread calls into Tcl from the wrong thread
 # and can hang or abort the process. Do not add pytest-xdist or any plugin

@@ -30,7 +30,10 @@ from sorter import updater
 
 ROOT = Path(__file__).resolve().parent.parent
 
-pytestmark = pytest.mark.skipif(shutil.which("uv") is None, reason="uv not installed")
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(shutil.which("uv") is None, reason="uv not installed"),
+]
 
 # What an install has to have on disk to actually run, beyond the package
 # itself: the entry point, the dependency bootstrap, both launchers, and the
