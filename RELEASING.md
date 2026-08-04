@@ -87,7 +87,14 @@ Set by `cliff.toml`, matching the types `check-semantic-pr.yml` enforces:
 | `test` | Testing |
 | `security` | Security |
 | `style` | Style |
+| `revert` | Reverts |
 | `ci`, `build` | (omitted from the changelog -- internal tooling, not user-facing) |
 
 Commits that don't parse as Conventional Commits are skipped entirely (`filter_unconventional
 = true`), which is why every commit on this repo needs a properly-typed subject line.
+
+Each line also carries `by @user`, and `in #N` when it resolves: `remote.username` comes from
+the commit's author/committer email and works regardless of how a PR was merged, but
+`remote.pr_number` only ever resolves for a **squash merge** -- git-cliff matches a commit's
+SHA against a closed PR's `merge_commit_sha`, which a real merge commit's constituent commits
+never equal. See the comment above `body` in `cliff.toml` for the mechanism.
