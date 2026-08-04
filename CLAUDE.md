@@ -631,5 +631,14 @@ flowchart TD
   Still run `pytest` locally before pushing — faster feedback than waiting on
   CI. Most UI modules need a display — `xvfb-run -a pytest` covers them on a
   headless box; without tkinter installed those modules skip rather than
-  fail.
+  fail. `install-windows.ps1` gets its own workflow
+  (`.github/workflows/installer-smoke.yml`), not `build.yml`'s blanket
+  trigger: it needs a real published release to exercise its interesting
+  path (sdist matching, `tar.exe` extraction), so it's path-filtered to
+  `installer/**` on PR/push plus `release: published` — the most realistic
+  moment, since that event's checkout resolves to the tagged commit. It runs
+  with `shell: powershell` (Windows PowerShell 5.1), not `pwsh`, deliberately
+  — that's the interpreter a real double-click via `install-windows.bat`
+  uses, and the one the script's own top-of-file comment calls out for its
+  BOM/codepage decoding quirks.
 - See **`CONTRIBUTING.md`** for how to set up and contribute.

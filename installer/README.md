@@ -50,6 +50,9 @@ powershell -ExecutionPolicy Bypass -File install-windows.ps1 -Version v0.2.0
 
 # Install without launching
 powershell -ExecutionPolicy Bypass -File install-windows.ps1 -NoLaunch
+
+# Install from a fork's own releases (development/testing only)
+powershell -ExecutionPolicy Bypass -File install-windows.ps1 -Repo yourname/AI-Case-Sorter-Py
 ```
 
 ## Portable installs

@@ -1,0 +1,77 @@
+name: Installer Smoke
+
+# install-windows.ps1 is not part of the normal dev loop the way
+# start.sh/start.bat are -- nobody runs it while iterating on the app, it is
+# a one-shot onboarding script. It also needs a real published release to
+# exercise its interesting path (sdist matching, tar.exe extraction); on a
+# repo with none yet it would only ever hit the "no release, fall back to
+# the source zip" branch. So this gets its own trigger rather than
+# build.yml's blanket one: path-filtered on PR/push (fast feedback exactly
+# when the script itself changes, near-zero cost otherwise), plus
+# release:published -- the single most realistic moment, since the default
+# checkout for that event resolves to the tagged commit, testing the
+# installer as it existed at release time against the release just cut.
+on:
+  pull_request:
+    paths:
+      - "installer/**"
+  push:
+    branches: [main]
+    paths:
+      - "installer/**"
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  installer-smoke:
+    name: Windows installer actually installs
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      # -Repo $env:GITHUB_REPOSITORY, not the script's own hardcoded default:
+      # makes this self-adapting to wherever it runs -- the fork's own real
+      # releases today, whatever repo eventually hosts this upstream.
+      #
+      # shell: powershell (Windows PowerShell 5.1), not pwsh (PowerShell 7):
+      # that is the interpreter a real double-click via install-windows.bat
+      # actually uses, and the one the script's own top-of-file comment
+      # calls out by name for its BOM/codepage decoding quirks -- pwsh would
+      # not exercise that at all.
+      #
+      # -NoLaunch keeps this scoped to install + extract; the full
+      # bootstrap.py/uv-sync path is launcher-smoke's job, not this one's.
+      - name: Run the installer for real
+        shell: powershell
+        run: .\installer\install-windows.ps1 -Repo $env:GITHUB_REPOSITORY -NoLaunch
+
+      # The real assertion: not "the script exited 0" but "a working install
+      # landed with the version the sdist actually carries" -- proves the
+      # -Repo override, sdist asset-matching, and tar.exe extraction
+      # (including this PR's new entry sanitization) all worked against a
+      # real GitHub release, not a synthetic fixture.
+      - name: Verify the install
+        shell: powershell
+        run: |
+          $dest = "$env:LOCALAPPDATA\Programs\CaseSorter"
+          if (-not (Test-Path "$dest\main.py")) {
+            Write-Error "main.py is missing -- the app was not installed."
+            exit 1
+          }
+          $versionFile = "$dest\sorter\_version.py"
+          if (-not (Test-Path $versionFile)) {
+            Write-Error "sorter\_version.py is missing -- installed from the source archive, not the sdist."
+            exit 1
+          }
+          $content = Get-Content $versionFile -Raw
+          Write-Host "----- sorter/_version.py -----"
+          Write-Host $content
+          if ($content -notmatch "__version__\s*=.*'[0-9]") {
+            Write-Error "sorter/_version.py does not carry a real version."
+            exit 1
+          }

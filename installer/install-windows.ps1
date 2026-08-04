@@ -29,6 +29,11 @@
 .PARAMETER NoLaunch
     Install without starting the app afterwards.
 
+.PARAMETER Repo
+    Override the "owner/repo" to install from. Mirrors sorter/updater.py's
+    CASESORTER_UPDATE_REPO -- same reason: verifying against a fork's own
+    releases without editing the script.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File install-windows.ps1
 #>
@@ -36,7 +41,8 @@
 param(
     [string]$InstallDir = "$env:LOCALAPPDATA\Programs\CaseSorter",
     [string]$Version = "",
-    [switch]$NoLaunch
+    [switch]$NoLaunch,
+    [string]$Repo = 'sjseth/AI-Case-Sorter-Py'
 )
 
 Set-StrictMode -Version Latest
@@ -52,7 +58,6 @@ $LASTEXITCODE = 0
 # quote, which silently truncates the enclosing string and misparses
 # everything after it. tests/test_installer_scripts.py enforces this.
 
-$Repo          = 'sjseth/AI-Case-Sorter-Py'
 $DefaultBranch = 'main'
 $PythonWinget = 'Python.Python.3.12'
 $PythonMinor  = 12
@@ -170,27 +175,58 @@ function Install-Python {
 # App payload
 # ---------------------------------------------------------------------------
 
+function Select-ReleaseAsset {
+    <# Given a release API response, matches the sdist by its exact name --
+       mirroring updater._expected_asset_name -- not "the first .tar.gz",
+       which would let any unrelated tarball attached ahead of it become the
+       installed tree. Returns $null if the release has no matching asset.
+       Property access is guarded: Set-StrictMode turns a missing property
+       into a terminating error, and a release with no assets is normal. #>
+    param($Release)
+
+    $tag = $Release.PSObject.Properties['tag_name'].Value
+    $expected = "ai_case_sorter_py-$($tag -replace '^v', '').tar.gz"
+    if (-not $Release.PSObject.Properties['assets']) { return $null }
+    $asset = $Release.assets |
+        Where-Object { $_.PSObject.Properties['name'] -and $_.name -eq $expected } |
+        Select-Object -First 1
+    if (-not $asset) { return $null }
+    return [pscustomobject]@{ Tag = $tag; Url = $asset.browser_download_url }
+}
+
 function Get-ReleaseInfo {
-    <# Latest release tag + archive URL. Prefers the published sdist, which is
-       the same artifact sorter/updater.py updates from; falls back to a source
-       archive, and to the default branch if there are no releases yet.
+    <# Release tag + archive URL, latest by default or a specific tag via
+       -Version. Prefers the published sdist, which is the same artifact
+       sorter/updater.py updates from; falls back to a source archive, and
+       (only when no -Version was requested) to the default branch if there
+       are no releases at all yet.
 
        The sdist matters because it is the only archive that carries
        sorter/_version.py (hatch-vcs stamps it at build time). A source archive
        has neither that file nor .git, so an install made from one reports
        0.0.0+unknown -- which parses as a pre-release, so every launch would
        see the current release as "newer" and re-prompt. sorter/apply_update.py
-       stamps a version after an in-app update, but nothing does so here. #>
-    if ($Version) {
-        return [pscustomobject]@{
-            Tag = $Version
-            Url = "https://github.com/$Repo/archive/refs/tags/$Version.zip"
-        }
+       stamps a version after an in-app update, but nothing does so here.
+
+       -Version used to skip all of this and always fetch the raw source zip
+       for the requested tag -- silently reintroducing the exact bug above
+       for every pinned install. It now goes through the same lookup and
+       asset-matching as the latest-release path. #>
+    $releaseUrl = if ($Version) {
+        "https://api.github.com/repos/$Repo/releases/tags/$Version"
+    } else {
+        "https://api.github.com/repos/$Repo/releases/latest"
     }
     try {
-        $resp = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" `
+        $resp = Invoke-RestMethod -Uri $releaseUrl `
             -Headers @{ 'User-Agent' = 'CaseSorter-Installer' } -UseBasicParsing
     } catch {
+        if ($Version) {
+            # Distinct from "no releases yet" below: the caller asked for a
+            # specific tag, so silently falling back to $DefaultBranch would
+            # install something other than what was requested with no warning.
+            throw "Could not find release '$Version'. Check the tag exists: https://github.com/$Repo/releases"
+        }
         # A 404 here means either "no releases published yet" or "this repo is
         # not publicly readable" - the API gives an anonymous caller the same
         # answer for both. Say so, rather than reporting only the happy-path
@@ -203,26 +239,12 @@ function Get-ReleaseInfo {
         }
     }
 
-    # Match the sdist by its exact name, mirroring updater._expected_asset_name
-    # -- not "the first .tar.gz", which would let any unrelated tarball
-    # attached ahead of it become the installed tree. Property access is
-    # guarded: Set-StrictMode turns a missing property into a terminating
-    # error, and a release with no assets is perfectly normal.
     $tag = $resp.PSObject.Properties['tag_name'].Value
-    $expected = "ai_case_sorter_py-$($tag -replace '^v', '').tar.gz"
-    $asset = $null
-    if ($resp.PSObject.Properties['assets']) {
-        $asset = $resp.assets |
-            Where-Object { $_.PSObject.Properties['name'] -and $_.name -eq $expected } |
-            Select-Object -First 1
-    }
-    if (-not $asset) {
-        Write-Warn2 "Release $tag has no $expected; falling back to the source archive."
-        Write-Note  "The app will report its version as 0.0.0 until the first in-app update."
-    }
-    $url = if ($asset) { $asset.browser_download_url }
-           else { "https://github.com/$Repo/archive/refs/tags/$tag.zip" }
-    return [pscustomobject]@{ Tag = $tag; Url = $url }
+    $found = Select-ReleaseAsset -Release $resp
+    if ($found) { return $found }
+    Write-Warn2 "Release $tag has no matching sdist; falling back to the source archive."
+    Write-Note  "The app will report its version as 0.0.0 until the first in-app update."
+    return [pscustomobject]@{ Tag = $tag; Url = "https://github.com/$Repo/archive/refs/tags/$tag.zip" }
 }
 
 function Install-App {
@@ -277,6 +299,33 @@ extract the release archive by hand:
   $Url
 "@
             }
+            # tar.exe extracts unconditionally, with no sanitization of its
+            # own to rely on: verified against a real bsdtar (same engine
+            # Windows bundles) that its extraction does reject a `..`
+            # traversal entry, but does NOT reject "pkg/D:/evil.py" -- it
+            # just writes a literal folder named "D:" on Linux, where a
+            # colon is an ordinary filename character. On Windows that
+            # component can instead be read as a drive reference during
+            # path-join, escaping the destination entirely -- the exact
+            # class of bug sorter/updater.py's Python-side extraction had
+            # (a PurePosixPath/Path() mismatch on "C:") and was fixed for.
+            # Reject it here too, before tar.exe ever writes a byte, rather
+            # than trust unverified behaviour on the one platform this
+            # can't be tested against directly.
+            $listing = & tar.exe -tf $zip
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not read the downloaded archive (tar exited $LASTEXITCODE)."
+            }
+            foreach ($entryName in $listing) {
+                if ([string]::IsNullOrWhiteSpace($entryName)) { continue }
+                if ($entryName -match '^[A-Za-z]:' -or $entryName.StartsWith('/') -or $entryName.StartsWith('\')) {
+                    throw "Update archive contains an absolute or drive-rooted path: $entryName"
+                }
+                if (($entryName -split '[\\/]') -contains '..') {
+                    throw "Update archive contains a traversal path: $entryName"
+                }
+            }
+
             & tar.exe -xzf $zip -C $unpack
             if ($LASTEXITCODE -ne 0) {
                 throw "Could not extract the downloaded archive (tar exited $LASTEXITCODE)."
