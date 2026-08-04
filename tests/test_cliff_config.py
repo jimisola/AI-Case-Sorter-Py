@@ -146,3 +146,18 @@ def test_changelog_line_degrades_gracefully_without_a_github_remote(tmp_path: Pa
     assert "- A bug fix" in changelog
     assert "by @" not in changelog
     assert " in #" not in changelog
+
+
+def test_an_unrelated_parenthesized_number_in_the_message_is_left_alone(tmp_path: Path) -> None:
+    """The strip that removes GitHub's auto-appended " (#N)" from a squashed
+    commit's title is guarded behind `commit.remote.pr_number` specifically
+    so it can't fire on a coincidence: a commit whose subject legitimately
+    ends in "(#N)" for some unrelated reason (quoting an issue, a version, a
+    count) must render untouched when there's no real PR association to
+    justify stripping it. This repo has no GitHub remote, so pr_number is
+    never populated here -- proving the guard, not the strip itself (which
+    needs a real squash-merged commit against the live API; verified by hand
+    against jimisola/AI-Case-Sorter-Py#4, see the commit message).
+    """
+    changelog = _changelog(_repo(tmp_path, "0.1.0", ["fix: close issue (#5) properly"]))
+    assert "Close issue (#5) properly" in changelog
