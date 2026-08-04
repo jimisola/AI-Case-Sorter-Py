@@ -18,10 +18,13 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 CLIFF_CONFIG = ROOT / "cliff.toml"
 
-pytestmark = pytest.mark.skipif(shutil.which("git-cliff") is None, reason="git-cliff not installed")
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(shutil.which("git-cliff") is None, reason="git-cliff not installed"),
+]
 
 
 def _repo(tmp_path: Path, base_tag: str, commits: list[str]) -> Path:

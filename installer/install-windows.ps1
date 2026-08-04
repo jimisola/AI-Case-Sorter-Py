@@ -29,6 +29,11 @@
 .PARAMETER NoLaunch
     Install without starting the app afterwards.
 
+.PARAMETER Repo
+    Override the "owner/repo" to install from. Mirrors sorter/updater.py's
+    CASESORTER_UPDATE_REPO -- same reason: verifying against a fork's own
+    releases without editing the script.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File install-windows.ps1
 #>
@@ -36,7 +41,8 @@
 param(
     [string]$InstallDir = "$env:LOCALAPPDATA\Programs\CaseSorter",
     [string]$Version = "",
-    [switch]$NoLaunch
+    [switch]$NoLaunch,
+    [string]$Repo = 'sjseth/AI-Case-Sorter-Py'
 )
 
 Set-StrictMode -Version Latest
@@ -50,9 +56,8 @@ $LASTEXITCODE = 0
 # BOM-less file as the system ANSI codepage, so a UTF-8 em-dash arrives as
 # 'a', 'EUR', and U+201D - and PowerShell treats U+201D as a closing double
 # quote, which silently truncates the enclosing string and misparses
-# everything after it. tests/test_installer_scripts.py enforces this.
+# everything after it. tests/unit/test_installer_scripts.py enforces this.
 
-$Repo          = 'sjseth/AI-Case-Sorter-Py'
 $DefaultBranch = 'main'
 $PythonWinget = 'Python.Python.3.12'
 $PythonMinor  = 12
@@ -170,19 +175,102 @@ function Install-Python {
 # App payload
 # ---------------------------------------------------------------------------
 
-function Get-ReleaseInfo {
-    <# Latest release tag + ZIP URL. Falls back to the default branch if the
-       repo has no published releases yet. #>
-    if ($Version) {
-        return [pscustomobject]@{
-            Tag = $Version
-            Url = "https://github.com/$Repo/archive/refs/tags/$Version.zip"
+function Assert-SafeArchiveEntries {
+    <# Throws unless every entry name is safe to extract into a directory.
+
+       tar.exe extracts unconditionally and has no sanitization worth relying
+       on: verified against a real bsdtar (the engine Windows bundles) that
+       its extraction does reject a `..` traversal entry, but does NOT reject
+       "pkg/D:/evil.py" -- it just writes a literal folder named "D:" on
+       Linux, where a colon is an ordinary filename character. On Windows
+       that component can instead be read as a drive reference during
+       path-join, escaping the destination entirely.
+
+       Checks are per *component*, not against the whole string. An earlier
+       version anchored the drive-letter test with '^[A-Za-z]:', which
+       matches only when the drive sits at the very start -- so the exact
+       "pkg/D:/evil.py" this exists to stop went straight through it. That is
+       the same mistake sorter/updater.py's Python-side extraction had (it
+       tested name[1] of the whole name) and was fixed for; the two paths
+       consume the same archives and must reject the same shapes. See
+       Test-ArchiveEntryValidation.ps1, and _safe_members in updater.py. #>
+    param([string[]]$EntryNames)
+
+    foreach ($entryName in $EntryNames) {
+        if ([string]::IsNullOrWhiteSpace($entryName)) { continue }
+
+        if ($entryName.StartsWith('/') -or $entryName.StartsWith('\')) {
+            # Covers UNC ("\\server\share") along with plain rooted paths.
+            throw "Update archive contains an absolute path: $entryName"
+        }
+
+        foreach ($part in ($entryName -split '[\\/]')) {
+            if ($part -eq '..') {
+                throw "Update archive contains a traversal path: $entryName"
+            }
+            # Any colon anywhere in a component: a drive reference ("D:" or
+            # "D:name") and an NTFS alternate data stream ("file.txt:hidden")
+            # are the same character doing different damage, and neither is
+            # legal in a filename this installer should ever write.
+            if ($part.Contains(':')) {
+                throw "Update archive contains a drive-qualified or stream path: $entryName"
+            }
         }
     }
+}
+
+function Select-ReleaseAsset {
+    <# Given a release API response, matches the sdist by its exact name --
+       mirroring updater._expected_asset_name -- not "the first .tar.gz",
+       which would let any unrelated tarball attached ahead of it become the
+       installed tree. Returns $null if the release has no matching asset.
+       Property access is guarded: Set-StrictMode turns a missing property
+       into a terminating error, and a release with no assets is normal. #>
+    param($Release)
+
+    $tag = $Release.PSObject.Properties['tag_name'].Value
+    $expected = "ai_case_sorter_py-$($tag -replace '^v', '').tar.gz"
+    if (-not $Release.PSObject.Properties['assets']) { return $null }
+    $asset = $Release.assets |
+        Where-Object { $_.PSObject.Properties['name'] -and $_.name -eq $expected } |
+        Select-Object -First 1
+    if (-not $asset) { return $null }
+    return [pscustomobject]@{ Tag = $tag; Url = $asset.browser_download_url }
+}
+
+function Get-ReleaseInfo {
+    <# Release tag + archive URL, latest by default or a specific tag via
+       -Version. Prefers the published sdist, which is the same artifact
+       sorter/updater.py updates from; falls back to a source archive, and
+       (only when no -Version was requested) to the default branch if there
+       are no releases at all yet.
+
+       The sdist matters because it is the only archive that carries
+       sorter/_version.py (hatch-vcs stamps it at build time). A source archive
+       has neither that file nor .git, so an install made from one reports
+       0.0.0+unknown -- which parses as a pre-release, so every launch would
+       see the current release as "newer" and re-prompt. sorter/apply_update.py
+       stamps a version after an in-app update, but nothing does so here.
+
+       -Version used to skip all of this and always fetch the raw source zip
+       for the requested tag -- silently reintroducing the exact bug above
+       for every pinned install. It now goes through the same lookup and
+       asset-matching as the latest-release path. #>
+    $releaseUrl = if ($Version) {
+        "https://api.github.com/repos/$Repo/releases/tags/$Version"
+    } else {
+        "https://api.github.com/repos/$Repo/releases/latest"
+    }
     try {
-        $resp = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" `
+        $resp = Invoke-RestMethod -Uri $releaseUrl `
             -Headers @{ 'User-Agent' = 'CaseSorter-Installer' } -UseBasicParsing
     } catch {
+        if ($Version) {
+            # Distinct from "no releases yet" below: the caller asked for a
+            # specific tag, so silently falling back to $DefaultBranch would
+            # install something other than what was requested with no warning.
+            throw "Could not find release '$Version'. Check the tag exists: https://github.com/$Repo/releases"
+        }
         # A 404 here means either "no releases published yet" or "this repo is
         # not publicly readable" - the API gives an anonymous caller the same
         # answer for both. Say so, rather than reporting only the happy-path
@@ -195,19 +283,12 @@ function Get-ReleaseInfo {
         }
     }
 
-    # Prefer a purpose-built .zip asset; fall back to the source archive.
-    # Property access is guarded: Set-StrictMode turns a missing property into
-    # a terminating error, and a release with no assets is perfectly normal.
     $tag = $resp.PSObject.Properties['tag_name'].Value
-    $asset = $null
-    if ($resp.PSObject.Properties['assets']) {
-        $asset = $resp.assets |
-            Where-Object { $_.PSObject.Properties['name'] -and $_.name -like '*.zip' } |
-            Select-Object -First 1
-    }
-    $url = if ($asset) { $asset.browser_download_url }
-           else { "https://github.com/$Repo/archive/refs/tags/$tag.zip" }
-    return [pscustomobject]@{ Tag = $tag; Url = $url }
+    $found = Select-ReleaseAsset -Release $resp
+    if ($found) { return $found }
+    Write-Warn2 "Release $tag has no matching sdist; falling back to the source archive."
+    Write-Note  "The app will report its version as 0.0.0 until the first in-app update."
+    return [pscustomobject]@{ Tag = $tag; Url = "https://github.com/$Repo/archive/refs/tags/$tag.zip" }
 }
 
 function Install-App {
@@ -216,7 +297,8 @@ function Install-App {
     $work = Join-Path $env:TEMP "casesorter-install-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $work -Force | Out-Null
     try {
-        $zip = Join-Path $work 'app.zip'
+        $isTar = $Url -like '*.tar.gz'
+        $zip = Join-Path $work $(if ($isTar) { 'app.tar.gz' } else { 'app.zip' })
         Write-Note "Downloading $Tag..."
         try {
             Invoke-WebRequest -Uri $Url -OutFile $zip -UseBasicParsing
@@ -246,9 +328,46 @@ whose tag matches what you asked for.
 
         Write-Note "Extracting..."
         $unpack = Join-Path $work 'unpacked'
-        Expand-Archive -Path $zip -DestinationPath $unpack -Force
+        New-Item -ItemType Directory -Path $unpack -Force | Out-Null
+        if ($isTar) {
+            # bsdtar, shipped in Windows since 10 1803. Expand-Archive cannot
+            # read .tar.gz at all, so there is no PowerShell-native fallback.
+            $tarExe = Get-Command tar.exe -ErrorAction SilentlyContinue
+            if (-not $tarExe) {
+                throw @"
+This installer needs tar.exe, which ships with Windows 10 (1803) and later.
 
-        # GitHub source archives nest everything under <repo>-<tag>/.
+Your Windows appears to be older. Install a newer Windows, or download and
+extract the release archive by hand:
+
+  $Url
+"@
+            }
+            # List and vet every entry before tar.exe writes a byte -- see
+            # Assert-SafeArchiveEntries for why tar's own behaviour is not
+            # something to lean on.
+            $listing = @(& tar.exe -tf $zip)
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not read the downloaded archive (tar exited $LASTEXITCODE)."
+            }
+            # @() above keeps a single-entry archive an array rather than a
+            # bare string; an empty listing means tar found nothing to
+            # extract, which is never a real sdist.
+            if ($listing.Count -eq 0) {
+                throw "The downloaded archive is empty."
+            }
+            Assert-SafeArchiveEntries -EntryNames $listing
+
+            & tar.exe -xzf $zip -C $unpack
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not extract the downloaded archive (tar exited $LASTEXITCODE)."
+            }
+        } else {
+            Expand-Archive -Path $zip -DestinationPath $unpack -Force
+        }
+
+        # Both the sdist (<name>-<version>/) and GitHub's source archives
+        # (<repo>-<tag>/) nest everything under one top-level directory.
         $entries = @(Get-ChildItem -Path $unpack)
         $src = if ($entries.Count -eq 1 -and $entries[0].PSIsContainer) {
             $entries[0].FullName
@@ -297,6 +416,11 @@ function New-Shortcuts {
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
+# Skipped when the file is dot-sourced (`. install-windows.ps1`), which is how
+# Test-ArchiveEntryValidation.ps1 gets at the functions above. Without this,
+# loading the script to test one function runs a real install.
+if ($MyInvocation.InvocationName -eq '.') { return }
 
 Write-Host ""
 Write-Host "  AI Case Sorter - Windows installer" -ForegroundColor White

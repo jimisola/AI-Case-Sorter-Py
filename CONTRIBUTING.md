@@ -61,6 +61,13 @@ and the UI without a physical sorter attached.
 uv run pytest
 ```
 
+Split into `tests/unit/` and `tests/integration/` — the latter is the two
+files that shell out to a real external tool (`uv build`, `git-cliff`)
+instead of a synthetic fixture, each carrying `@pytest.mark.integration` and
+skipping individually if that tool isn't installed. `pytest -m "not
+integration"` skips them outright for a faster inner loop; plain
+`pytest`/CI runs everything.
+
 Around 500 tests cover the non-UI logic; please run them before opening a PR.
 The torch-dependent tests skip automatically when PyTorch isn't installed. A
 handful of tests do exercise real Tk widgets in-process (`test_tab_train_sort.py`,
@@ -140,7 +147,7 @@ to prevent it, so a breaking change below 1.0.0 bumps the minor instead
 `version` explicitly to the Release workflow. Behaviour at 1.0.0 and above is
 ordinary semver, unaffected.
 
-Verified against git-cliff 2.13.1 and pinned in `tests/test_cliff_config.py`,
+Verified against git-cliff 2.13.1 and pinned in `tests/integration/test_cliff_config.py`,
 which runs the real binary in CI.
 
 ## Releasing

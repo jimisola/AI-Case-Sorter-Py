@@ -96,4 +96,4 @@ jobs:
 
       # Builds throwaway repos; shares no state with the rest of the suite.
       - name: Assert the bump mapping the docs publish
-        run: uv run --no-sync pytest tests/test_cliff_config.py -q
+        run: uv run --no-sync pytest tests/integration/test_cliff_config.py -q

@@ -118,8 +118,8 @@ ignore = [
 "sorter/model_io.py" = ["UP042"]                  # str+Enum -> StrEnum changes behavior subtly
 "sorter/ui/dialog_training_config.py" = ["B007"]  # unused loop control variable
 "sorter/ui/tab_train.py" = ["F841"]               # unused local
-"tests/test_db.py" = ["B017"]                     # assert-raises-Exception, deliberate here
-"tests/test_repository.py" = ["F841"]             # unused fixture local
+"tests/unit/test_db.py" = ["B017"]                     # assert-raises-Exception, deliberate here
+"tests/unit/test_repository.py" = ["F841"]             # unused fixture local
 
 [tool.ruff.lint.isort]
 known-first-party = ["sorter"]
@@ -127,6 +127,9 @@ known-first-party = ["sorter"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+    "integration: exercises a real external tool (uv build, git-cliff) instead of a synthetic fixture",
+]
 # The suite is threading-fragile by design (see tests/conftest.py): Tk widget
 # garbage collected on a worker thread calls into Tcl from the wrong thread
 # and can hang or abort the process. Do not add pytest-xdist or any plugin

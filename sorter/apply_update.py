@@ -134,16 +134,16 @@ _VERSION_STAMP = "sorter/_version.py"
 def _stamp_version(app_dir: Path, version: str, shipped: set[Path]) -> None:
     """Record the applied version when the archive didn't carry one.
 
-    ``sorter/__init__.py`` reads ``sorter/_version.py`` first, and only the
-    purpose-built release asset ships it (the publish workflow copies it in
-    explicitly, since hatch-vcs generates it at build time and ``git archive``
-    never includes untracked files). GitHub's auto-generated *source* archive
-    — what ``updater._pick_asset`` falls back to when the named asset isn't
-    published — contains neither that file nor ``.git``, so an install updated
-    from it would keep reporting ``0.0.0+unknown``. That sentinel parses as a
-    pre-release, meaning every subsequent check sees the same release as
-    "newer" and the update prompt returns on every launch, each update a
-    no-op. Writing the version we just applied breaks that loop.
+    ``sorter/__init__.py`` reads ``sorter/_version.py`` first, and the sdist
+    ships it: hatch-vcs's build hook stamps it into every build target, so
+    the released asset carries it with nothing to keep in sync. GitHub's
+    auto-generated *source* archive — what ``updater._pick_asset`` falls
+    back to when the named asset isn't published — contains neither that
+    file nor ``.git``, so an install updated from it would keep reporting
+    ``0.0.0+unknown``. That sentinel parses as a pre-release, meaning every
+    subsequent check sees the same release as "newer" and the update prompt
+    returns on every launch, each update a no-op. Writing the version we
+    just applied breaks that loop.
 
     Skipped when the archive shipped its own ``_version.py`` — that one came
     from a real build and is authoritative.

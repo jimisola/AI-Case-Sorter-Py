@@ -60,12 +60,16 @@ automatically):**
   an activated `.venv`.
 
 **Tests:** `pytest` from the repo root (`tests/conftest.py` puts the repo on
-`sys.path`). There are ~35 test modules covering the non-UI logic (config, db,
-repository, evaluator, model_io, run_controller, serial emulator, auth,
-bootstrap, etc.). CI (`.github/workflows/build.yml`) runs the full matrix on
-every push/PR — run `pytest` locally before pushing regardless, since CI
-turnaround is slower than your own machine. The suite is threading-fragile by
-design (see `tests/conftest.py`); don't parallelize it.
+`sys.path`; it lives at `tests/` top-level so it applies to both
+subdirectories below it). ~45 test modules split into `tests/unit/`
+(everything, synthetic fixtures only) and `tests/integration/` (the two
+files that shell out to a real external tool — `uv build`, `git-cliff` —
+instead, each self-skipping if that tool is missing; `pytest -m "not
+integration"` skips them outright). CI (`.github/workflows/build.yml`) runs
+the full matrix on every push/PR — run `pytest` locally before pushing
+regardless, since CI turnaround is slower than your own machine. The suite
+is threading-fragile by design (see `tests/conftest.py`); don't parallelize
+it.
 
 **Python:** 3.12+ floor (`pyproject.toml`); `.python-version` pins the actual
 version uv provisions for the app itself, independent of that floor. **Core
@@ -409,7 +413,7 @@ a separate one, so a built-in is never the thing being written to),
     classic Tk widgets (`tk.Label`, `tk.Canvas`, `tk.Text`) at construction.
     That translation is by color value, which is why no two roles inside one
     theme may share a color — except `success`/`error`, which must equal
-    `action`/`danger` (`tests/test_theme.py` enforces both rules).
+    `action`/`danger` (`tests/unit/test_theme.py` enforces both rules).
   - **`PALETTE` is mutated in place** on a switch. Read it at call time
     (`PALETTE["bg_card"]`); never copy a color into a module-level constant.
   - **User-made themes.** `BUILTIN_THEMES` is what ships; `THEMES` is the live
@@ -487,9 +491,9 @@ where `ticks` is the .NET `DateTime.Ticks` value.
 ## 7. Updates & Windows install
 
 Non-developers get the app without git, and keep it current from inside the app.
-There is no git dependency anywhere in this path: a release ZIP over HTTPS has
-the same trust anchor as `git pull` over HTTPS, and the source tree is ~1 MB, so
-delta transfer buys nothing.
+There is no git dependency anywhere in this path: a release tarball over HTTPS
+has the same trust anchor as `git pull` over HTTPS, and the source tree is
+~1 MB, so delta transfer buys nothing.
 
 **Version:** derived from the git tag at build time (`pyproject.toml`'s
 `[tool.hatch.version] source = "vcs"`, via hatch-vcs), not hand-bumped —
@@ -509,14 +513,18 @@ Two things this makes load-bearing that weren't before:
   without `.git` either hard-crashes the build, or (with a
   `fallback-version` configured) silently *overwrites* an already-correct
   `sorter/_version.py` with that fallback. See `bootstrap.py`'s docstring.
-- **The version has to reach the user some other way, then.** `publish.yml`
-  builds the app archive `updater.py`'s `_pick_asset` looks for by exact
-  name (`ai-case-sorter-py-<tag>.zip`) from a real `git archive` of the
-  tagged commit, with the `sorter/_version.py` that same CI run's `uv build`
-  step generated (real `.git` present there) copied in explicitly, since
-  `git archive` never includes untracked files. That's what makes a
-  downloaded release able to report its own version correctly with no `.git`
-  anywhere in it.
+- **The version has to reach the user some other way, then.** `updater.py`'s
+  `_pick_asset` downloads the release's own **sdist** by exact name
+  (`ai_case_sorter_py-<tag>.tar.gz`) — the same file `uv build` already
+  produces and `publish.yml` already attaches, not a separately built
+  artifact. hatch-vcs's build hook stamps `sorter/_version.py` into every
+  build target it runs against, sdist included, so it already carries the
+  correct version with nothing to copy in by hand. (An earlier revision
+  built a bespoke `git archive`-based zip for this instead; that second
+  build path was the actual cause of a real version mismatch once the tree
+  looked "dirty" to git for unrelated reasons — gone rather than fixed
+  again.) That's what makes a downloaded release able to report its own
+  version correctly with no `.git` anywhere in it.
 
 **The flow is stage now, apply at next launch:**
 
@@ -532,9 +540,13 @@ flowchart TD
 ```
 
 - **`updater.py`** — check/download/stage. Traversal-safe extraction (same
-  rejections as `model_io`), strips GitHub's `<repo>-<tag>/` wrapper, requires
-  `main.py` + `sorter/__init__.py` to be present before trusting an archive, and
-  caps the archive size. Staging is atomic: `pending/` only ever exists complete.
+  rejections as `model_io`, plus rejecting every non-regular-file entry, which
+  only a tarball can carry, and a containment check on the resolved output
+  path), strips the single top-level wrapper (the sdist's `<name>-<version>/`
+  or, on the fallback, GitHub's `<repo>-<tag>/`), requires `main.py` +
+  `sorter/__init__.py` to be present before trusting an archive, and caps
+  archive size and entry count. Staging is atomic: `pending/` only ever exists
+  complete.
 - **`apply_update.py`** — **must stay stdlib-only.** It runs against a venv that
   may hold nothing at all yet; importing `requests` here would break the very
   launch it exists to fix. Backs up everything it will overwrite, rolls back on
@@ -573,7 +585,7 @@ flowchart TD
     send that straight to `1.0.0`, letting one commit message declare the API
     stable. **Reaching 1.0.0 requires passing `version` explicitly** to the
     Release workflow — nothing auto-detects it. Verified against git-cliff
-    2.13.1 and pinned in `tests/test_cliff_config.py`, which runs the real
+    2.13.1 and pinned in `tests/integration/test_cliff_config.py`, which runs the real
     binary in CI (`release-config` job in `lint.yml`).
   - Each changelog line also carries `by @user` and, for a **squash-merged**
     PR only, `in #N` — see `RELEASING.md` for why the two resolve
@@ -619,5 +631,14 @@ flowchart TD
   Still run `pytest` locally before pushing — faster feedback than waiting on
   CI. Most UI modules need a display — `xvfb-run -a pytest` covers them on a
   headless box; without tkinter installed those modules skip rather than
-  fail.
+  fail. `install-windows.ps1` gets its own workflow
+  (`.github/workflows/installer-smoke.yml`), not `build.yml`'s blanket
+  trigger: it needs a real published release to exercise its interesting
+  path (sdist matching, `tar.exe` extraction), so it's path-filtered to
+  `installer/**` on PR/push plus `release: published` — the most realistic
+  moment, since that event's checkout resolves to the tagged commit. It runs
+  with `shell: powershell` (Windows PowerShell 5.1), not `pwsh`, deliberately
+  — that's the interpreter a real double-click via `install-windows.bat`
+  uses, and the one the script's own top-of-file comment calls out for its
+  BOM/codepage decoding quirks.
 - See **`CONTRIBUTING.md`** for how to set up and contribute.
