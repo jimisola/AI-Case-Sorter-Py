@@ -1,19 +1,18 @@
 [changelog]
 header = ""
-# `striptags` removes the `<!-- N -->` sort prefixes from group names.
-# git-cliff orders groups by their raw string, so without a prefix they come
-# out alphabetical -- which buried Features mid-list behind Bug Fixes and
-# Documentation. The prefix is an HTML comment, so it stays invisible in
-# rendered markdown even for a consumer that doesn't strip it.
+# `striptags` strips the `<!-- N -->` sort prefixes below -- without them,
+# groups sort alphabetically and Security/Features end up buried after Bug
+# Fixes. `commit.breaking` marks a `feat!:` so it doesn't render identically
+# to an ordinary `feat:`.
 #
-# `commit.breaking` is what surfaces a breaking change. Without it a `feat!:`
-# renders identically to an ordinary `feat:` -- the single most important line
-# in a release note, silently indistinguishable from the rest.
+# `remote.pr_number` (the `in #N` above) only resolves for a squash merge --
+# git-cliff matches a commit's SHA against a closed PR's merge_commit_sha,
+# never true for a real merge commit's constituent commits.
 body = """
 {% for group, commits in commits | group_by(attribute="group") %}\
 ### {{ group | striptags | trim | upper_first }}
 {% for commit in commits %}\
-- {% if commit.breaking %}**BREAKING** {% endif %}{{ commit.message | upper_first }}{% if commit.remote.pr_number %} (#{{ commit.remote.pr_number }}){% endif %}
+- {% if commit.breaking %}**BREAKING** {% endif %}{{ commit.message | upper_first }}{% if commit.remote.username %} by @{{ commit.remote.username }}{% endif %}{% if commit.remote.pr_number %} in #{{ commit.remote.pr_number }}{% endif %}
 {% endfor %}
 {% endfor %}\
 """
@@ -24,9 +23,8 @@ footer = ""
 conventional_commits = true
 filter_unconventional = true
 
-# Order is deliberate, not alphabetical: Security first because for an app with
-# an auto-updater and a community backend, "is there a fix I need urgently?"
-# outranks "what's new?". Then Features and Bug Fixes, then the rest.
+# Security first, not alphabetical: "is there a fix I need" outranks "what's
+# new" for an app with an auto-updater and a community backend.
 commit_parsers = [
   { message = "^security", group = "<!-- 0 -->Security" },
   { message = "^feat", group = "<!-- 1 -->Features" },
@@ -36,45 +34,29 @@ commit_parsers = [
   { message = "^docs", group = "<!-- 5 -->Documentation" },
   { message = "^test", group = "<!-- 6 -->Testing" },
   { message = "^style", group = "<!-- 7 -->Style" },
-  # `revert` is an allowed PR type (check-semantic-pr.yml). git-cliff would
-  # auto-derive a Revert section without this line -- verified -- but it's
-  # stated so all twelve allowed types are accounted for here explicitly.
   { message = "^revert", group = "<!-- 8 -->Reverts" },
   { message = "^chore", group = "<!-- 9 -->Miscellaneous" },
-  # Skipped: release notes are for people running the app, not for its build
-  # system. A non-breaking workflow tweak or dependency bump isn't news.
-  # But see protect_breaking_commits below -- `build!:` is very much news.
+  # ci/build are for maintainers, not users running the app -- skipped from
+  # release notes. protect_breaking_commits below overrides this for `!:`.
   { message = "^ci", group = "CI/CD", skip = true },
   { message = "^build", group = "Build", skip = true },
 ]
 
-# Overrides the skips above for breaking changes only. This is load-bearing,
-# not a nicety: this project's own `build!: require Python 3.12` would
-# otherwise be dropped from the release notes entirely, so users upgrading
-# would get no warning that their Python is now too old to run the app.
+# `build!: require Python 3.12` must reach users despite the skip above --
+# without this, an upgrade that breaks their install ships with no warning.
 protect_breaking_commits = true
 
 filter_commits = false
-# PEP 440, no `v` prefix (0.2.0, 0.2.0rc1) -- see RELEASING.md.
-# Anchored: git-cliff treats tag_pattern as an unanchored regex, so the
-# obvious "[0-9].*" also matches any tag merely *containing* a digit --
-# including the `v1.0.0` form that check-release.yml explicitly rejects. A
-# stray v-tag would then silently be picked up as a release boundary.
+# PEP 440, no `v` prefix -- see RELEASING.md. Anchored: unanchored, the
+# obvious "[0-9].*" also matches a stray `v1.0.0` tag (which check-release.yml
+# rejects), silently making it a release boundary.
 tag_pattern = "^[0-9]+\\.[0-9]+\\.[0-9]+"
 sort_commits = "newest"
 
 [bump]
-# Reaching 1.0.0 is a decision, not a side effect of a commit message.
-#
-# git-cliff defaults this to true, which means a single `type!:` while the
-# project is at 0.x bumps straight to 1.0.0 -- so an ordinary breaking change
-# during pre-1.0 development would silently declare the API stable. That is
-# backwards: 0.x exists precisely because breaking changes are still expected,
-# and 1.0.0 should be published deliberately by passing `version` explicitly
-# to the Release workflow.
-#
-# With this false, a breaking change below 1.0.0 bumps the *minor* instead
-# (0.1.0 + `feat!:` -> 0.2.0). Behaviour at 1.0.0 and above is unchanged --
-# `feat!:` still bumps the major there (1.2.3 -> 2.0.0). Verified against
-# git-cliff 2.13.1 for both regimes; pinned in tests/test_cliff_config.py.
+# Defaults true, which sends a single `type!:` at 0.x straight to 1.0.0 --
+# an ordinary pre-1.0 breaking change declaring the API stable by accident.
+# False keeps it at the minor instead (0.1.0 + `feat!:` -> 0.2.0); 1.0.0+ is
+# unaffected. Reaching 1.0.0 needs `version` passed explicitly to Release.
+# Pinned in tests/test_cliff_config.py.
 breaking_always_bump_major = false
