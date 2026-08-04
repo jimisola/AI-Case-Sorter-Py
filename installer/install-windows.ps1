@@ -171,8 +171,16 @@ function Install-Python {
 # ---------------------------------------------------------------------------
 
 function Get-ReleaseInfo {
-    <# Latest release tag + ZIP URL. Falls back to the default branch if the
-       repo has no published releases yet. #>
+    <# Latest release tag + archive URL. Prefers the published sdist, which is
+       the same artifact sorter/updater.py updates from; falls back to a source
+       archive, and to the default branch if there are no releases yet.
+
+       The sdist matters because it is the only archive that carries
+       sorter/_version.py (hatch-vcs stamps it at build time). A source archive
+       has neither that file nor .git, so an install made from one reports
+       0.0.0+unknown -- which parses as a pre-release, so every launch would
+       see the current release as "newer" and re-prompt. sorter/apply_update.py
+       stamps a version after an in-app update, but nothing does so here. #>
     if ($Version) {
         return [pscustomobject]@{
             Tag = $Version
@@ -195,15 +203,22 @@ function Get-ReleaseInfo {
         }
     }
 
-    # Prefer a purpose-built .zip asset; fall back to the source archive.
-    # Property access is guarded: Set-StrictMode turns a missing property into
-    # a terminating error, and a release with no assets is perfectly normal.
+    # Match the sdist by its exact name, mirroring updater._expected_asset_name
+    # -- not "the first .tar.gz", which would let any unrelated tarball
+    # attached ahead of it become the installed tree. Property access is
+    # guarded: Set-StrictMode turns a missing property into a terminating
+    # error, and a release with no assets is perfectly normal.
     $tag = $resp.PSObject.Properties['tag_name'].Value
+    $expected = "ai_case_sorter_py-$($tag -replace '^v', '').tar.gz"
     $asset = $null
     if ($resp.PSObject.Properties['assets']) {
         $asset = $resp.assets |
-            Where-Object { $_.PSObject.Properties['name'] -and $_.name -like '*.zip' } |
+            Where-Object { $_.PSObject.Properties['name'] -and $_.name -eq $expected } |
             Select-Object -First 1
+    }
+    if (-not $asset) {
+        Write-Warn2 "Release $tag has no $expected; falling back to the source archive."
+        Write-Note  "The app will report its version as 0.0.0 until the first in-app update."
     }
     $url = if ($asset) { $asset.browser_download_url }
            else { "https://github.com/$Repo/archive/refs/tags/$tag.zip" }
@@ -216,7 +231,8 @@ function Install-App {
     $work = Join-Path $env:TEMP "casesorter-install-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $work -Force | Out-Null
     try {
-        $zip = Join-Path $work 'app.zip'
+        $isTar = $Url -like '*.tar.gz'
+        $zip = Join-Path $work $(if ($isTar) { 'app.tar.gz' } else { 'app.zip' })
         Write-Note "Downloading $Tag..."
         try {
             Invoke-WebRequest -Uri $Url -OutFile $zip -UseBasicParsing
@@ -246,9 +262,31 @@ whose tag matches what you asked for.
 
         Write-Note "Extracting..."
         $unpack = Join-Path $work 'unpacked'
-        Expand-Archive -Path $zip -DestinationPath $unpack -Force
+        New-Item -ItemType Directory -Path $unpack -Force | Out-Null
+        if ($isTar) {
+            # bsdtar, shipped in Windows since 10 1803. Expand-Archive cannot
+            # read .tar.gz at all, so there is no PowerShell-native fallback.
+            $tarExe = Get-Command tar.exe -ErrorAction SilentlyContinue
+            if (-not $tarExe) {
+                throw @"
+This installer needs tar.exe, which ships with Windows 10 (1803) and later.
 
-        # GitHub source archives nest everything under <repo>-<tag>/.
+Your Windows appears to be older. Install a newer Windows, or download and
+extract the release archive by hand:
+
+  $Url
+"@
+            }
+            & tar.exe -xzf $zip -C $unpack
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not extract the downloaded archive (tar exited $LASTEXITCODE)."
+            }
+        } else {
+            Expand-Archive -Path $zip -DestinationPath $unpack -Force
+        }
+
+        # Both the sdist (<name>-<version>/) and GitHub's source archives
+        # (<repo>-<tag>/) nest everything under one top-level directory.
         $entries = @(Get-ChildItem -Path $unpack)
         $src = if ($entries.Count -eq 1 -and $entries[0].PSIsContainer) {
             $entries[0].FullName

@@ -59,6 +59,31 @@ jobs:
             exit 1
           fi
 
+      # The updater matches this filename exactly (updater._expected_asset_name)
+      # and silently falls back to the source archive when it misses -- losing
+      # the baked-in version the sdist exists to deliver. hatchling normalizes
+      # the version per PEP 440, so a tag like 1.2.3-rc1 builds as 1.2.3rc1 and
+      # would never match. Assert the name here so that fails the release
+      # instead of quietly degrading every client.
+      #
+      # Checked inside the artifact, not the workspace: that proves the file
+      # the updater downloads actually carries the version, rather than just
+      # proving hatch-vcs ran.
+      - name: Assert the sdist is named and stamped as the updater expects
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          SDIST="dist/ai_case_sorter_py-${TAG#v}.tar.gz"
+          if [ ! -f "$SDIST" ]; then
+            echo "::error::Expected $SDIST; built $(ls dist/*.tar.gz). The updater matches by exact name and would fall back to the source archive."
+            exit 1
+          fi
+          if ! tar -tzf "$SDIST" | grep -qE '(^|/)sorter/_version\.py$'; then
+            echo "::error::$SDIST does not contain sorter/_version.py -- an install from it would report 0.0.0+unknown."
+            exit 1
+          fi
+
       - name: Check package metadata
         run: pipx run twine check --strict dist/*
 
@@ -79,12 +104,16 @@ jobs:
       # Attaches the wheel + sdist to the release that triggered this run --
       # a real "pre-built download" story with zero PyPI dependency, live
       # regardless of whether publish-to-pypi below is ever turned on.
+      #
+      # --clobber so a re-run replaces its own artifacts rather than failing
+      # half-uploaded: without it, an asset already present wins and the
+      # updater would serve whatever got there first.
       - name: Attach artifacts to the release
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$TAG" dist/*
+        run: gh release upload --clobber "$TAG" dist/*
 
   # Gated behind a repo variable, unset = off, so merging this workflow
   # changes nothing until a maintainer deliberately opts in (Settings ->

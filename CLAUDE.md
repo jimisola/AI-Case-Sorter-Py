@@ -536,9 +536,13 @@ flowchart TD
 ```
 
 - **`updater.py`** — check/download/stage. Traversal-safe extraction (same
-  rejections as `model_io`), strips GitHub's `<repo>-<tag>/` wrapper, requires
-  `main.py` + `sorter/__init__.py` to be present before trusting an archive, and
-  caps the archive size. Staging is atomic: `pending/` only ever exists complete.
+  rejections as `model_io`, plus rejecting every non-regular-file entry, which
+  only a tarball can carry, and a containment check on the resolved output
+  path), strips the single top-level wrapper (the sdist's `<name>-<version>/`
+  or, on the fallback, GitHub's `<repo>-<tag>/`), requires `main.py` +
+  `sorter/__init__.py` to be present before trusting an archive, and caps
+  archive size and entry count. Staging is atomic: `pending/` only ever exists
+  complete.
 - **`apply_update.py`** — **must stay stdlib-only.** It runs against a venv that
   may hold nothing at all yet; importing `requests` here would break the very
   launch it exists to fix. Backs up everything it will overwrite, rolls back on

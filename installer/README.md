@@ -22,7 +22,7 @@ a safe way to repair a broken install.
 | Step | Detail |
 |---|---|
 | Python | Uses an existing Python 3.12+ **with Tcl/Tk** if one is present. Otherwise installs one via `winget`, falling back to a silent per-user python.org install. |
-| App | Downloads the latest GitHub release ZIP over HTTPS and extracts it. **No git.** |
+| App | Downloads the latest release's sdist (`ai_case_sorter_py-<version>.tar.gz`) over HTTPS and extracts it with `tar.exe`. Falls back to the source archive if that asset is absent. **No git.** |
 | Launch | Hands off to `start.bat`, which calls `bootstrap.py` — that's what owns the venv and dependency sync now, via [uv](https://docs.astral.sh/uv/), not `pip install`. |
 
 ## Where things live
@@ -73,7 +73,7 @@ explicitly.
   ```
 
   If you need the repo to stay private, distribution has to move off GitHub
-  (host the ZIP plus a version manifest on your own server and repoint
+  (host the sdist plus a version manifest on your own server and repoint
   `$Repo` / `updater.DEFAULT_REPO`) — a token is not a workable answer for
   the audience this installer targets.
 - **Cut a release before relying on the update path.** With no releases,
@@ -90,5 +90,8 @@ explicitly.
 - The updater reads `/releases/latest`, which excludes drafts and
   pre-releases, so tagging a pre-release won't push it to stable users.
 - There is no version string to bump. The version is derived from the git tag
-  at build time by hatch-vcs and baked into the published archive, so tagging
-  *is* the bump — see [`../RELEASING.md`](../RELEASING.md).
+  at build time by hatch-vcs and baked into the sdist (as `sorter/_version.py`),
+  so tagging *is* the bump — see [`../RELEASING.md`](../RELEASING.md). This is
+  why the installer prefers the sdist: a source archive carries neither that
+  file nor `.git`, so an install made from one reports `0.0.0+unknown` and
+  re-prompts for the same update on every launch.
