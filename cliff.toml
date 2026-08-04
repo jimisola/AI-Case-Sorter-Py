@@ -7,14 +7,9 @@ header = ""
 #
 # `remote.pr_number` (the `in #N` above) only resolves for a squash merge --
 # git-cliff matches a commit's SHA against a closed PR's merge_commit_sha,
-# never true for a real merge commit's constituent commits. A squashed
-# commit's own message already carries GitHub's auto-appended " (#N)" (its
-# default squash-merge title), which would otherwise sit right next to our
-# own "in #N" -- the `replace` strips that exact substring first, using the
-# same pr_number so it can't touch an unrelated "(#N)" a commit body
-# legitimately contains. No `regex_replace` filter exists in this git-cliff's
-# Tera build (checked); an exact match is also the correct fix here, not a
-# workaround for a missing filter.
+# never true for a real merge commit's constituent commits. The `replace`
+# strips GitHub's own auto-appended " (#N)" from a squashed title first, using
+# this exact pr_number so it can't touch an unrelated "(#N)" elsewhere.
 body = """
 {% for group, commits in commits | group_by(attribute="group") %}\
 ### {{ group | striptags | trim | upper_first }}
