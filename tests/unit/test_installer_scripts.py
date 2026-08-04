@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 INSTALLER = ROOT / "installer"
 SCRIPTS = ("install-windows.ps1", "install-windows.bat")
 

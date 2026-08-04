@@ -19,7 +19,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 BOOTSTRAP_PATH = ROOT / "bootstrap.py"
 
 

@@ -60,12 +60,16 @@ automatically):**
   an activated `.venv`.
 
 **Tests:** `pytest` from the repo root (`tests/conftest.py` puts the repo on
-`sys.path`). There are ~35 test modules covering the non-UI logic (config, db,
-repository, evaluator, model_io, run_controller, serial emulator, auth,
-bootstrap, etc.). CI (`.github/workflows/build.yml`) runs the full matrix on
-every push/PR — run `pytest` locally before pushing regardless, since CI
-turnaround is slower than your own machine. The suite is threading-fragile by
-design (see `tests/conftest.py`); don't parallelize it.
+`sys.path`; it lives at `tests/` top-level so it applies to both
+subdirectories below it). ~45 test modules split into `tests/unit/`
+(everything, synthetic fixtures only) and `tests/integration/` (the two
+files that shell out to a real external tool — `uv build`, `git-cliff` —
+instead, each self-skipping if that tool is missing; `pytest -m "not
+integration"` skips them outright). CI (`.github/workflows/build.yml`) runs
+the full matrix on every push/PR — run `pytest` locally before pushing
+regardless, since CI turnaround is slower than your own machine. The suite
+is threading-fragile by design (see `tests/conftest.py`); don't parallelize
+it.
 
 **Python:** 3.12+ floor (`pyproject.toml`); `.python-version` pins the actual
 version uv provisions for the app itself, independent of that floor. **Core
@@ -409,7 +413,7 @@ a separate one, so a built-in is never the thing being written to),
     classic Tk widgets (`tk.Label`, `tk.Canvas`, `tk.Text`) at construction.
     That translation is by color value, which is why no two roles inside one
     theme may share a color — except `success`/`error`, which must equal
-    `action`/`danger` (`tests/test_theme.py` enforces both rules).
+    `action`/`danger` (`tests/unit/test_theme.py` enforces both rules).
   - **`PALETTE` is mutated in place** on a switch. Read it at call time
     (`PALETTE["bg_card"]`); never copy a color into a module-level constant.
   - **User-made themes.** `BUILTIN_THEMES` is what ships; `THEMES` is the live
@@ -581,7 +585,7 @@ flowchart TD
     send that straight to `1.0.0`, letting one commit message declare the API
     stable. **Reaching 1.0.0 requires passing `version` explicitly** to the
     Release workflow — nothing auto-detects it. Verified against git-cliff
-    2.13.1 and pinned in `tests/test_cliff_config.py`, which runs the real
+    2.13.1 and pinned in `tests/integration/test_cliff_config.py`, which runs the real
     binary in CI (`release-config` job in `lint.yml`).
   - Each changelog line also carries `by @user` and, for a **squash-merged**
     PR only, `in #N` — see `RELEASING.md` for why the two resolve
