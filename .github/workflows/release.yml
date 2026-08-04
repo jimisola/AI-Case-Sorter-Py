@@ -42,8 +42,11 @@ jobs:
           fetch-tags: true
           ref: ${{ inputs.ref || github.ref }}
 
-      # Version and digest live in the composite action -- one place to bump.
       - uses: ./.github/actions/setup-git-cliff
+
+      - uses: ./.github/actions/check-version
+        with:
+          version: ${{ inputs.version }}
 
       - name: Resolve version
         id: resolve
@@ -52,21 +55,13 @@ jobs:
           FORCE: ${{ inputs.force }}
         run: |
           AUTO="$(git-cliff --config cliff.toml --bumped-version)"
-          # Twin of the regex in check-release.yml -- keep them identical.
-          # Deliberately not factored into a shared action: a composite can
-          # export a step output but not a shell constant, so the indirection
-          # would cost more than the four duplicated characters save.
-          PEP440='^[0-9]+(\.[0-9]+)*(a[0-9]+|b[0-9]+|rc[0-9]+)?(\.post[0-9]+)?(\.dev[0-9]+)?$'
 
           if [ -z "$REQUESTED" ]; then
             VERSION="$AUTO"
             SOURCE="auto-detected from Conventional Commits"
           else
+            # Already validated by check-version above.
             VERSION="$REQUESTED"
-            if ! echo "$VERSION" | grep -qE "$PEP440"; then
-              echo "::error::Version '$VERSION' is not a valid PEP 440 version (e.g. 0.2.0, 0.2.0rc1)"
-              exit 1
-            fi
             if [ "$VERSION" != "$AUTO" ]; then
               if [ "$FORCE" != "true" ]; then
                 echo "::error::Version '$VERSION' disagrees with the auto-detected '$AUTO'. Re-run with force enabled if that is deliberate."
@@ -93,23 +88,11 @@ jobs:
             echo "source=$SOURCE"
           } >> "$GITHUB_OUTPUT"
 
-      # Same rule check-release.yml enforces, but *before* anything is
-      # created rather than after. check-release.yml fires on
-      # `release: published` -- by which point the tag is pushed and the
-      # draft exists, so it can only report a mistake that already happened.
-      # Checking here means a release from the wrong branch simply doesn't
-      # get made. Both are kept: this one prevents, that one catches a
-      # release created by any other route (e.g. by hand in the UI).
-      - name: Check the ref is a releasable branch
-        env:
-          REF: ${{ inputs.ref || github.ref }}
-        run: |
-          BRANCH="${REF#refs/heads/}"
-          if [[ "$BRANCH" != "main" && "$BRANCH" != hotfix/* && "$BRANCH" != release/* ]]; then
-            echo "::error::Releases must come from main, hotfix/*, or release/* (got: '$BRANCH')."
-            echo "::error::If you passed a raw commit SHA, release from the branch containing it instead."
-            exit 1
-          fi
+      # Also enforced in check-release.yml: this prevents before tagging,
+      # that catches a release made by hand in the UI.
+      - uses: ./.github/actions/check-release-branch
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Check tag does not already exist
         env:
@@ -125,10 +108,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: git-cliff --config cliff.toml --latest --unreleased --strip all --output NOTES.md
 
-      # The checkout above sets persist-credentials: false, so `origin` carries
-      # no auth -- a bare `git push origin` here would 403. Pushing to an
-      # explicit tokenised URL keeps the hardening (no credential left behind
-      # in .git/config for later steps to leak) while still authenticating.
+      # persist-credentials: false means `origin` has no auth; push to an
+      # explicit tokenised URL rather than leaving one in .git/config.
       - name: Push tag
         if: ${{ !inputs.dry-run }}
         env:
@@ -147,8 +128,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.resolve.outputs.version }}
         run: |
-          # `gh release create` prints the release URL on stdout; it has no
-          # --json/--jq of its own (those live on `release view`/`list`).
+          # gh release create has no --json; it prints the URL on stdout.
           DRAFT_URL=$(gh release create "$VERSION" \
             --title "$VERSION" \
             --notes-file NOTES.md \
@@ -172,8 +152,8 @@ jobs:
           REF: ${{ inputs.ref || github.ref }}
           DRY_RUN: ${{ inputs.dry-run }}
         run: |
-          # Both "true" and "false" are non-empty strings, so test the value
-          # explicitly -- ${DRY_RUN:+...} would expand in both cases.
+          # Test the value: "false" is non-empty, so ${DRY_RUN:+...} would
+          # expand for both.
           if [ "$DRY_RUN" = "true" ]; then
             HEADING="Release (dry run)"
             MODE="dry run -- no tag pushed, no release created"
@@ -198,11 +178,8 @@ jobs:
             echo ""
             cat NOTES.md 2>/dev/null || echo "_(not generated -- an earlier step failed)_"
             echo ""
-            # The raw commit list the changelog is derived from. Worth showing
-            # next to it: anything here that is missing above was dropped for a
-            # reason (unconventional subject, or a skipped ci:/build: type), and
-            # seeing both together is how you catch a mistyped commit type
-            # before it becomes a wrong version bump.
+            # Anything here but missing above was dropped as unconventional
+            # or as a skipped ci:/build: type.
             echo "<details><summary>Commits since \`${LATEST:-the beginning}\`</summary>"
             echo ""
             if [ -n "$LATEST" ]; then

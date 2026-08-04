@@ -11,6 +11,12 @@ jobs:
   check-release:
     runs-on: ubuntu-latest
     steps:
+      # Only needed so the local composite actions below resolve; this job
+      # validates release metadata and reads nothing else from the tree.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
       - name: Check ref is a tag
         env:
           REF: ${{ github.ref }}
@@ -20,27 +26,12 @@ jobs:
             *) echo "::error::Expected a tag ref (refs/tags/...) but got: $REF"; exit 1 ;;
           esac
 
-      - name: Validate tag is PEP 440
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          # Twin of the PEP440 regex in release.yml -- keep them identical.
-          if ! echo "$TAG" | grep -qE '^[0-9]+(\.[0-9]+)*(a[0-9]+|b[0-9]+|rc[0-9]+)?(\.post[0-9]+)?(\.dev[0-9]+)?$'; then
-            echo "::error::Tag '$TAG' is not a valid PEP 440 version (e.g. 1.2.3, 1.2.3rc1, 1.2.3.post1 -- no v prefix)"
-            exit 1
-          fi
+      - uses: ./.github/actions/check-version
+        with:
+          version: ${{ github.ref_name }}
 
-      - name: Check release branch
-        env:
-          BRANCH: ${{ github.event.release.target_commitish }}
-        run: |
-          # Twin of the branch guard in release.yml, and the duplication is
-          # deliberate rather than accidental: that one *prevents* a release
-          # from the wrong branch before a tag exists, this one *catches* one
-          # created by any other route -- e.g. by hand in the GitHub UI,
-          # which never runs release.yml at all. Two independent enforcement
-          # points is the point; keep the condition identical.
-          if [[ "$BRANCH" != "main" && "$BRANCH" != hotfix/* && "$BRANCH" != release/* ]]; then
-            echo "::error::Release must target main, hotfix/*, or release/* (got: '$BRANCH')"
-            exit 1
-          fi
+      # Also enforced in release.yml: that prevents before tagging, this
+      # catches a release made by hand in the UI.
+      - uses: ./.github/actions/check-release-branch
+        with:
+          ref: ${{ github.event.release.target_commitish }}
