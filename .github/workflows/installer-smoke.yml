@@ -7,10 +7,8 @@ name: Verify Installer
 # repo with none yet it would only ever hit the "no release, fall back to
 # the source zip" branch. So this gets its own trigger rather than
 # build.yml's blanket one: path-filtered on PR/push (fast feedback exactly
-# when the script itself changes, near-zero cost otherwise), plus
-# release:published -- the single most realistic moment, since the default
-# checkout for that event resolves to the tagged commit, testing the
-# installer as it existed at release time against the release just cut.
+# when the script itself changes, near-zero cost otherwise), plus a
+# workflow_call so release.yml can run it against the release it just cut.
 #
 # The workflow file is in its own path filter: without that, a PR editing
 # only this file never runs the job it changes.
@@ -24,8 +22,23 @@ on:
     paths:
       - "installer/**"
       - ".github/workflows/installer-smoke.yml"
-  release:
-    types: [published]
+
+  # Called by release.yml, rather than triggering on release:published.
+  #
+  # Two reasons it cannot be a release trigger. The sdist this exercises is
+  # attached by the release job, and release:published fires alongside that
+  # upload -- the race lands on the "no matching asset, fall back to the source
+  # archive" branch and fails on the missing _version.py, which is exactly what
+  # happened on the 1.0.0 rename. And the release under test is a *prerelease*
+  # at this point, which /releases/latest deliberately excludes, so the default
+  # installer path would verify the previous release and pass while proving
+  # nothing about this one.
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to verify. Omit to test whatever /releases/latest resolves to."
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -59,9 +72,25 @@ jobs:
       #
       # -NoLaunch keeps this scoped to install + extract; the full
       # bootstrap.py/uv-sync path is launcher-smoke's job, not this one's.
+      #
+      # -Version pins the release under test when one is passed in. Without it
+      # the script resolves /releases/latest, which is the wrong target twice
+      # over during a release: the new release is still a prerelease and so
+      # excluded from `latest`, and any concurrent release would decide what
+      # gets tested. On the path/PR triggers no tag is passed and `latest` is
+      # the right answer.
       - name: Run the installer for real
         shell: powershell
-        run: .\installer\install-windows.ps1 -Repo $env:GITHUB_REPOSITORY -NoLaunch
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ($env:TAG) {
+            Write-Host "Verifying release $env:TAG"
+            .\installer\install-windows.ps1 -Repo $env:GITHUB_REPOSITORY -Version $env:TAG -NoLaunch
+          } else {
+            Write-Host "Verifying whatever /releases/latest resolves to"
+            .\installer\install-windows.ps1 -Repo $env:GITHUB_REPOSITORY -NoLaunch
+          }
 
       # The real assertion: not "the script exited 0" but "a working install
       # landed with the version the sdist actually carries" -- proves the
@@ -73,6 +102,8 @@ jobs:
       # The rejection half is the earlier step's job.
       - name: Verify the install
         shell: powershell
+        env:
+          TAG: ${{ inputs.tag }}
         run: |
           $dest = "$env:LOCALAPPDATA\Programs\CaseSorter"
           if (-not (Test-Path "$dest\main.py")) {
@@ -87,7 +118,21 @@ jobs:
           $content = Get-Content $versionFile -Raw
           Write-Host "----- sorter/_version.py -----"
           Write-Host $content
-          if ($content -notmatch "__version__\s*=.*'[0-9]") {
+          if ($content -notmatch "__version__\s*=.*'([0-9][^']*)'") {
             Write-Error "sorter/_version.py does not carry a real version."
             exit 1
+          }
+          $installed = $Matches[1]
+
+          # When a tag was passed, "a real version" is not enough -- it has to
+          # be *this* release. Anything else means the installer matched some
+          # other release's asset, which is precisely the silent degradation
+          # this job exists to catch.
+          if ($env:TAG) {
+            $expected = $env:TAG -replace '^v', ''
+            if ($installed -ne $expected) {
+              Write-Error "Installed version '$installed' is not the release under test ('$expected')."
+              exit 1
+            }
+            Write-Host "Installed version matches the release under test: $installed"
           }

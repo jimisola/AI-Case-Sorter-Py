@@ -1,10 +1,16 @@
 name: Publish
 
+# No release: trigger any more -- release.yml owns the whole release, including
+# tagging, attaching artifacts, verification and publishing. Two workflows both
+# firing on release:published is what produced the race this replaced: the
+# installer check ran alongside the asset upload rather than after it.
+#
+# What is left here is the continuous half: build and check the packaging path
+# on every push to main, plus a manual escape hatch for publishing an already
+# built artifact.
 on:
   push:
     branches: [main]
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       target:
@@ -26,8 +32,6 @@ jobs:
   package:
     name: Build and check
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # only used by the release-upload step below
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -45,45 +49,6 @@ jobs:
       - name: Build
         run: uv build
 
-      # hatch-vcs reads the tag back from git rather than trusting the event
-      # payload; this catches them disagreeing, e.g. a dirty working tree
-      # making hatch-vcs append .devN+dirty to an otherwise-correct tag.
-      - name: Assert the built version matches the release tag
-        if: github.event_name == 'release'
-        env:
-          TAG: ${{ github.event.release.tag_name }}
-        run: |
-          BUILT="$(grep -oP "(?<=^__version__ = version = ')[^']+" sorter/_version.py)"
-          if [ "$BUILT" != "$TAG" ]; then
-            echo "::error::Built version '$BUILT' does not match release tag '$TAG' -- refusing to publish."
-            exit 1
-          fi
-
-      # The updater matches this filename exactly (updater._expected_asset_name)
-      # and silently falls back to the source archive when it misses -- losing
-      # the baked-in version the sdist exists to deliver. hatchling normalizes
-      # the version per PEP 440, so a tag like 1.2.3-rc1 builds as 1.2.3rc1 and
-      # would never match. Assert the name here so that fails the release
-      # instead of quietly degrading every client.
-      #
-      # Checked inside the artifact, not the workspace: that proves the file
-      # the updater downloads actually carries the version, rather than just
-      # proving hatch-vcs ran.
-      - name: Assert the sdist is named and stamped as the updater expects
-        if: github.event_name == 'release'
-        env:
-          TAG: ${{ github.event.release.tag_name }}
-        run: |
-          SDIST="dist/ai_case_sorter-${TAG#v}.tar.gz"
-          if [ ! -f "$SDIST" ]; then
-            echo "::error::Expected $SDIST; built $(ls dist/*.tar.gz). The updater matches by exact name and would fall back to the source archive."
-            exit 1
-          fi
-          if ! tar -tzf "$SDIST" | grep -qE '(^|/)sorter/_version\.py$'; then
-            echo "::error::$SDIST does not contain sorter/_version.py -- an install from it would report 0.0.0+unknown."
-            exit 1
-          fi
-
       - name: Check package metadata
         run: pipx run twine check --strict dist/*
 
@@ -92,40 +57,15 @@ jobs:
           name: dist
           path: dist/
 
-      # No separate app-archive build step: sorter/updater.py's _pick_asset
-      # downloads the sdist above by exact name (ai_case_sorter-<tag>.tar.gz).
-      # hatch-vcs's build hook already stamps sorter/_version.py into every
-      # build target, sdist included, so it carries the correct version with
-      # nothing extra to keep in sync. This used to be a hand-built zip
-      # (git archive + a manual copy of _version.py); that second build path
-      # was the actual cause of a real version mismatch once, so it's gone
-      # rather than fixed again.
-      #
-      # Attaches the wheel + sdist to the release that triggered this run --
-      # a real "pre-built download" story with zero PyPI dependency, live
-      # regardless of whether publish-to-pypi below is ever turned on.
-      #
-      # --clobber so a re-run replaces its own artifacts rather than failing
-      # half-uploaded: without it, an asset already present wins and the
-      # updater would serve whatever got there first.
-      - name: Attach artifacts to the release
-        if: github.event_name == 'release'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload --clobber "$TAG" dist/*
-
-  # Gated behind a repo variable, unset = off, so merging this workflow
-  # changes nothing until a maintainer deliberately opts in (Settings ->
-  # Actions -> Variables -> PYPI_PUBLISH_ENABLED = true). A skipped job
-  # reports as skipped, not failed, and nothing here is in any other job's
-  # `needs:`, so a disabled or failing publish can never block a release.
+  # Manual only. The release path publishes from release.yml, where it is gated
+  # on the installer verification; these two exist for the case that needs a
+  # human anyway -- re-publishing after a transient index failure, or pushing a
+  # build to TestPyPI to look at. Reaching an index still requires approving the
+  # `test`/`stable` environment.
   publish-to-testpypi:
     name: Publish to TestPyPI
     needs: package
-    if: |
-      (github.event_name == 'release' && vars.PYPI_PUBLISH_ENABLED == 'true') ||
-      (github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi')
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
     runs-on: ubuntu-latest
     environment:
       name: test
@@ -146,12 +86,10 @@ jobs:
   publish-to-pypi:
     name: Publish to PyPI
     needs: package
-    if: |
-      (github.event_name == 'release' && vars.PYPI_PUBLISH_ENABLED == 'true') ||
-      (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'pypi'
     runs-on: ubuntu-latest
     environment:
-      name: prod
+      name: stable
       url: https://pypi.org/p/ai-case-sorter
     permissions:
       id-token: write # required for trusted publishing (OIDC) -- no API token stored

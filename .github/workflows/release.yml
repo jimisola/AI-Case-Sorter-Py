@@ -1,5 +1,33 @@
 name: Release
 
+# The whole release, start to finish, in one workflow.
+#
+# Previously this stopped at "draft release created" and publish.yml took over
+# on release:published. That split had two problems. Everything that verified
+# the release ran *after* it was public -- so a failure meant a bad release was
+# already live and already visible to every updater polling /releases/latest.
+# And publish.yml attached the sdist after publication, leaving a window (26
+# seconds, measured on 1.0.0) where the release existed with no matching asset
+# and clients silently fell back to the source archive.
+#
+# The shape that fixes both is to make the release *invisible* until it has been
+# verified:
+#
+#   prepare  ->  checks  ->  [approval]  ->  release (prerelease + assets)
+#                                              ->  verify installer
+#                                              ->  promote to latest
+#                                              ->  TestPyPI  ->  PyPI
+#
+# A prerelease is the key. It is publicly readable by exact tag, so the
+# installer can be run against it for real, but /releases/latest excludes it --
+# so updater.py and a default installer run cannot see it. If verification
+# fails, nothing was ever served: no user saw the release, and PyPI (the one
+# irreversible step) never ran.
+#
+# No draft anywhere. A draft would be invisible to the verification too --
+# /releases/tags/<tag> 404s for the unauthenticated fetch the installer does --
+# which is exactly why the release is a prerelease and not a draft.
+
 on:
   workflow_dispatch:
     inputs:
@@ -17,7 +45,7 @@ on:
         type: boolean
         default: false
       dry-run:
-        description: "Validate and preview only -- no tag pushed, no draft release created."
+        description: "Validate and preview only -- no checks run, no tag pushed, nothing published."
         required: false
         type: boolean
         default: true
@@ -30,10 +58,17 @@ permissions:
   contents: read
 
 jobs:
-  release:
+  # Resolves what would be released and writes the summary. Deliberately does
+  # nothing durable: a dry run is exactly this job and nothing else, so the
+  # preview costs one cheap job rather than a full pipeline.
+  prepare:
+    name: resolve version and notes
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      auto: ${{ steps.resolve.outputs.auto }}
+      source: ${{ steps.resolve.outputs.source }}
+      previous: ${{ steps.previous.outputs.tag }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -48,8 +83,8 @@ jobs:
         with:
           version: ${{ inputs.version }}
 
-      # Captured before "Push tag" creates the new tag at HEAD -- git
-      # describe run after that would find the just-created tag instead.
+      # Captured before the release job creates the new tag -- git describe run
+      # after that would find the just-created tag instead.
       - name: Record previous tag
         id: previous
         run: |
@@ -95,8 +130,8 @@ jobs:
             echo "source=$SOURCE"
           } >> "$GITHUB_OUTPUT"
 
-      # Also enforced in check-release.yml: this prevents before tagging,
-      # that catches a release made by hand in the UI.
+      # Also enforced in check-release.yml: this prevents before tagging, that
+      # catches a release made by hand in the UI.
       - uses: ./.github/actions/check-release-branch
         with:
           ref: ${{ inputs.ref || github.ref }}
@@ -115,40 +150,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: git-cliff --config cliff.toml --latest --unreleased --strip all --output NOTES.md
 
-      # persist-credentials: false means `origin` has no auth; push to an
-      # explicit tokenised URL rather than leaving one in .git/config.
-      - name: Push tag
-        if: ${{ !inputs.dry-run }}
-        env:
-          VERSION: ${{ steps.resolve.outputs.version }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "$VERSION"
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$VERSION"
-
-      - name: Create draft GitHub Release
-        if: ${{ !inputs.dry-run }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.resolve.outputs.version }}
-        run: |
-          # gh release create has no --json; it prints the URL on stdout.
-          DRAFT_URL=$(gh release create "$VERSION" \
-            --title "$VERSION" \
-            --notes-file NOTES.md \
-            --draft)
-          {
-            echo "### Release draft created"
-            echo ""
-            echo "**Version:** \`$VERSION\`"
-            echo ""
-            echo "**Draft URL:** $DRAFT_URL"
-            echo ""
-            echo "Review the draft and click **Publish release** to trigger the publish workflows."
-          } >> "$GITHUB_STEP_SUMMARY"
+      # Handed to the release job rather than regenerated there: the notes the
+      # reviewer approved are then provably the notes that ship.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-notes
+          path: NOTES.md
 
       - name: Summary
         if: always()
@@ -164,10 +171,10 @@ jobs:
           # expand for both.
           if [ "$DRY_RUN" = "true" ]; then
             HEADING="Release (dry run)"
-            MODE="dry run -- no tag pushed, no release created"
+            MODE="dry run -- nothing tagged, nothing published"
           else
             HEADING="Release"
-            MODE="tag pushed, draft release created"
+            MODE="awaiting approval, then tag + prerelease + verify + publish"
           fi
           {
             echo "### $HEADING"
@@ -197,3 +204,240 @@ jobs:
             echo ""
             echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # The same checks that guard main, called rather than reimplemented, and run
+  # *before* the approval gate so the reviewer is approving something already
+  # green rather than a version string.
+  lint:
+    name: checks
+    needs: prepare
+    if: ${{ !inputs.dry-run }}
+    uses: ./.github/workflows/lint.yml
+    permissions:
+      contents: read
+
+  test:
+    name: checks
+    needs: prepare
+    if: ${{ !inputs.dry-run }}
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+
+  # THE APPROVAL GATE. `environment: stable` is what makes this job sit pending
+  # until a required reviewer approves it -- that is the in-flow confirmation,
+  # and by this point the summary above shows the version, the notes and a
+  # green check run.
+  #
+  # Environment protection rules are free on public repositories; the paid tier
+  # applies to private ones only.
+  release:
+    name: tag and create the prerelease
+    needs: [prepare, lint, test]
+    if: ${{ !inputs.dry-run }}
+    runs-on: ubuntu-latest
+    environment:
+      name: stable
+      url: ${{ steps.create.outputs.url }}
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-notes
+
+      # Caching disabled deliberately: this job's output can end up on PyPI, so
+      # a cache-poisoning risk here is a supply-chain concern, not just a speed
+      # tradeoff -- unlike the routine test matrix, which has no publish step
+      # downstream.
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: false
+
+      # Tagged locally first, and pushed only once the artifacts built from it
+      # have been checked. hatch-vcs derives the version from `git describe`, so
+      # the tag has to exist before the build for the artifact to carry the
+      # right version -- but nothing is published to the world until the checks
+      # below pass.
+      - name: Create the tag locally
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$VERSION"
+
+      - name: Build
+        run: uv build
+
+      # hatch-vcs reads the tag back from git rather than trusting the input;
+      # this catches them disagreeing, e.g. a dirty working tree making
+      # hatch-vcs append .devN+dirty to an otherwise-correct tag.
+      - name: Assert the built version matches the tag
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          BUILT="$(grep -oP "(?<=^__version__ = version = ')[^']+" sorter/_version.py)"
+          if [ "$BUILT" != "$VERSION" ]; then
+            echo "::error::Built version '$BUILT' does not match '$VERSION' -- refusing to release."
+            exit 1
+          fi
+
+      # The updater matches this filename exactly (updater._expected_asset_name)
+      # and silently falls back to the source archive when it misses -- losing
+      # the baked-in version the sdist exists to deliver. hatchling normalizes
+      # the version per PEP 440, so a tag like 1.2.3-rc1 builds as 1.2.3rc1 and
+      # would never match.
+      #
+      # Checked inside the artifact, not the workspace: that proves the file the
+      # updater downloads actually carries the version, rather than just proving
+      # hatch-vcs ran.
+      - name: Assert the sdist is named and stamped as the updater expects
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          SDIST="dist/ai_case_sorter-${VERSION#v}.tar.gz"
+          if [ ! -f "$SDIST" ]; then
+            echo "::error::Expected $SDIST; built $(ls dist/*.tar.gz). The updater matches by exact name and would fall back to the source archive."
+            exit 1
+          fi
+          if ! tar -tzf "$SDIST" | grep -qE '(^|/)sorter/_version\.py$'; then
+            echo "::error::$SDIST does not contain sorter/_version.py -- an install from it would report 0.0.0+unknown."
+            exit 1
+          fi
+
+      - name: Check package metadata
+        run: pipx run twine check --strict dist/*
+
+      # persist-credentials: false means `origin` has no auth; push to an
+      # explicit tokenised URL rather than leaving one in .git/config.
+      - name: Push the tag
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$VERSION"
+
+      # --prerelease is what keeps this invisible until verified: publicly
+      # readable by exact tag, so the installer can be run against it, but
+      # excluded from /releases/latest, so no updater and no default installer
+      # run can reach it yet.
+      #
+      # Assets are passed to `create` rather than uploaded afterwards, so the
+      # release never exists in a state where its sdist is missing.
+      - name: Create the prerelease with its artifacts
+        id: create
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          URL=$(gh release create "$VERSION" \
+            --title "$VERSION" \
+            --notes-file NOTES.md \
+            --prerelease \
+            dist/*)
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Prerelease created"
+            echo ""
+            echo "\`$VERSION\` -- $URL"
+            echo ""
+            echo "Not visible to updaters yet: \`/releases/latest\` excludes prereleases."
+            echo "It is promoted only if the installer verification below passes."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist
+          path: dist/
+
+  # Installs the release for real, on Windows, from the assets just attached --
+  # pinned to this tag, since /releases/latest would resolve to the *previous*
+  # release while this one is still a prerelease.
+  verify-installer:
+    name: verify
+    needs: [prepare, release]
+    uses: ./.github/workflows/installer-smoke.yml
+    permissions:
+      contents: read
+    with:
+      tag: ${{ needs.prepare.outputs.version }}
+
+  # The moment the release becomes real. One flag flip, with the assets already
+  # in place -- so there is no window where /releases/latest returns a release
+  # whose sdist has not landed yet.
+  promote:
+    name: promote to latest
+    needs: [prepare, verify-installer]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Promote the prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh release edit "$VERSION" --repo "$REPO" --prerelease=false --latest
+          {
+            echo "### Released"
+            echo ""
+            echo "\`$VERSION\` is now the latest release. Updaters will pick it up."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Gated behind a repo variable, unset = off, so this changes nothing until a
+  # maintainer deliberately opts in (Settings -> Actions -> Variables ->
+  # PYPI_PUBLISH_ENABLED = true).
+  publish-to-testpypi:
+    name: publish to TestPyPI
+    needs: promote
+    if: vars.PYPI_PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: test
+      url: https://test.pypi.org/p/ai-case-sorter
+    permissions:
+      id-token: write # required for trusted publishing (OIDC) -- no API token stored
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  # Last, because it is the only step that cannot be undone: a PyPI version can
+  # be yanked but never replaced. Everything before it -- the tag, the release,
+  # even the promotion -- can be deleted and redone.
+  publish-to-pypi:
+    name: publish to PyPI
+    needs: [promote, publish-to-testpypi]
+    if: vars.PYPI_PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: stable
+      url: https://pypi.org/p/ai-case-sorter
+    permissions:
+      id-token: write # required for trusted publishing (OIDC) -- no API token stored
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          skip-existing: true

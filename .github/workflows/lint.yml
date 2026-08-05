@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Callable so release.yml can gate a release on the same checks that
+  # guard main, rather than reimplementing them.
+  workflow_call:
 
 permissions:
   contents: read
