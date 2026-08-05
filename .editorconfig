@@ -1,0 +1,28 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.py]
+max_line_length = 120
+
+[*.{yml,yaml,json,json5,toml}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+# CRLF for both, matching .gitattributes. Without the .ps1 rule an editor
+# honouring this file rewrites installer/install-windows.ps1 to LF on save,
+# git re-normalises it back, and the result is a whole-file diff that hides
+# the handful of real changed lines inside it.
+[*.bat]
+end_of_line = crlf
+
+[*.ps1]
+end_of_line = crlf
