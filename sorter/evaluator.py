@@ -102,7 +102,7 @@ def _score_token_match(target: list[str], model: list[str]) -> float:
     positional = sum(1 for i in range(min(len(target), len(model))) if _tokens_equivalent(target[i], model[i]))
     score += positional * 50.0
     in_order, last = True, -1
-    for t, m in sorted(matches, key=lambda x: x[0]):
+    for _, m in sorted(matches, key=lambda x: x[0]):
         if m < last:
             in_order = False
             break

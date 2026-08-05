@@ -524,8 +524,8 @@ class CommunityApi:
             )
         try:
             data = resp.json()
-        except ValueError:
-            raise CommunityApiError(f"FileUploadRequest returned non-JSON: {text[:200]!r}")
+        except ValueError as exc:
+            raise CommunityApiError(f"FileUploadRequest returned non-JSON: {text[:200]!r}") from exc
         if not isinstance(data, dict):
             raise CommunityApiError("FileUploadRequest returned an unexpected payload.")
         ticket = SasResponse.from_json(data)

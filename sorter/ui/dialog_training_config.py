@@ -54,23 +54,24 @@ class TrainingConfigDialog(tk.Toplevel):
         frm = ttk.Frame(self, padding=12)
         frm.pack(fill=tk.BOTH, expand=True)
 
+        # (label, settings key, Spinbox kwargs) — every row is a Spinbox, so
+        # there is no widget-kind column to carry.
         rows = [
-            ("Epochs", "epochs", "spin", {"from_": 1, "to": 200}),
-            ("Batch size", "batch_size", "spin", {"from_": 1, "to": 1024}),
-            ("Learning rate", "learning_rate", "spin", {"from_": 1e-6, "to": 1.0, "increment": 1e-5, "format": "%.6f"}),
-            ("Weight decay", "weight_decay", "spin", {"from_": 0.0, "to": 1.0, "increment": 1e-5, "format": "%.6f"}),
-            ("Dropout", "dropout_rate", "spin", {"from_": 0.0, "to": 1.0, "increment": 0.05, "format": "%.2f"}),
-            ("Validation split", "val_split", "spin", {"from_": 0.0, "to": 0.99, "increment": 0.05, "format": "%.2f"}),
-            ("Image size", "image_size", "spin", {"from_": 64, "to": 512}),
-            ("Max workers (-1 = auto)", "max_workers", "spin", {"from_": -1, "to": 64}),
+            ("Epochs", "epochs", {"from_": 1, "to": 200}),
+            ("Batch size", "batch_size", {"from_": 1, "to": 1024}),
+            ("Learning rate", "learning_rate", {"from_": 1e-6, "to": 1.0, "increment": 1e-5, "format": "%.6f"}),
+            ("Weight decay", "weight_decay", {"from_": 0.0, "to": 1.0, "increment": 1e-5, "format": "%.6f"}),
+            ("Dropout", "dropout_rate", {"from_": 0.0, "to": 1.0, "increment": 0.05, "format": "%.2f"}),
+            ("Validation split", "val_split", {"from_": 0.0, "to": 0.99, "increment": 0.05, "format": "%.2f"}),
+            ("Image size", "image_size", {"from_": 64, "to": 512}),
+            ("Max workers (-1 = auto)", "max_workers", {"from_": -1, "to": 64}),
             (
                 "Stochastic depth prob (-1 = default)",
                 "stochastic_depth_prob",
-                "spin",
                 {"from_": -1.0, "to": 0.5, "increment": 0.05, "format": "%.2f"},
             ),
         ]
-        for i, (lbl, key, kind, kwargs) in enumerate(rows):
+        for i, (lbl, key, kwargs) in enumerate(rows):
             ttk.Label(frm, text=lbl).grid(row=i, column=0, sticky="w", padx=4, pady=2)
             ttk.Spinbox(frm, textvariable=self.vars[key], width=12, **kwargs).grid(
                 row=i,

@@ -127,7 +127,9 @@ def test_headstamps_cascade_on_model_delete(tmp_path: Path) -> None:
     db = _new_db(tmp_path)
     cart_id = CartridgeRepo(db).create("9x18").id
     model = ModelRepo(db).create(Model(name="m1", cartridge_id=cart_id, model_mode="convnext_tiny"))
-    sibling = ModelRepo(db).create(Model(name="m2", cartridge_id=cart_id, model_mode="convnext_tiny"))
+    # The row itself is the point — a second model keeps the cartridge
+    # non-empty when m1 is deleted below. Created, never referenced by name.
+    ModelRepo(db).create(Model(name="m2", cartridge_id=cart_id, model_mode="convnext_tiny"))
     HeadstampRepo(db).add(model.id, "X")
     HeadstampRepo(db).add(model.id, "Y")
     ModelRepo(db).delete(model.id)  # sibling keeps cartridge non-empty

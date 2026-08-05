@@ -203,7 +203,7 @@ def _dump_environment(torch_mod: Any) -> None:
                 t = time.perf_counter()
                 iters = 10
                 for _ in range(iters):
-                    y = x @ x
+                    _ = x @ x
                 torch_mod.cuda.synchronize()
                 ms_per = (time.perf_counter() - t) * 1000.0 / iters
                 print(f"[env] matmul_1024x1024_fp32: {ms_per:.2f} ms/iter", file=sys.stderr, flush=True)

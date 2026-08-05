@@ -86,19 +86,19 @@ select = [
 ignore = [
     "E501",  # line length is enforced by the formatter, not the linter
 ]
-# Pre-existing findings as of the tool-adoption PR: real, but not a formatting
-# concern, and fixing them changes behavior (closures, exception chaining, loop
-# variables), so they're deferred to a follow-up review pass.
+# The tool-adoption PR deferred a batch of pre-existing findings here rather
+# than disabling the rules repo-wide, so that the deferral stayed honest: B023
+# (closure doesn't bind the loop variable) and F841 are bug classes, not style,
+# and switching them off globally would also have silenced every *new*
+# occurrence anywhere in the tree. Scoped per-file the rest of the codebase
+# keeps the check and the list shrinks visibly as the follow-up lands -- which
+# is what happened: the mechanical ones (B904, B007, F841) are fixed and gone
+# from the table below. What is left is kept on purpose, each with its reason.
 #
-# Pinned per-file rather than disabled repo-wide, which is what they were
-# first written as. B023 (closure doesn't bind the loop variable) and F841 are
-# bug classes, not style: switched off globally they'd also silence every
-# *new* occurrence anywhere in the tree, which is the opposite of "deferred" --
-# it's "permanently invisible". Scoped like this the deferral stays honest, the
-# rest of the codebase keeps the check, and the list shrinks visibly as the
-# follow-up lands. Ruff errors on a per-file-ignore whose file no longer trips
-# the rule only under --extend-select preview settings, so re-check with
-# `ruff check --select ...` when clearing one out.
+# Ruff errors on a per-file-ignore whose file no longer trips the rule only
+# under --extend-select preview settings, so when clearing one out, re-check
+# with `ruff check --isolated --select ...` -- that bypasses this table and so
+# proves the finding is actually fixed rather than still masked.
 
 [tool.ruff.lint.per-file-ignores]
 # Must run on whatever ancient interpreter the user's system provides, since
@@ -110,16 +110,10 @@ ignore = [
 # part of the port; don't rewrite it.
 "sorter/eval_report.py" = ["W291", "W293"]
 
-# --- deferred pre-existing findings (see the note above [tool.ruff.lint]) ---
+# --- kept on purpose (see the note above [tool.ruff.lint]) ---
 "sorter/camera.py" = ["B023"]                     # backend-probe closures
-"sorter/community_api.py" = ["B904"]              # raise without `from` in except
-"sorter/evaluator.py" = ["B007"]                  # unused loop control variable
-"sorter/local_inference.py" = ["F841"]            # unused local
 "sorter/model_io.py" = ["UP042"]                  # str+Enum -> StrEnum changes behavior subtly
-"sorter/ui/dialog_training_config.py" = ["B007"]  # unused loop control variable
-"sorter/ui/tab_train.py" = ["F841"]               # unused local
-"tests/unit/test_db.py" = ["B017"]                     # assert-raises-Exception, deliberate here
-"tests/unit/test_repository.py" = ["F841"]             # unused fixture local
+"tests/unit/test_db.py" = ["B017"]                # assert-raises-Exception, deliberate here
 
 [tool.ruff.lint.isort]
 known-first-party = ["sorter"]
