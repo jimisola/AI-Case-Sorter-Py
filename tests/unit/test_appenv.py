@@ -242,7 +242,7 @@ def test_verify_is_passed_per_request_not_on_the_session(tmp_path, monkeypatch) 
     on any machine that sets one (corporate proxies do). Only a per-request
     ``verify=`` wins.
     """
-    from tests.test_community_api import _api, _FakeResp, _FakeSession
+    from tests.unit.test_community_api import _api, _FakeResp, _FakeSession
 
     pem = tmp_path / "devcert.pem"
     pem.write_text("x")
@@ -258,7 +258,7 @@ def test_verify_is_passed_per_request_not_on_the_session(tmp_path, monkeypatch) 
 
 def test_default_verify_stays_true_so_env_ca_bundles_still_work(tmp_path) -> None:
     """Passing True (not None) keeps requests' own env-bundle handling intact."""
-    from tests.test_community_api import _api, _FakeResp, _FakeSession
+    from tests.unit.test_community_api import _api, _FakeResp, _FakeSession
 
     s = _FakeSession()
     api = _api(s)
