@@ -1,10 +1,12 @@
 """Entry point — initialize SQLite, load config, launch the Tk main window.
 
-Also hosts the ``--apply-update`` pre-launch hook: ``start.bat`` / ``start.sh``
-invoke it before installing dependencies so a staged update's own
-``requirements.txt`` is the one that gets installed. That path is stdlib-only
-and must stay that way — it runs against a virtualenv that may not have any
-third-party packages in it yet.
+Also hosts the ``--apply-update`` pre-launch hook. ``bootstrap.py`` is what
+actually applies a staged update these days — it imports
+``sorter.apply_update`` directly, before ``uv sync``, so the staged update's
+own ``pyproject.toml``/``uv.lock`` is what gets synced. This flag remains as a
+compatibility entry point for anything still launching the old way. Either
+route is stdlib-only and must stay that way — it runs against a virtualenv
+that may not have any third-party packages in it yet.
 """
 
 from __future__ import annotations

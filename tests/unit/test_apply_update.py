@@ -23,7 +23,7 @@ def install(monkeypatch, tmp_path: Path):
     (app / "main.py").write_text("old main\n", encoding="utf-8")
     (app / "sorter" / "__init__.py").write_text('__version__ = "0.1.0"\n', encoding="utf-8")
     (app / "sorter" / "gone.py").write_text("removed upstream\n", encoding="utf-8")
-    (app / "requirements.txt").write_text("requests\n", encoding="utf-8")
+    (app / "pyproject.toml").write_text("requests\n", encoding="utf-8")
     monkeypatch.setenv("CASESORTER_DATA_DIR", str(data))
     monkeypatch.setattr(paths, "app_root", lambda: app)
     return app, data
@@ -55,15 +55,49 @@ def test_applies_staged_files(install) -> None:
             "main.py": "new main\n",
             "sorter/__init__.py": '__version__ = "0.9.0"\n',
             "sorter/updater.py": "brand new\n",
-            "requirements.txt": "requests\nnumpy\n",
+            "pyproject.toml": "requests\nnumpy\n",
         },
     )
 
     assert apply_update.apply_pending() is True
     assert (app / "main.py").read_text(encoding="utf-8") == "new main\n"
     assert (app / "sorter" / "updater.py").read_text(encoding="utf-8") == "brand new\n"
-    # requirements.txt must land before the launcher's hash check runs.
-    assert (app / "requirements.txt").read_text(encoding="utf-8") == "requests\nnumpy\n"
+    # pyproject.toml/uv.lock must land before bootstrap.py's `uv sync` runs,
+    # so a dependency change in an update installs on this same launch.
+    assert (app / "pyproject.toml").read_text(encoding="utf-8") == "requests\nnumpy\n"
+
+
+def test_records_the_version_when_the_archive_carries_none(install) -> None:
+    """GitHub's auto-generated source archive — updater._pick_asset's fallback
+    when the named asset isn't published — ships no sorter/_version.py and no
+    .git, so without this the install keeps reporting 0.0.0+unknown. That
+    sentinel parses as a pre-release, so every check sees the same release as
+    newer and the update prompt returns on every launch, forever."""
+    app, data = install
+    _stage(data, {"main.py": "new main\n"}, version="0.9.0")
+
+    assert apply_update.apply_pending() is True
+
+    stamp = app / "sorter" / "_version.py"
+    assert stamp.is_file()
+    assert '__version__ = "0.9.0"' in stamp.read_text(encoding="utf-8")
+
+
+def test_a_built_archives_own_version_wins(install) -> None:
+    """The purpose-built release asset carries a hatch-vcs-generated
+    _version.py. That one came from a real build against real tags, so it is
+    authoritative and must not be overwritten by the metadata's copy."""
+    app, data = install
+    _stage(
+        data,
+        {"main.py": "new main\n", "sorter/_version.py": '__version__ = "0.9.0"\nversion = "0.9.0"\n'},
+        version="0.9.0",
+    )
+
+    assert apply_update.apply_pending() is True
+
+    text = (app / "sorter" / "_version.py").read_text(encoding="utf-8")
+    assert "version = " in text, "the built archive's own _version.py was clobbered"
 
 
 def test_prunes_modules_removed_upstream(install) -> None:
@@ -89,7 +123,8 @@ def test_protected_paths_survive(install) -> None:
     (app / ".venv" / "lib").mkdir(parents=True)
     (app / ".venv" / "lib" / "pyvenv.cfg").write_text("venv", encoding="utf-8")
     (app / ".env").write_text("SECRET=1", encoding="utf-8")
-    (app / ".installed").write_text("hash", encoding="utf-8")
+    (app / ".uv" / "bin").mkdir(parents=True)
+    (app / ".uv" / "bin" / "uv").write_text("uv-binary", encoding="utf-8")
     (app / "data").mkdir()
     (app / "data" / "casesorter.db").write_text("portable db", encoding="utf-8")
 
@@ -100,7 +135,7 @@ def test_protected_paths_survive(install) -> None:
             "main.py": "new\n",
             "sorter/__init__.py": "new\n",
             ".env": "STOLEN=1",
-            ".installed": "bogus",
+            ".uv/bin/uv": "clobbered",
             "data/casesorter.db": "clobbered",
             ".venv/lib/pyvenv.cfg": "clobbered",
         },
@@ -108,7 +143,7 @@ def test_protected_paths_survive(install) -> None:
 
     assert apply_update.apply_pending() is True
     assert (app / ".env").read_text(encoding="utf-8") == "SECRET=1"
-    assert (app / ".installed").read_text(encoding="utf-8") == "hash"
+    assert (app / ".uv" / "bin" / "uv").read_text(encoding="utf-8") == "uv-binary"
     assert (app / "data" / "casesorter.db").read_text(encoding="utf-8") == "portable db"
     assert (app / ".venv" / "lib" / "pyvenv.cfg").read_text(encoding="utf-8") == "venv"
 
