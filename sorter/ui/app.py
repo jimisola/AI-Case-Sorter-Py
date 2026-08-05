@@ -371,19 +371,22 @@ class MainWindow:
             pass
 
     def _apply_train_tab_visibility(self) -> None:
-        """Show the Train tab when a local model is active; hide in AI Config mode.
+        """Show the Train tab only for a local model this user owns.
 
-        Inverse of `_apply_ai_config_visibility`: AI models can't be trained
-        from this client, so the tab vanishes when the active model is the
-        AI Config sentinel.
+        Two things hide it. AI Config mode, because AI models can't be
+        trained from this client (the inverse of
+        `_apply_ai_config_visibility`). And a community download, because
+        that model belongs to its publisher — see `models.is_trainable`.
         """
         if self.db is None:
             return
-        from ..repository import SettingsRepo
+        from ..models import is_trainable
+        from ..repository import ModelRepo, SettingsRepo
 
         active_id = SettingsRepo(self.db).get_active_model_id()
+        active = ModelRepo(self.db).get(active_id) if active_id is not None else None
         try:
-            if active_id is None:
+            if active_id is None or not is_trainable(active):
                 self.notebook.hide(self._train_tab_container)
             else:
                 self.notebook.add(self._train_tab_container, text="Train")

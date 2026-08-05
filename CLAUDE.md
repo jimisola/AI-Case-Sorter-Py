@@ -61,7 +61,7 @@ automatically):**
 
 **Tests:** `pytest` from the repo root (`tests/conftest.py` puts the repo on
 `sys.path`; it lives at `tests/` top-level so it applies to both
-subdirectories below it). ~45 test modules split into `tests/unit/`
+subdirectories below it). ~48 test modules split into `tests/unit/`
 (everything, synthetic fixtures only) and `tests/integration/` (the two
 files that shell out to a real external tool — `uv build`, `git-cliff` —
 instead, each self-skipping if that tool is missing; `pytest -m "not
@@ -230,20 +230,36 @@ between them from the Run tab's template dropdown.
   → `classifier.classify_active` → `_resolve_destination(label, confidence)` →
   `broker.sort_and_move(slot)`. Handles the 5-position wheel pipeline
   (`_last_classified_slot`), the **confidence floor** (below → catch-all slot 0),
+  a `NoLocalCheckpointError` from `classify_active` (stops the run with the
+  reason; the Run tab also pre-flights this at Start so no case is fed),
   **auto-select trays**, **package/batch mode** (`_package_counts` under a lock),
   optional run-image storage, and feedback capture. Also `cycle_once()` (manual
   feed) and `test_once()` (feed+classify, no sort). Posts `run/*` and `test/*`.
 
 ### Classification
-- **`classifier.py`** — `classify_active`: routes to **local inference** when the
-  active model has a valid `model_path`, else to the **HTTP API**. Passes the
-  trained `image_size` through.
+- **`classifier.py`** — `classify_active`: **the active model alone picks the
+  backend.** A model is active → local inference; AI Config mode (no active
+  model) → HTTP. Passes the trained `image_size` through. A local model whose
+  checkpoint is missing raises `NoLocalCheckpointError` — it does **not**
+  degrade to HTTP. That fallback existed and was a trap: a renamed data folder
+  or an images-only community share left `model_path` unusable and the app
+  quietly POSTed case images to whatever the AI Config tab last pointed at,
+  surfacing only as a connection error naming a host the user wasn't knowingly
+  using. Switching backends is the user's call, on the Models tab. `active_model`
+  / `uses_local_inference` / `has_local_checkpoint` / `checkpoint_problem`
+  expose the decision alone, so the UI can ask "does this need PyTorch?" and
+  "can this model actually classify?" before starting a run — keep them in
+  lock-step with `classify_active` or the install gate (§5) drifts from reality.
 - **`local_inference.py`** — lazy-imports torch; picks the device once; caches
   loaded models by `(path, mtime)`; runs all inference through a single-threaded
   executor to keep cuDNN state warm. Detects the checkpoint's classifier layout
   and rebuilds the ConvNeXt head. Loads checkpoints with
   `torch.load(..., weights_only=True)` so a malicious `.pth` (community download
-  or imported ZIP) cannot execute code on load.
+  or imported ZIP) cannot execute code on load. Two presence checks, and the
+  difference matters: `is_installed()` is a `find_spec` probe (free, safe on the
+  UI thread) and is what the install gate uses; `is_available()` actually
+  imports torch and on first call runs the device probe + benchmark dump, which
+  would freeze the UI if called from a button handler.
 - **`api_client.py`** — stateless HTTP client (`classify`, `get_headstamps`)
   against an OpenAI-compatible server. JPEG-encodes the frame to a base64 data
   URL, renders the `{{headstamps}}` prompt placeholder, parses `choices[0]...`
@@ -282,6 +298,9 @@ between them from the Run tab's template dropdown.
   detect a compute-capability ≥ 8.0 NVIDIA GPU for the Install-PyTorch dialog.
 - **`image_store.py`** — pure pathlib helpers to list/filter/reclassify/delete
   training images by their `{headstamp}__{ticks}` filenames.
+- **`models.py` ownership helpers** — `is_foreign_model` / `is_trainable` /
+  `FOREIGN_MODEL_TYPES`: the single definition of "this model belongs to
+  someone else" (see §5, *Model ownership*).
 - **`model_io.py`** — model **ZIP** import/export compatible with the WinForms
   format (`manifest.json` + `model/<id>.pth` + `images/*`). Accepts both
   snake_case and WinForms PascalCase manifest keys. Import **rejects `..`
@@ -291,7 +310,8 @@ between them from the Run tab's template dropdown.
   headstamp slots, and sorting templates) instead of creating a duplicate, and
   keeps the local name / feedback-loop opt-in / AI config. `find_update_target`
   tells a caller which path an archive will take; `update_existing=False`
-  forces a separate copy.
+  forces a separate copy. `community_download=True` marks the install as the
+  publisher's, and an update never downgrades that (§5, *Model ownership*).
 
 ### Self-update (see §7 for the full flow)
 - **`updater.py`** — GitHub Releases check, version comparison, and download →
@@ -346,9 +366,46 @@ startup, and runs the bus drain loop. `run_worker(fn, on_done, on_error)` is the
 standard helper for offloading blocking work to a thread and marshaling the
 result back through the bus.
 
-**Tab visibility is mode-driven:** Train shows for a local active model; AI
+**Tab visibility is mode-driven:** Train shows for a local active model **that
+this user owns** (`models.is_trainable` — see *Model ownership* below); AI
 Config shows in AI Config mode; Community is mounted only while signed in. The
 `mode/changed` event re-evaluates this.
+
+### Model ownership
+A model installed from the **Community tab** is stamped `model_type =
+"CommunityManaged"` by `import_model(..., community_download=True)`, and
+`models.is_trainable()` is False for it: the local checkpoint is the
+publisher's, retraining forks it from the version they keep updating, and the
+archive usually ships without the images it was built from. `ReadOnly` (the
+legacy app's marker) is treated the same. `_merge_onto_installed` never lets
+an update downgrade ownership.
+
+**`community_model_uid` is not an ownership signal** — sharing your own model
+stamps a UID onto your local copy, so a UID means "exists in the community",
+not "isn't yours". Ownership is decided by *how the model reached this
+machine*, which is why the flag is a parameter of `import_model` rather than
+something read out of the manifest (a publisher's own copy is `Standard`, and
+that's what they export). A plain ZIP import stays owned — it's just as likely
+to be a user restoring their own model onto a new machine.
+
+### The PyTorch install gate
+PyTorch is the optional `[ml]` extra, so a fresh install has none. **The rule:
+torch is installed the first time something actually needs it, and never
+before** — an AI Config user must never be prompted. `ui/torch_gate.py` is the
+single entry point; it opens `dialog_install_torch` and re-enters the caller on
+success:
+
+```python
+if not ensure_torch(self, self._start, reason="Sorting needs PyTorch"):
+    return
+```
+
+Gated: Run tab Start + Manual feed (only when `classifier.uses_local_inference`
+is True), the evaluator, and training. The Train tab's Feed *offers* rather
+than gates — capturing and labelling images is exactly the workflow that
+doesn't need torch, so declining costs only the predicted-label convenience and
+is remembered for the session. Call it on the **main thread only** (it opens a
+modal), and never gate on `is_available()`.
 
 ### Tabs (`tab_*.py`)
 | Tab | File | Purpose |
@@ -442,6 +499,9 @@ a separate one, so a built-in is never the thing being written to),
   `NumericField`, labeled-entry/button-row helpers.
 - **`monitor.py`** — detachable history window: ring buffer of recent
   classifications with a color "snake" trailing the latest. Subscribes `run/history`.
+- **`torch_gate.py`** — `ensure_torch(parent, proceed, reason=…)`: the only
+  sanctioned way to front a local-model action with the PyTorch install dialog.
+  See *The PyTorch install gate* above.
 - **`sysutil.py`** — `open_path` (os.startfile / open / xdg-open).
 
 ---
@@ -605,7 +665,9 @@ flowchart TD
 - **PyTorch is optional and lazily imported.** Guard any torch use; surface a
   friendly "install PyTorch" path rather than letting an `ImportError` escape.
   Don't add torch to the core `dependencies` in `pyproject.toml` — it's the
-  `[ml]` extra.
+  `[ml]` extra. Any **new** entry point that runs a model locally must go
+  through `ui/torch_gate.ensure_torch` (§5) — a bare `LocalInferenceError`
+  reaching the user is the bug that gate exists to prevent.
 - **DB access is shared across threads** via one connection + RLock. Wrap
   multi-statement work in `db.transaction()` (reentrant via SAVEPOINT).
 - **Headstamps are read fresh, not cached** — don't reintroduce a cached
