@@ -1,0 +1,99 @@
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ruff:
+    name: ruff (check + format)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      # From uv.lock, so a new ruff release can't turn open PRs red on its
+      # own. --no-install-project: building would fire hatch-vcs's hook,
+      # which needs tags this checkout lacks.
+      - name: Install ruff from the lockfile
+        run: uv sync --locked --only-group dev --no-install-project
+
+      - name: ruff check
+        run: uv run --no-sync ruff check .
+
+      - name: ruff format --check
+        run: uv run --no-sync ruff format --check .
+
+  workflows:
+    name: lint the workflows themselves
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      # Digest-pinned: a release asset is mutable upstream.
+      - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: "1.7.7"
+          ACTIONLINT_SHA256: "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757"
+        run: |
+          curl -fsSL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+          sudo mv actionlint /usr/local/bin/
+          rm actionlint.tar.gz
+
+      - name: actionlint
+        run: actionlint .github/workflows/*.yml
+
+      # Pinned: an unpinned linter can fail a PR that changed nothing.
+      - name: Install zizmor
+        run: pip install zizmor==1.29.0
+
+      - name: zizmor
+        run: zizmor --min-severity medium .github/workflows/ .github/actions/
+
+      - name: Install yamllint
+        run: pip install yamllint==1.38.0
+
+      - name: yamllint
+        run: |
+          yamllint -d "{extends: relaxed, rules: {line-length: {max: 200}}}" \
+            .github/workflows/ .github/actions/
+
+  # cliff.toml decides the released version, so a wrong answer here ships a
+  # wrong release. The test skips without git-cliff, hence a job that installs it.
+  release-config:
+    name: release version mapping
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      # Same build the release uses -- this job asserts its bump mapping.
+      - uses: ./.github/actions/setup-git-cliff
+
+      - name: Install pytest from the lockfile
+        run: uv sync --locked --only-group dev --no-install-project
+
+      # Builds throwaway repos; shares no state with the rest of the suite.
+      - name: Assert the bump mapping the docs publish
+        run: uv run --no-sync pytest tests/integration/test_cliff_config.py -q

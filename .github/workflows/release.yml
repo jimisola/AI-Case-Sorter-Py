@@ -1,0 +1,199 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (PEP 440, no v prefix), e.g. 0.2.0. Leave empty to auto-detect from Conventional Commits."
+        required: false
+        type: string
+      ref:
+        description: "Branch, tag, or commit SHA to release from. Leave empty for the branch this workflow was dispatched on."
+        required: false
+        type: string
+      force:
+        description: "Allow a version that disagrees with the auto-detected one."
+        required: false
+        type: boolean
+        default: false
+      dry-run:
+        description: "Validate and preview only -- no tag pushed, no draft release created."
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: ./.github/actions/setup-git-cliff
+
+      - uses: ./.github/actions/check-version
+        with:
+          version: ${{ inputs.version }}
+
+      # Captured before "Push tag" creates the new tag at HEAD -- git
+      # describe run after that would find the just-created tag instead.
+      - name: Record previous tag
+        id: previous
+        run: |
+          echo "tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "")" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve version
+        id: resolve
+        env:
+          REQUESTED: ${{ inputs.version }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          AUTO="$(git-cliff --config cliff.toml --bumped-version)"
+
+          if [ -z "$REQUESTED" ]; then
+            VERSION="$AUTO"
+            SOURCE="auto-detected from Conventional Commits"
+          else
+            # Already validated by check-version above.
+            VERSION="$REQUESTED"
+            if [ "$VERSION" != "$AUTO" ]; then
+              if [ "$FORCE" != "true" ]; then
+                echo "::error::Version '$VERSION' disagrees with the auto-detected '$AUTO'. Re-run with force enabled if that is deliberate."
+                exit 1
+              fi
+              echo "::warning::Forcing '$VERSION' over the auto-detected '$AUTO'."
+              SOURCE="user-specified (forced over '$AUTO')"
+            else
+              SOURCE="user-specified (matches auto-detected)"
+            fi
+          fi
+
+          # Auto-detect can legitimately return nothing useful -- e.g. a repo
+          # with no tags *and* no conventional commits to infer a bump from.
+          # Better to fail here than to try tagging an empty string.
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not determine a version to release. Pass one explicitly."
+            exit 1
+          fi
+
+          {
+            echo "version=$VERSION"
+            echo "auto=$AUTO"
+            echo "source=$SOURCE"
+          } >> "$GITHUB_OUTPUT"
+
+      # Also enforced in check-release.yml: this prevents before tagging,
+      # that catches a release made by hand in the UI.
+      - uses: ./.github/actions/check-release-branch
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Check tag does not already exist
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          if git rev-parse "$VERSION" > /dev/null 2>&1; then
+            echo "::error::Tag '$VERSION' already exists"
+            exit 1
+          fi
+
+      - name: Generate changelog
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: git-cliff --config cliff.toml --latest --unreleased --strip all --output NOTES.md
+
+      # persist-credentials: false means `origin` has no auth; push to an
+      # explicit tokenised URL rather than leaving one in .git/config.
+      - name: Push tag
+        if: ${{ !inputs.dry-run }}
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$VERSION"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$VERSION"
+
+      - name: Create draft GitHub Release
+        if: ${{ !inputs.dry-run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          # gh release create has no --json; it prints the URL on stdout.
+          DRAFT_URL=$(gh release create "$VERSION" \
+            --title "$VERSION" \
+            --notes-file NOTES.md \
+            --draft)
+          {
+            echo "### Release draft created"
+            echo ""
+            echo "**Version:** \`$VERSION\`"
+            echo ""
+            echo "**Draft URL:** $DRAFT_URL"
+            echo ""
+            echo "Review the draft and click **Publish release** to trigger the publish workflows."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summary
+        if: always()
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          AUTO: ${{ steps.resolve.outputs.auto }}
+          SOURCE: ${{ steps.resolve.outputs.source }}
+          REF: ${{ inputs.ref || github.ref }}
+          DRY_RUN: ${{ inputs.dry-run }}
+          LATEST: ${{ steps.previous.outputs.tag }}
+        run: |
+          # Test the value: "false" is non-empty, so ${DRY_RUN:+...} would
+          # expand for both.
+          if [ "$DRY_RUN" = "true" ]; then
+            HEADING="Release (dry run)"
+            MODE="dry run -- no tag pushed, no release created"
+          else
+            HEADING="Release"
+            MODE="tag pushed, draft release created"
+          fi
+          {
+            echo "### $HEADING"
+            echo ""
+            echo "| | Value |"
+            echo "|---|---|"
+            echo "| Version | \`$VERSION\` |"
+            echo "| Auto-detected | \`$AUTO\` |"
+            echo "| Source | $SOURCE |"
+            echo "| Ref | \`$REF\` |"
+            echo "| Previous tag | \`${LATEST:-(none yet)}\` |"
+            echo "| Mode | $MODE |"
+            echo ""
+            echo "#### Release notes"
+            echo ""
+            cat NOTES.md 2>/dev/null || echo "_(not generated -- an earlier step failed)_"
+            echo ""
+            # Anything here but missing above was dropped as unconventional
+            # or as a skipped ci:/build: type.
+            echo "<details><summary>Commits since \`${LATEST:-the beginning}\`</summary>"
+            echo ""
+            if [ -n "$LATEST" ]; then
+              git log "${LATEST}..HEAD" --format="- %h %s"
+            else
+              git log --format="- %h %s" | head -40
+            fi
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
