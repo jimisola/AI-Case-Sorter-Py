@@ -91,8 +91,9 @@ ignore = [
 # variables), so they're deferred to a follow-up review pass.
 #
 # Pinned per-file rather than disabled repo-wide, which is what they were
-# first written as. B023 (closure doesn't bind the loop variable) and F841 are
-# bug classes, not style: switched off globally they'd also silence every
+# first written as. B023 (closure doesn't bind the loop variable) -- since
+# cleared, which is this table working as intended -- and F841 are bug
+# classes, not style: switched off globally they'd also silence every
 # *new* occurrence anywhere in the tree, which is the opposite of "deferred" --
 # it's "permanently invisible". Scoped like this the deferral stays honest, the
 # rest of the codebase keeps the check, and the list shrinks visibly as the
@@ -111,7 +112,6 @@ ignore = [
 "sorter/eval_report.py" = ["W291", "W293"]
 
 # --- deferred pre-existing findings (see the note above [tool.ruff.lint]) ---
-"sorter/camera.py" = ["B023"]                     # backend-probe closures
 "sorter/community_api.py" = ["B904"]              # raise without `from` in except
 "sorter/evaluator.py" = ["B007"]                  # unused loop control variable
 "sorter/local_inference.py" = ["F841"]            # unused local
