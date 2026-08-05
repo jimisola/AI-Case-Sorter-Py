@@ -1,0 +1,22 @@
+name: Check release branch
+description: Fail unless the ref is a branch releases may be cut from.
+
+inputs:
+  ref:
+    description: "Branch name or refs/heads/... ref."
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        REF: ${{ inputs.ref }}
+      run: |
+        set -euo pipefail
+        BRANCH="${REF#refs/heads/}"
+        if [[ "$BRANCH" != "main" && "$BRANCH" != hotfix/* && "$BRANCH" != release/* ]]; then
+          echo "::error::Releases must come from main, hotfix/*, or release/* (got: '$BRANCH')."
+          echo "::error::If you passed a raw commit SHA, release from the branch containing it instead."
+          exit 1
+        fi

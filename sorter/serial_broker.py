@@ -8,18 +8,19 @@ Threading model: one reader thread, one ping thread, writes serialized with a lo
 Each callback is invoked on the reader thread; UI layers should post into an
 EventBus and drain it from the Tk main loop.
 """
+
 from __future__ import annotations
 
 import json
 import threading
 import time
-from typing import Any, Callable, Iterable
+from collections.abc import Callable, Iterable
+from typing import Any
 
 import serial
 from serial.tools import list_ports
 
-
-READ_TIMEOUT_S = 0.5            # short so the reader thread can react to stop()
+READ_TIMEOUT_S = 0.5  # short so the reader thread can react to stop()
 PING_INTERVAL_S = 1.0
 PING_IDLE_THRESHOLD_S = 2.0
 HANDSHAKE_READ_TIMEOUT_S = 4.0  # configurable via Serial Config -> Probe timeout
@@ -72,7 +73,7 @@ class SerialBroker:
         self.on_waiting: list[Callback] = []
         self.on_response: list[Callback] = []
         self.on_received: list[Callback] = []  # every line, raw
-        self.on_sent: list[Callback] = []      # every outbound command (with newline stripped)
+        self.on_sent: list[Callback] = []  # every outbound command (with newline stripped)
 
     # ----- lifecycle ----------------------------------------------------------
 
@@ -144,12 +145,8 @@ class SerialBroker:
         if self._reader_thread and self._reader_thread.is_alive():
             return
         self._stop_event.clear()
-        self._reader_thread = threading.Thread(
-            target=self._reader_loop, name="SerialReader", daemon=True
-        )
-        self._ping_thread = threading.Thread(
-            target=self._ping_loop, name="SerialPing", daemon=True
-        )
+        self._reader_thread = threading.Thread(target=self._reader_loop, name="SerialReader", daemon=True)
+        self._ping_thread = threading.Thread(target=self._ping_loop, name="SerialPing", daemon=True)
         self._reader_thread.start()
         self._ping_thread.start()
 

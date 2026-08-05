@@ -1,5 +1,9 @@
 # AI Case Sorter
 
+[![Build](https://github.com/sjseth/AI-Case-Sorter-Py/actions/workflows/build.yml/badge.svg)](https://github.com/sjseth/AI-Case-Sorter-Py/actions/workflows/build.yml)
+[![Lint](https://github.com/sjseth/AI-Case-Sorter-Py/actions/workflows/lint.yml/badge.svg)](https://github.com/sjseth/AI-Case-Sorter-Py/actions/workflows/lint.yml)
+[![License: GPL v3+](https://img.shields.io/badge/License-GPLv3%2B-blue.svg)](LICENSE)
+
 A cross-platform (Windows + Linux) desktop app that drives a machine which
 **sorts spent brass cartridge casings by headstamp**. A camera photographs each
 case, an image classifier predicts the headstamp stamped on its base, and a
@@ -79,7 +83,10 @@ The app can predict a headstamp in one of two modes:
 
 ## Requirements
 
-- **Python 3.10+**
+- **Some Python 3** already on your machine, new enough to run `bootstrap.py`
+  itself — it doesn't need to be the app's own Python. That one is provisioned
+  separately by [uv](https://docs.astral.sh/uv/), which the launch scripts
+  install automatically on first run if it isn't already present.
 - Core Python dependencies (installed automatically by the launch scripts):
   pyserial, opencv-python, numpy, Pillow, requests, msal, platformdirs
   (+ pygrabber on Windows for friendly camera names).
@@ -111,8 +118,10 @@ re-run the installer. Full details in [`installer/README.md`](installer/README.m
 
 ### From source
 
-The launch scripts create a virtual environment and install dependencies on
-first run.
+The launch scripts install [uv](https://docs.astral.sh/uv/) if it isn't
+already on your machine, use it to fetch the right Python version and sync
+dependencies from the committed lockfile, then launch the app — all in one
+step, every time.
 
 **Linux / macOS**
 ```bash
@@ -120,9 +129,10 @@ git clone https://github.com/sjseth/AI-Case-Sorter-Py.git
 cd AI-Case-Sorter-Py
 ./start.sh
 ```
-On minimal Linux installs the script may offer to install system packages
-(tkinter, libGL, glib, venv) via `sudo`. Pass `--auto` (or set `AUTO_INSTALL=1`)
-to confirm those installs automatically — it will print a notice before doing so.
+On minimal Linux installs the script may offer to install `libGL`/`glib` via
+`sudo` — the one thing uv genuinely can't provision, since they're system
+graphics libraries, not Python packages. Pass `--auto` (or set
+`AUTO_INSTALL=1`) to confirm that automatically; it prints a notice first.
 
 **Windows**
 ```bat
@@ -131,10 +141,9 @@ cd AI-Case-Sorter-Py
 start.bat
 ```
 
-**Run it directly** (if you manage your own environment):
+**Run it directly** (if you have `uv` yourself and want to manage it):
 ```bash
-pip install -r requirements.txt
-python main.py
+uv run python main.py
 ```
 
 ### Running without hardware
@@ -148,10 +157,11 @@ UI, and most workflows without any hardware.
 ## Optional: PyTorch
 
 Local training and local inference need PyTorch. The app will offer to install it
-for you (the **Install PyTorch** dialog), or you can install the `ml` extra:
+for you (the **Install PyTorch** dialog), or you can install the `ml` extra
+yourself:
 
 ```bash
-pip install ".[ml]"        # torch + torchvision
+uv sync --extra ml        # torch + torchvision
 ```
 
 - **GPU:** an NVIDIA card with **compute capability ≥ 8.0** (Ampere / RTX
@@ -196,8 +206,12 @@ the app. Nothing to do.
 
 - **Installed on Windows via the installer:** the app tells you when an update
   is available and installs it on the next restart.
-- **Running from a git checkout:** `git pull` as usual. The in-app updater is
-  still available, but a source checkout is normally managed with git.
+- **Running from a git checkout:** `git pull` as usual, then just launch the
+  app again — `./start.sh` / `start.bat` always run whatever's currently on
+  disk, so a pull that changes `bootstrap.py`, `start.sh`/`start.bat`
+  themselves, or `uv.lock` (new/updated dependencies) takes effect on the
+  very next launch with nothing extra to run. The in-app updater is still
+  available, but a source checkout is normally managed with git.
 - Disable update checks entirely with `CASESORTER_UPDATE_DISABLED=1`, or the
   checkbox in the update dialog.
 
@@ -206,13 +220,17 @@ the app. Nothing to do.
 ## Development
 
 ```bash
-pip install -r requirements.txt pytest
-pytest                       # ~200 tests covering the non-UI logic
+uv run pytest                # ~500 tests covering the non-UI logic
 ```
 
-Please run `pytest` before opening a PR. The UI itself is not covered by
-automated tests. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup and
-guidelines, and [`SECURITY.md`](SECURITY.md) to report a vulnerability.
+`uv run` syncs dependencies (including the `dev` group, which is where pytest
+lives) from the committed lockfile before running, so there's no separate
+install step. CI (`.github/workflows/build.yml`) runs the same suite across a
+Python version matrix on every push and PR.
+
+Please run `pytest` before opening a PR. Most of the UI isn't covered by automated
+tests — smoke-test UI changes by running the app. See [`CONTRIBUTING.md`](CONTRIBUTING.md)
+for setup and guidelines, and [`SECURITY.md`](SECURITY.md) to report a vulnerability.
 
 ### Pointing at a local community backend
 
@@ -236,8 +254,73 @@ and point `CASESORTER_API_CA_BUNDLE` at it.
   changes.
 - [`CLAUDE.md`](CLAUDE.md) — architecture map for contributors and AI coding
   assistants (layers, event bus, module reference, UI tabs, data layout).
-- [`OPEN_SOURCE_READINESS.md`](OPEN_SOURCE_READINESS.md) — open-source readiness
-  assessment and checklist.
+- [`RELEASING.md`](RELEASING.md) — how a release gets cut, for maintainers.
+
+---
+
+## Using the app
+
+A first run, start to finish — every tab referenced here is described in
+[Features](#features) above.
+
+1. **Launch it.** `./start.sh` / `start.bat` / the Windows installer's Start
+   Menu entry — see [Install & run](#install--run). First launch takes a
+   couple of minutes while dependencies sync; every launch after that is
+   fast.
+
+2. **No hardware yet? Skip straight to the emulator.** In the **Serial**
+   tab, set the port to **`Emulated`**. It mirrors the real board's protocol,
+   so everything below — camera, classification, sorting — works the same
+   with no sorter or camera attached, aside from what the camera itself
+   would show.
+
+3. **Connect a camera.** The **Camera** tab lists detected devices; pick
+   one and confirm you get a live preview. If casings aren't cropping
+   cleanly, the **Image Proc** tab tunes the Hough-circle detection and
+   primer mask against a captured frame, with a before/after preview.
+
+4. **Connect the sorter** (skip if using the emulator). The **Serial** tab
+   connects to the board, exposes its init settings, and has a **sort-arm
+   test** to confirm slots move correctly before you feed it real cases.
+
+5. **Choose how to classify.** Two modes — see
+   [Two ways to classify](#two-ways-to-classify) for the tradeoffs:
+   - **AI Config** — point the **AI Config** tab at an OpenAI-compatible
+     server (e.g. a local [CaseSorter AI Server](https://github.com/sjseth/AI-Case-Sorter-Server)).
+     No local model, no PyTorch, works immediately.
+   - **Local model** — activate one in the **Models** tab: create your own,
+     download one from the **Community** tab (sign-in required), or import
+     one from a ZIP. Local inference needs PyTorch — the app offers to
+     install it the first time you need it (see
+     [Optional: PyTorch](#optional-pytorch)).
+
+6. **Assign headstamps to slots.** In the **Run** tab, each slot card lists
+   the headstamps that route to it — check the ones you want, per slot.
+   Assignments are saved automatically as **sorting templates**, so you can
+   switch between different bin layouts (e.g. "range brass" vs. "match
+   prep") for the same model from the template dropdown, without
+   re-checking boxes each time.
+
+7. **Test before you commit hardware to it.** **Test once** in the Run tab
+   feeds and classifies a single case without moving the sort arm or motors
+   — confirms the whole pipeline (camera → crop → classify) end to end.
+   **Manual feed** does one real feed-and-sort cycle. **Start** runs the
+   full continuous loop.
+
+8. **Watch it work.** The Run tab's live slot grid updates per-headstamp
+   counts as cases are sorted; the **Monitor** button opens a detachable
+   history window showing a running log of recent classifications with a
+   color trail. Anything below your confidence floor routes to the
+   catch-all slot instead of guessing.
+
+9. **Improve the model over time.** The **Train** tab is feed → capture →
+   classify → label → save, building a labeled image set you can use to
+   train a local ConvNeXt model whenever you're ready — or just keep
+   collecting images while sorting normally ("Sort While Training").
+
+No hardware, no camera, nothing installed yet? Steps 2 and 5 (emulator +
+AI Config against a friend's or your own server) are enough to explore the
+whole app with zero physical setup.
 
 ---
 

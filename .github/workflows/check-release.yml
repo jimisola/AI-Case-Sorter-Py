@@ -1,0 +1,37 @@
+name: Check Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  check-release:
+    runs-on: ubuntu-latest
+    steps:
+      # Only needed so the local composite actions below resolve; this job
+      # validates release metadata and reads nothing else from the tree.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Check ref is a tag
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          case "$REF" in
+            refs/tags/*) ;;
+            *) echo "::error::Expected a tag ref (refs/tags/...) but got: $REF"; exit 1 ;;
+          esac
+
+      - uses: ./.github/actions/check-version
+        with:
+          version: ${{ github.ref_name }}
+
+      # Also enforced in release.yml: that prevents before tagging, this
+      # catches a release made by hand in the UI.
+      - uses: ./.github/actions/check-release-branch
+        with:
+          ref: ${{ github.event.release.target_commitish }}

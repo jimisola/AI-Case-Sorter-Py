@@ -1,0 +1,348 @@
+#!/usr/bin/env python3
+"""Cross-platform launcher bootstrap.
+
+Replaces the platform-duplicated logic that used to live separately in
+start.sh and start.bat -- both are now three-line shims that just call this
+file. Having one implementation in one language means the bootstrap logic
+is actually unit-testable, which the bash half never was.
+
+This file has to run on whatever old Python ships with the user's system,
+since its whole job is to provision a newer one via uv -- so it targets a
+low floor deliberately (see the ruff per-file-ignore for "bootstrap.py" in
+pyproject.toml: pyupgrade rewrites would happily rewrite this into
+3.12-only syntax and silently break it on exactly the systems it exists to
+serve) and imports nothing beyond the standard library.
+
+What it does, in order:
+  1. On Linux, offer to install libGL/glib via the system package manager
+     if the app's dependencies need them and they're missing. uv's
+     provisioned Python bundles Tcl/Tk (verified empirically while building
+     this), but graphics libraries like libGL aren't part of a Python
+     build -- they're system X11/GPU libraries opencv dlopens at runtime.
+  2. Ensure uv is available, installing it via the official installer
+     (pinned to UV_VERSION, not "latest") into a project-local .uv/ if it
+     isn't already on PATH. The installer itself verifies a sha256 baked in
+     at release time for each platform's binary; this script doesn't
+     re-invent that.
+  3. Apply any staged in-app update BEFORE syncing dependencies, so an
+     update that changes pyproject.toml/uv.lock gets its new dependencies
+     installed on this same launch. Mirrors the ordering start.sh used to
+     encode around --apply-update and the old requirements.txt hash --
+     only now there's no hash-based marker at all, because `uv sync`
+     reconciles against the venv's actual contents rather than trusting a
+     proxy for them.
+  4. `uv sync --frozen --no-install-project` -- --frozen takes the committed
+     uv.lock as-is and never re-resolves on a user's machine, so launches
+     stay deterministic and offline-safe (CI uses `--locked` instead, which
+     fails if the lock has drifted from pyproject.toml -- see
+     .github/workflows/build.yml). --no-install-project skips building the
+     sorter package itself: main.py imports it straight from the source
+     tree, so it was never needed for that, and building it is actively
+     harmful when there's no .git to derive a version from (see
+     pyproject.toml's [tool.hatch.version] and sorter/__init__.py).
+  5. Launch the app: `uv run --no-sync python main.py <forwarded args>`.
+     --no-sync, not --frozen: `uv run` syncs implicitly by default even with
+     --frozen, which would redo the very build step 4 skipped.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+
+# Bump deliberately, not automatically -- re-verify tkinter/libGL behavior
+# (see the module docstring) after bumping, the same way this version was
+# chosen: by actually running `uv python install` and importing tkinter/cv2,
+# not by assuming.
+UV_VERSION = "0.12.1"
+UV_INSTALL_DIR = ROOT / ".uv" / "bin"
+
+
+# flush=True because stdout is block-buffered whenever it isn't a terminal,
+# and this process ends by being killed while still inside main.py's Tk loop
+# -- so an unflushed buffer is never written at all. That is not theoretical:
+# build.yml's launcher-smoke redirects to a file and dumped it afterwards,
+# and the file came back empty every run, which is why its comment used to
+# say no [bootstrap] lines ever appeared. It also matters to a user watching
+# a multi-minute first-launch sync: block-buffered progress messages arrive
+# in 4 KB lumps, which reads as a hang.
+def log(msg: str) -> None:
+    print(f"[bootstrap] {msg}", flush=True)
+
+
+def warn(msg: str) -> None:
+    print(f"[bootstrap] {msg}", file=sys.stderr, flush=True)
+
+
+# ---------------------------------------------------------------------------
+# uv itself
+# ---------------------------------------------------------------------------
+
+
+def find_uv() -> str | None:
+    # Deferred: sorter is stdlib-only-compatible (see CLAUDE.md), so this is
+    # safe to import here, but doing it at module level would be one more
+    # thing that could break before this script gets a chance to matter.
+    # The logic lives in sorter/paths.py, not duplicated here, because
+    # dialog_install_torch.py needs the same lookup after launch (a
+    # uv-managed venv doesn't ship pip, so it uses `uv pip install` instead).
+    sys.path.insert(0, str(ROOT))
+    from sorter.paths import find_uv as _find_uv
+
+    return _find_uv()
+
+
+def install_uv() -> str:
+    log(f"uv not found; installing uv {UV_VERSION} into {UV_INSTALL_DIR} ...")
+    UV_INSTALL_DIR.mkdir(parents=True, exist_ok=True)
+
+    env = dict(os.environ)
+    env["UV_INSTALL_DIR"] = str(UV_INSTALL_DIR)
+    env["UV_NO_MODIFY_PATH"] = "1"
+    # Skip the receipt/self-update machinery the official installer sets up
+    # for a normal user install -- this copy is project-local and managed by
+    # this script, not by `uv self update`.
+    env["UV_UNMANAGED_INSTALL"] = str(UV_INSTALL_DIR)
+
+    base = f"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}"
+    if os.name == "nt":
+        script_url = f"{base}/uv-installer.ps1"
+        with urllib.request.urlopen(script_url, timeout=30) as resp:
+            script = resp.read().decode("utf-8")
+        # A temp file + -File, not piping the script via -Command - on stdin:
+        # real Windows PowerShell (powershell.exe, not pwsh) is far less
+        # reliable at reading a full multi-line script that way -- confirmed
+        # the hard way in CI: the piped version exited 0 with no error at all
+        # and simply never created the binary. -File is also what
+        # installer/install-windows.bat already uses successfully for its
+        # own .ps1, so it's a known-working pattern in this repo already.
+        script_path = UV_INSTALL_DIR / "_uv-installer.ps1"
+        script_path.write_text(script, encoding="utf-8")
+        # Prefer pwsh (PowerShell 7) over the legacy powershell.exe (5.1) if
+        # it's available: real CI failure, not a guess -- the installer
+        # script itself failed with "the 'Get-ExecutionPolicy' command was
+        # found ... but the module could not be loaded", a known symptom of
+        # powershell.exe inheriting a $env:PSModulePath that doesn't include
+        # 5.1's built-in module locations when spawned from a pwsh session
+        # (which this script always is, directly or via bootstrap.py's own
+        # caller). pwsh doesn't have that cross-version mismatch with itself.
+        # Not all end-user machines have pwsh, though, so fall back to
+        # powershell.exe -- it's what the official docs recommend and it
+        # works fine outside a nested-pwsh context.
+        ps_exe = "pwsh" if shutil.which("pwsh") else "powershell"
+        try:
+            subprocess.run(
+                [ps_exe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script_path)],
+                env=env,
+                check=True,
+            )
+        finally:
+            script_path.unlink(missing_ok=True)
+    else:
+        script_url = f"{base}/uv-installer.sh"
+        with urllib.request.urlopen(script_url, timeout=30) as resp:
+            script = resp.read().decode("utf-8")
+        subprocess.run(["sh"], input=script, text=True, env=env, check=True)
+
+    uv = find_uv()
+    if uv is None:
+        raise SystemExit(
+            "[bootstrap] The uv installer ran but uv still isn't where it should be "
+            f"({UV_INSTALL_DIR}). Install uv yourself from https://docs.astral.sh/uv/ "
+            "and re-run."
+        )
+    return uv
+
+
+# ---------------------------------------------------------------------------
+# Linux system packages -- not something uv or pip can install
+# ---------------------------------------------------------------------------
+
+_PKG_INSTALL = {
+    "apt": ["sudo", "apt-get", "install", "-y"],
+    "dnf": ["sudo", "dnf", "install", "-y"],
+    "pacman": ["sudo", "pacman", "-S", "--noconfirm"],
+}
+_PKG_NAMES = {
+    "apt": {"gl": "libgl1", "glib": "libglib2.0-0"},
+    "dnf": {"gl": "mesa-libGL", "glib": "glib2"},
+    "pacman": {"gl": "libglvnd", "glib": "glib2"},
+}
+
+
+def _detect_pkg_mgr() -> str | None:
+    for binary, name in (("apt-get", "apt"), ("dnf", "dnf"), ("pacman", "pacman")):
+        if shutil.which(binary):
+            return name
+    return None
+
+
+def _try_install_system_pkg(feature: str, auto_install: bool) -> bool:
+    mgr = _detect_pkg_mgr()
+    if mgr is None:
+        warn(f"Could not detect apt/dnf/pacman -- install the system {feature} library yourself.")
+        return False
+    pkg = _PKG_NAMES[mgr][feature]
+    if not auto_install:
+        if not sys.stdin.isatty():
+            warn(f"Not running interactively; re-run with --auto to install '{pkg}' via sudo {mgr} automatically.")
+            return False
+        reply = input(f"[bootstrap] Install '{pkg}' via sudo {mgr}? [y/N] ")
+        if reply.strip().lower() not in ("y", "yes"):
+            return False
+    cmd = _PKG_INSTALL[mgr] + [pkg]
+    log(f"Running: {' '.join(cmd)}")
+    return subprocess.call(cmd) == 0
+
+
+def ensure_linux_runtime_libs(uv: str, auto_install: bool) -> None:
+    """opencv dlopens libGL/glib at runtime. uv's Python bundles Tcl/Tk, but
+    not these -- they're system X11/graphics libraries, not part of a Python
+    build. Probed the same way start.sh did: try the import for real, in the
+    app's actual environment, and read the failure instead of guessing.
+
+    The probe loops because the import reports only the *first* library it
+    fails to find: on a minimal container or a fresh WSL image both libGL and
+    glib are typically missing, and installing one just reveals the other. One
+    pass would install libGL, return happy, and let the app die on glib with
+    none of this guidance. The loop is bounded by the number of features we
+    know how to install, so an unrecognised failure still exits rather than
+    spinning."""
+    if not sys.platform.startswith("linux"):
+        return
+
+    # (substring to match in stderr, _PKG_NAMES feature, message, hint)
+    known = (
+        ("libgl", "gl", "OpenCV needs libGL.so.1 from the system.", "Install the system OpenGL library and re-run."),
+        (
+            ("libgthread", "libglib"),
+            "glib",
+            "OpenCV needs glib from the system.",
+            "Install glib2 (apt: libglib2.0-0) and re-run.",
+        ),
+    )
+
+    # len(known) + 1 passes: one probe per library we might have to install,
+    # plus a final probe to confirm the last install actually fixed it.
+    for _ in range(len(known) + 1):
+        probe = subprocess.run(
+            [uv, "run", "--no-sync", "python", "-c", "import cv2"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        if probe.returncode == 0:
+            return
+
+        stderr = probe.stderr or ""
+        haystack = stderr.lower()
+        for needles, feature, message, hint in known:
+            if isinstance(needles, str):
+                needles = (needles,)
+            if any(n in haystack for n in needles):
+                log(message)
+                if not _try_install_system_pkg(feature, auto_install):
+                    raise SystemExit(f"[bootstrap] {hint}")
+                break
+        else:
+            raise SystemExit(f"[bootstrap] OpenCV failed to import:\n{stderr}")
+
+    # Every library we know about has been installed and it still won't import.
+    raise SystemExit("[bootstrap] OpenCV still fails to import after installing its system libraries.")
+
+
+# ---------------------------------------------------------------------------
+# Staged self-update -- must run before `uv sync` so a staged update's own
+# pyproject.toml/uv.lock is what gets synced. sorter.apply_update is
+# stdlib-only by design (see its module docstring) specifically so it's
+# importable here, before uv has put anything in a venv yet.
+# ---------------------------------------------------------------------------
+
+
+def apply_pending_update() -> None:
+    sys.path.insert(0, str(ROOT))
+    from sorter.apply_update import main as apply_main
+
+    apply_main()  # always exits 0 internally; a broken updater must never block launch
+
+
+# ---------------------------------------------------------------------------
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+
+    auto_install = os.environ.get("AUTO_INSTALL", "0") in ("1", "true", "yes")
+    forward_args = []
+    for arg in args:
+        if arg in ("--auto", "-y"):
+            auto_install = True
+        else:
+            forward_args.append(arg)
+
+    uv = find_uv() or install_uv()
+
+    apply_pending_update()
+
+    log("Syncing dependencies with uv ...")
+    # --no-install-project: don't build/install the sorter package itself as
+    # part of the sync. main.py imports it straight from the source tree
+    # (sys.path.insert), so it was never needed for that -- and building it
+    # is actively harmful in exactly the context this matters most: a
+    # downloaded release has no .git, and hatch-vcs's build hook (see
+    # pyproject.toml) errors out without one unless a fallback is
+    # configured, in which case it *overwrites* sorter/_version.py with that
+    # fallback -- clobbering the real version the release workflow baked in.
+    # Verified this exact failure mode against a real git-less copy of this
+    # repo before adding the flag, not assumed.
+    #
+    # --inexact: `uv sync` is *exact* by default and removes anything in the
+    # venv that isn't in the lockfile. torch/torchvision are the [ml] extra --
+    # deliberately outside the default sync set, installed on demand by
+    # dialog_install_torch.py straight into this same venv -- so an exact sync
+    # here uninstalls PyTorch on every single launch. The user would train,
+    # restart, and find it gone, with a multi-GB re-download to get back.
+    # CI still syncs exactly (--locked in build.yml); being strict is the
+    # whole point there. Here, a user-installed extra has to survive.
+    try:
+        subprocess.run(
+            [uv, "sync", "--frozen", "--inexact", "--no-install-project"],
+            cwd=ROOT,
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        # Every other failure path in this file exits with something a
+        # non-developer can act on; a raw traceback here would be the odd one
+        # out, and this is the step most likely to fail on a flaky network.
+        raise SystemExit(
+            f"[bootstrap] Dependency sync failed (uv exited {exc.returncode}).\n"
+            "[bootstrap] Check your network connection and re-run. If it persists, "
+            "delete the .venv folder and try again."
+        ) from exc
+
+    ensure_linux_runtime_libs(uv, auto_install)
+
+    # Everything this file is responsible for is done at this point; from
+    # here on the process is just the app. Worth saying out loud on a first
+    # launch, where the sync above can run for minutes and the Tk window
+    # takes a few more seconds to appear -- and build.yml's launcher-smoke
+    # waits for exactly this line rather than a fixed timeout, since the
+    # app never exits on its own.
+    log("Starting the app ...")
+
+    # --no-sync, not --frozen: `uv run` syncs implicitly by default even with
+    # --frozen (frozen only constrains *how* it syncs, not whether), which
+    # would silently redo the project build this function just went out of
+    # its way to skip. --no-sync trusts the sync above and skips its own.
+    result = subprocess.run([uv, "run", "--no-sync", "python", "main.py", *forward_args], cwd=ROOT)
+    return result.returncode
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

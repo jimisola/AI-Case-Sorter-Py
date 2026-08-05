@@ -1,9 +1,16 @@
 """In-app updater — check GitHub Releases, download, stage.
 
 Deliberately **git-free**: `git clone`/`git pull` over HTTPS and a release
-ZIP over HTTPS have the same trust anchor (TLS to github.com), and at this
-repo's size the delta-transfer advantage is worth nothing. Dropping git means
-non-developers never install a 60 MB dependency to receive a 1 MB update.
+tarball over HTTPS have the same trust anchor (TLS to github.com), and at
+this repo's size the delta-transfer advantage is worth nothing. Dropping git
+means non-developers never install a 60 MB dependency to receive a 1 MB
+update.
+
+The downloaded archive is the project's own **sdist** (`ai_case_sorter_py-
+<tag>.tar.gz`) — the same file `uv build`/`publish.yml` already produce and
+attach to every release, not a separately built artifact. hatch-vcs's build
+hook stamps `sorter/_version.py` into every build target, so the sdist
+already carries the correct version with nothing extra to keep in sync.
 
 The flow is **stage now, apply at next launch**:
 
@@ -11,10 +18,10 @@ The flow is **stage now, apply at next launch**:
 
 Staging never touches the app folder. Windows keeps the venv's ``.pyd``/
 ``.dll`` files (opencv, numpy) locked while the app is running, so replacing
-files in-place is unreliable by construction; the launcher applies the staged
-tree before Python loads anything. That also means a staged update's own
-``requirements.txt`` is in place before the launcher's dependency check runs,
-so dependency changes install on the same restart.
+files in-place is unreliable by construction; bootstrap.py applies the staged
+tree before ``uv sync`` runs. That also means a staged update's own
+``pyproject.toml``/``uv.lock`` are in place before the sync, so dependency
+changes install on the same restart.
 
 Everything in the ``updates/`` tree lives under the data root, which is
 outside the app folder (see ``sorter/paths.py``).
@@ -24,15 +31,20 @@ Environment overrides:
   ``CASESORTER_UPDATE_API_BASE``  — GitHub API base, for testing
   ``CASESORTER_UPDATE_DISABLED``  — ``1`` disables checking entirely
 """
+
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
-import zipfile
+import tarfile
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable
+from typing import Any
+from urllib.parse import urlsplit
 
 import requests
 
@@ -58,6 +70,17 @@ REQUIRED_ENTRIES = ("main.py", "sorter/__init__.py")
 # source tree is ~1 MB; 200 MB is orders of magnitude of headroom.
 MAX_ARCHIVE_BYTES = 200 * 1024 * 1024
 
+# MAX_ARCHIVE_BYTES alone doesn't bound an archive of *empty* entries: they
+# contribute nothing to the byte total, compress ~165:1, and each still costs
+# a TarInfo and a stat/mkdir at extraction. The tree is ~200 files.
+MAX_ARCHIVE_ENTRIES = 10_000
+MAX_ENTRY_NAME_CHARS = 1024
+
+# Only ever fetch from GitHub (or whatever CASESORTER_UPDATE_API_BASE points
+# at, for tests). requests follows redirects by default, including an
+# https -> http downgrade, so the final URL is checked too.
+ALLOWED_DOWNLOAD_SCHEMES = ("https",)
+
 
 class UpdateError(RuntimeError):
     """Raised when a check or download fails in a way worth showing the user."""
@@ -67,10 +90,10 @@ class UpdateError(RuntimeError):
 class UpdateInfo:
     """A release newer than what's running."""
 
-    version: str          # normalized, no leading "v"
-    tag: str              # the tag as GitHub reports it
-    url: str              # ZIP to download
-    notes: str = ""       # release body (markdown)
+    version: str  # normalized, no leading "v"
+    tag: str  # the tag as GitHub reports it
+    url: str  # tarball to download
+    notes: str = ""  # release body (markdown)
     size: int | None = None
     published_at: str = ""
 
@@ -158,21 +181,72 @@ def _api_base() -> str:
     return (os.environ.get("CASESORTER_UPDATE_API_BASE") or DEFAULT_API_BASE).rstrip("/")
 
 
-def _pick_asset(release: dict[str, Any], tag: str) -> tuple[str, int | None]:
-    """Prefer a published ``.zip`` asset; fall back to the tag source archive.
+# A release tag reaches a URL and a filename, so keep it to the shape a tag
+# can actually have -- no slashes, no query, no fragment.
+_TAG_RE = re.compile(r"v?[0-9A-Za-z][0-9A-Za-z._-]{0,63}")
 
-    A purpose-built asset lets the maintainer ship a trimmed archive (no tests,
-    no CI config); the source archive means a release with no assets still
-    updates correctly.
+
+def _strip_tag_prefix(tag: str) -> str:
+    """Drop one leading lowercase ``v``, exactly as the publish workflow does.
+
+    This has to mirror ``${TAG#v}`` in publish.yml character for character,
+    because the result is used to build the asset name that ``_pick_asset``
+    matches exactly — any disagreement means the client silently misses the
+    real asset and falls back to the source archive.
+
+    Two ways to get that wrong, both verified against bash:
+
+    * ``lstrip("vV")`` strips *every* leading v, so ``vv1.2.3`` would become
+      ``1.2.3`` while the workflow produces ``v1.2.3``.
+    * ``${TAG#v}`` is case-sensitive, so ``V1.2.3`` stays ``V1.2.3`` upstream.
+      Stripping the capital here would disagree too.
+
+    (``check-release.yml`` rejects any ``v``-prefixed tag, so neither case
+    should reach a real release — this is about the two sides not drifting,
+    not about supporting those tags.)
     """
+    return tag[1:] if tag.startswith("v") else tag
+
+
+def _expected_asset_name(tag: str) -> str:
+    """Name the sdist `uv build` produces for ``tag``.
+
+    Hatchling writes the underscore form of "ai-case-sorter-py" per PEP 625
+    (not PEP 503 -- that normalizes *to* hyphens, and governs index URLs
+    rather than sdist filenames). This is the file publish.yml already
+    attaches; there is no separate app-archive asset to build.
+
+    The version half is only equal to the tag because publish.yml asserts
+    it: hatchling emits the PEP 440 *normalized* version, so a tag like
+    ``1.2.3-rc1`` would be built as ``1.2.3rc1`` and never match this. That
+    assertion failing the release is the intended outcome -- without it the
+    client would silently miss the asset and fall back to the source
+    archive, losing the baked-in version this whole path exists to deliver.
+    """
+    return f"ai_case_sorter_py-{_strip_tag_prefix(tag)}.tar.gz"
+
+
+def _pick_asset(release: dict[str, Any], tag: str) -> tuple[str, int | None]:
+    """Match the sdist by its exact name, not "any .tar.gz".
+
+    A release also carries a wheel (``.whl``), which never matches this. But
+    "the first .tar.gz asset" was never a safe rule on its own: the day
+    anyone attached an unrelated ``.tar.gz`` to a release, in upload order
+    ahead of the real one, it would have silently become the tree unpacked
+    over the app folder. Falls back to the tag source archive if the named
+    asset isn't published, same as before -- a release with no assets still
+    updates correctly, just without a baked-in version (see apply_update's
+    ``_stamp_version``).
+    """
+    expected = _expected_asset_name(tag)
     for asset in release.get("assets") or []:
         name = str(asset.get("name") or "")
         url = asset.get("browser_download_url")
-        if name.lower().endswith(".zip") and url:
+        if name == expected and url:
             size = asset.get("size")
             return str(url), int(size) if isinstance(size, int) else None
     repo = update_repo()
-    return f"https://github.com/{repo}/archive/refs/tags/{tag}.zip", None
+    return f"https://github.com/{repo}/archive/refs/tags/{tag}.tar.gz", None
 
 
 def check_for_update(
@@ -218,7 +292,13 @@ def check_for_update(
     tag = str(release.get("tag_name") or "").strip()
     if not tag:
         return None
-    version = tag.lstrip("vV")
+    # The tag is interpolated into the fallback archive URL, and _parse_version
+    # is lenient enough (it stops at the first non-digit) that something like
+    # "1.0.0/../../someone-else/repo/archive/refs/tags/v1.tar.gz" would parse
+    # as newer and then resolve to a different repository.
+    if not _TAG_RE.fullmatch(tag):
+        raise UpdateError(f"Update server returned an implausible tag: {tag!r}")
+    version = _strip_tag_prefix(tag)
     if not is_newer(version, cur):
         return None
 
@@ -278,27 +358,68 @@ def clear_pending() -> None:
         pass
 
 
-def _safe_members(zf: zipfile.ZipFile) -> list[tuple[zipfile.ZipInfo, PurePosixPath]]:
-    """Validate archive entries and strip GitHub's top-level folder.
+def _safe_members(tf: tarfile.TarFile) -> list[tuple[tarfile.TarInfo, PurePosixPath]]:
+    """Validate archive entries and strip the sdist's top-level folder.
 
     Rejects the same shapes ``model_io`` rejects — ``..`` traversal and
     absolute paths — because this archive is written straight into the app
-    folder. GitHub's source archives nest everything under
-    ``<repo>-<tag>/``; that single wrapper is stripped so the tree lines up
-    with the app folder.
+    folder. A tarball can additionally contain symlinks, hardlinks, and
+    device/fifo entries, none of which a ZIP can express; unlike the
+    traversal checks below, a symlink pointing outside the extraction
+    directory is a real, well-known tarfile attack class, so anything that
+    isn't a plain regular file is rejected outright rather than skipped —
+    silently ignoring a symlink could still let it shadow a real file's
+    resolution elsewhere in the tree. Both hatch's sdist and GitHub's
+    tag-archive fallback nest everything under one top-level directory
+    (``<name>-<version>/`` / ``<repo>-<tag>/``); that wrapper is stripped so
+    the tree lines up with the app folder.
+
+    Name validation runs *before* directory entries are skipped, so a
+    hostile directory name is reported rather than silently discarded. The
+    per-component ``:`` and ``\\`` rejections are load-bearing on Windows,
+    not zip-era vestiges: ``PurePosixPath`` treats ``C:`` as an ordinary
+    component, but rebuilding the path with ``Path()`` there re-anchors on
+    the drive, so ``pkg/D:/evil.py`` would escape the staging directory
+    entirely. ``stage_update`` re-checks containment against the resolved
+    output path as the actual backstop; these keep the error message useful.
+
+    Members are streamed rather than read via ``getmembers()``: that would
+    walk — and so decompress — the entire archive before the first size or
+    count check could fire.
     """
-    raw: list[tuple[zipfile.ZipInfo, PurePosixPath]] = []
+    raw: list[tuple[tarfile.TarInfo, PurePosixPath]] = []
     total = 0
-    for entry in zf.infolist():
-        name = entry.filename.replace("\\", "/")
-        if name.endswith("/"):
-            continue
-        if name.startswith("/") or (len(name) > 1 and name[1] == ":"):
-            raise UpdateError(f"Update archive contains an absolute path: {entry.filename}")
+    count = 0
+    for entry in tf:
+        # Not rewritten to "/" the way the ZIP version did: tar names are
+        # slash-separated by spec, so a backslash here is either a legal
+        # POSIX filename (which rewriting would mangle into a directory) or
+        # a Windows path someone is hoping gets re-anchored. Rejected below
+        # either way.
+        name = entry.name
+
+        count += 1
+        if count > MAX_ARCHIVE_ENTRIES:
+            raise UpdateError("Update archive has implausibly many entries; refusing to extract.")
+        if len(entry.name) > MAX_ENTRY_NAME_CHARS:
+            raise UpdateError("Update archive contains an implausibly long path; refusing to extract.")
+        if name.startswith("/"):
+            raise UpdateError(f"Update archive contains an absolute path: {entry.name}")
         rel = PurePosixPath(name.lstrip("/"))
         if any(part == ".." for part in rel.parts):
-            raise UpdateError(f"Update archive contains a traversal path: {entry.filename}")
-        total += entry.file_size
+            raise UpdateError(f"Update archive contains a traversal path: {entry.name}")
+        if any(":" in part or "\\" in part for part in rel.parts):
+            raise UpdateError(f"Update archive contains a drive-qualified path: {entry.name}")
+
+        # Trailing-slash names are directories too: tarfile only rewrites
+        # those to DIRTYPE for the legacy AREGTYPE, so a REGTYPE member
+        # named "pkg/sub/" would otherwise be written out as a file.
+        if entry.isdir() or name.endswith("/"):
+            continue
+        if not entry.isreg():
+            raise UpdateError(f"Update archive contains a non-regular-file entry: {entry.name}")
+
+        total += entry.size
         if total > MAX_ARCHIVE_BYTES:
             raise UpdateError("Update archive is implausibly large; refusing to extract.")
         raw.append((entry, rel))
@@ -314,15 +435,37 @@ def _safe_members(zf: zipfile.ZipFile) -> list[tuple[zipfile.ZipInfo, PurePosixP
     return raw
 
 
-def _download(url: str, dest: Path, progress: Callable[[int, int | None], None] | None,
-              session: requests.Session | None, timeout: int) -> Path:
+def _check_download_url(url: str) -> None:
+    """Refuse anything but plaintext-free transport to the update host.
+
+    The URL comes from the release JSON, so it is only as trustworthy as
+    that response. A ``http://`` ``browser_download_url`` -- or a redirect
+    chain that downgrades to one -- would hand the archive to anyone on the
+    path, and the archive is executed at next launch.
+    """
+    parsed = urlsplit(url)
+    if parsed.scheme not in ALLOWED_DOWNLOAD_SCHEMES:
+        raise UpdateError(f"Refusing to download over {parsed.scheme or 'an unknown scheme'}.")
+
+
+def _download(
+    url: str,
+    dest: Path,
+    progress: Callable[[int, int | None], None] | None,
+    session: requests.Session | None,
+    timeout: int,
+) -> Path:
     """Stream ``url`` to ``dest`` with an atomic ``.tmp`` → ``os.replace``."""
+    _check_download_url(url)
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".tmp")
     get = (session or requests).get
     try:
         with get(url, stream=True, timeout=timeout) as resp:
             resp.raise_for_status()
+            # requests follows redirects silently, including https -> http.
+            # The URL that actually served the bytes is the one that matters.
+            _check_download_url(resp.url)
             total: int | None = None
             cl = resp.headers.get("Content-Length")
             if cl is not None:
@@ -366,31 +509,49 @@ def stage_update(
     """
     updates = paths.updates_dir()
     updates.mkdir(parents=True, exist_ok=True)
-    archive = updates / "download.zip"
+    archive = updates / "download.tar.gz"
     staging = updates / "staging"
 
     shutil.rmtree(staging, ignore_errors=True)
     try:
         _download(info.url, archive, progress, session, timeout)
 
-        if not zipfile.is_zipfile(archive):
-            raise UpdateError("Downloaded file is not a valid ZIP archive.")
-
-        with zipfile.ZipFile(archive) as zf:
-            members = _safe_members(zf)
-            names = {str(rel) for _, rel in members}
-            missing = [e for e in REQUIRED_ENTRIES if e not in names]
-            if missing:
-                raise UpdateError(
-                    "Update archive does not look like the app "
-                    f"(missing {', '.join(missing)})."
-                )
-            staging.mkdir(parents=True, exist_ok=True)
-            for entry, rel in members:
-                out = staging / Path(*rel.parts)
-                out.parent.mkdir(parents=True, exist_ok=True)
-                with zf.open(entry) as src, open(out, "wb") as dst:
-                    shutil.copyfileobj(src, dst)
+        # No is_tarfile() pre-check: it accepts plain/bz2/xz tars that
+        # mode="r:gz" then rejects, so the friendly message below was
+        # bypassed by a bare ReadError. Catching TarError covers that, a
+        # truncated gzip, and corruption found mid-read -- and parses the
+        # file once instead of twice. "r:gz" stays exact rather than "r:*",
+        # which would accept bz2/xz bombs.
+        try:
+            with tarfile.open(archive, mode="r:gz") as tf:
+                members = _safe_members(tf)
+                names = {str(rel) for _, rel in members}
+                missing = [e for e in REQUIRED_ENTRIES if e not in names]
+                if missing:
+                    raise UpdateError(f"Update archive does not look like the app (missing {', '.join(missing)}).")
+                staging.mkdir(parents=True, exist_ok=True)
+                base = staging.resolve()
+                for entry, rel in members:
+                    # The backstop for _safe_members' name checks: compare the
+                    # *resolved* destination against the staging root, which is
+                    # what tarfile's own data filter does and what catches any
+                    # platform-specific join surprise the string checks miss.
+                    out = (base / Path(*rel.parts)).resolve()
+                    # Strictly below the root: every entry here is a file, so
+                    # base itself resolving as the target is wrong too.
+                    if base not in out.parents:
+                        raise UpdateError(f"Update archive entry escapes the staging directory: {entry.name}")
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    # extractfile() returns None only for non-regular members,
+                    # which _safe_members already rejected -- this narrows the
+                    # IO[bytes] | None type, it is not a reachable branch.
+                    src = tf.extractfile(entry)
+                    if src is None:
+                        raise UpdateError(f"Could not read {entry.name} from the update archive.")
+                    with src, open(out, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+        except tarfile.TarError as exc:
+            raise UpdateError("Downloaded file is not a valid tar.gz archive.") from exc
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         archive.unlink(missing_ok=True)
@@ -402,9 +563,7 @@ def stage_update(
     clear_pending()
     os.replace(staging, pending_dir())
 
-    from datetime import datetime, timezone
-
-    staged_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    staged_at = datetime.now(UTC).isoformat(timespec="seconds")
     _pending_meta_path().write_text(
         json.dumps(
             {
@@ -417,6 +576,4 @@ def stage_update(
         ),
         encoding="utf-8",
     )
-    return PendingUpdate(
-        version=info.version, tag=info.tag, path=pending_dir(), staged_at=staged_at
-    )
+    return PendingUpdate(version=info.version, tag=info.tag, path=pending_dir(), staged_at=staged_at)

@@ -13,22 +13,22 @@ app can be pointed at a local copy of the backend. Both are resolved when a
 `CommunityApi` is constructed, not at import, so a `.env` loaded during startup
 still applies.
 """
+
 from __future__ import annotations
 
 import os
-import shutil
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any
 from urllib.parse import quote_plus
 
 import requests
 
 from . import appenv
-from .auth import API_SCOPES, AuthError, AuthManager
+from .auth import API_SCOPES, AuthManager
 from .feedback import debug_log
-
 
 # The production default. The URL actually used is `appenv.api_base()`, which
 # applies a CASESORTER_API_BASE override; this constant is what that falls back
@@ -77,7 +77,7 @@ class CartridgeInfo:
     name: str
 
     @classmethod
-    def from_json(cls, d: dict[str, Any]) -> "CartridgeInfo":
+    def from_json(cls, d: dict[str, Any]) -> CartridgeInfo:
         return cls(id=int(d.get("Id", d.get("id", 0))), name=d.get("Name", d.get("name", "")))
 
 
@@ -99,9 +99,10 @@ class ModelInfo:
     feedback_loop_confidence_floor: int = 0
 
     @classmethod
-    def from_json(cls, d: dict[str, Any]) -> "ModelInfo":
+    def from_json(cls, d: dict[str, Any]) -> ModelInfo:
         def get(key: str, default: Any = "") -> Any:
             return d.get(key, d.get(key[:1].lower() + key[1:], default))
+
         return cls(
             model_uid=get("ModelUID", ""),
             model_name=get("ModelName", ""),
@@ -129,6 +130,7 @@ class FeedbackUploadTicket:
     signal. The original payload is retained in ``raw`` so it can be POSTed
     back verbatim to ``CompleteFeedbackUpload``.
     """
+
     sas_token: str = ""
     blob_path: str = ""
     container_name: str = ""
@@ -140,7 +142,7 @@ class FeedbackUploadTicket:
     raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_json(cls, d: dict[str, Any]) -> "FeedbackUploadTicket":
+    def from_json(cls, d: dict[str, Any]) -> FeedbackUploadTicket:
         def get(key: str, default: Any = "") -> Any:
             # Accept PascalCase (the server's default) and camelCase spellings.
             return d.get(key, d.get(key[:1].lower() + key[1:], default))
@@ -175,6 +177,7 @@ class SasResponse:
     the server-assigned ``ModelUID`` back from FileUploadRequest, and ``raw``
     is kept so the whole payload can be POSTed verbatim to ``CompleteUpload``.
     """
+
     sas_token: str = ""
     blob_path: str = ""
     container_name: str = ""
@@ -185,9 +188,10 @@ class SasResponse:
     raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_json(cls, d: dict[str, Any]) -> "SasResponse":
+    def from_json(cls, d: dict[str, Any]) -> SasResponse:
         def get(key: str, default: Any = "") -> Any:
             return d.get(key, d.get(key[:1].lower() + key[1:], default))
+
         return cls(
             sas_token=get("SasToken", ""),
             blob_path=get("BlobPath", ""),
@@ -208,10 +212,10 @@ class SasResponse:
 class UserMetaData:
     profile_name: str = ""
     country: str = ""
-    roles: int = 0   # bitfield: 1=Read, 2=Contribute, 4=Admin
+    roles: int = 0  # bitfield: 1=Read, 2=Contribute, 4=Admin
 
     @classmethod
-    def from_json(cls, d: dict[str, Any]) -> "UserMetaData":
+    def from_json(cls, d: dict[str, Any]) -> UserMetaData:
         return cls(
             profile_name=d.get("ProfileName", d.get("profileName", "")),
             country=d.get("Country", d.get("country", "")),
@@ -286,10 +290,13 @@ class CommunityApi:
         return UserMetaData.from_json(resp.json())
 
     def update_user_metadata(self, meta: UserMetaData) -> bool:
-        resp = self._post("/Users/UpdateUserMetaData", json={
-            "ProfileName": meta.profile_name,
-            "Country": meta.country,
-        })
+        resp = self._post(
+            "/Users/UpdateUserMetaData",
+            json={
+                "ProfileName": meta.profile_name,
+                "Country": meta.country,
+            },
+        )
         return resp.status_code == 200
 
     def is_username_available(self, name: str) -> bool:
@@ -310,11 +317,7 @@ class CommunityApi:
         model_type: str = "",
         cartridge: str = "",
     ) -> list[ModelInfo]:
-        qs = (
-            f"?searchQuery={quote_plus(search)}"
-            f"&ModelType={quote_plus(model_type)}"
-            f"&Cartridge={quote_plus(cartridge)}"
-        )
+        qs = f"?searchQuery={quote_plus(search)}&ModelType={quote_plus(model_type)}&Cartridge={quote_plus(cartridge)}"
         resp = self._get(f"/Models/GetModels{qs}")
         if resp.status_code != 200:
             raise CommunityApiError(f"GetModels → {resp.status_code}")
@@ -347,7 +350,10 @@ class CommunityApi:
         tmp = dest_path.with_suffix(dest_path.suffix + ".tmp")
 
         with self.session.get(
-            url, stream=True, timeout=self.timeout, verify=self.verify,
+            url,
+            stream=True,
+            timeout=self.timeout,
+            verify=self.verify,
         ) as resp:
             resp.raise_for_status()
             total = expected_total
@@ -368,6 +374,7 @@ class CommunityApi:
                     if progress is not None:
                         progress(bytes_done, total)
         import os
+
         os.replace(tmp, dest_path)
         return dest_path
 
@@ -412,7 +419,9 @@ class CommunityApi:
             debug_log(f"  unexpected JSON shape: {type(data).__name__}")
             return None
         ticket = FeedbackUploadTicket.from_json(data)
-        debug_log(f"  ticket: accepted={ticket.feedback_accepted} container={ticket.container_uri!r} blob={ticket.blob_path!r}")
+        debug_log(
+            f"  ticket: accepted={ticket.feedback_accepted} container={ticket.container_uri!r} blob={ticket.blob_path!r}"
+        )
         return ticket
 
     def fetch_wish_list(self, community_model_uid: str) -> list[str]:
@@ -431,9 +440,7 @@ class CommunityApi:
         if not community_model_uid:
             return []
         try:
-            resp = self._get(
-                f"/Models/FetchWishList?communityModelId={quote_plus(community_model_uid)}"
-            )
+            resp = self._get(f"/Models/FetchWishList?communityModelId={quote_plus(community_model_uid)}")
         except Exception as exc:
             debug_log(f"GET /Models/FetchWishList failed ({exc.__class__.__name__}: {exc})")
             return []
@@ -473,7 +480,11 @@ class CommunityApi:
         }
         with open(file_path, "rb") as f:
             resp = self.session.put(
-                url, data=f, headers=headers, timeout=self.timeout, verify=self.verify,
+                url,
+                data=f,
+                headers=headers,
+                timeout=self.timeout,
+                verify=self.verify,
             )
         debug_log(f"PUT blob -> HTTP {resp.status_code}")
         resp.raise_for_status()
@@ -487,7 +498,10 @@ class CommunityApi:
     # ----- model share (export + upload) -------------------------------------
 
     def request_file_upload(
-        self, *, filename: str, model_info: dict[str, Any],
+        self,
+        *,
+        filename: str,
+        model_info: dict[str, Any],
     ) -> SasResponse:
         """Ask the server for a SAS ticket to upload the model ZIP.
 
@@ -503,13 +517,10 @@ class CommunityApi:
         text = (resp.text or "").strip()
         if resp.status_code != 200:
             debug_log(f"  non-200 body: {text[:300]!r}")
-            raise CommunityApiError(
-                f"FileUploadRequest → HTTP {resp.status_code}: {text[:300] or '(empty body)'}"
-            )
+            raise CommunityApiError(f"FileUploadRequest → HTTP {resp.status_code}: {text[:300] or '(empty body)'}")
         if text.startswith("<!DOCTYPE html>") or text.lower().startswith("<html"):
             raise CommunityApiError(
-                "The upload endpoint is not available for this account "
-                "(it requires the Contribute community role)."
+                "The upload endpoint is not available for this account (it requires the Contribute community role)."
             )
         try:
             data = resp.json()
@@ -549,7 +560,11 @@ class CommunityApi:
             reader = _ProgressReader(file_path, total, progress)
             try:
                 resp = self.session.put(
-                    url, data=reader, headers=headers, timeout=None, verify=self.verify,
+                    url,
+                    data=reader,
+                    headers=headers,
+                    timeout=None,
+                    verify=self.verify,
                 )
                 debug_log(f"PUT blob ({total} bytes) -> HTTP {resp.status_code}")
                 resp.raise_for_status()
@@ -558,7 +573,7 @@ class CommunityApi:
                 last_exc = exc
                 debug_log(f"  blob PUT attempt {attempt + 1} failed: {exc}")
                 if attempt < retries - 1:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2**attempt)
             finally:
                 reader.close()
         if last_exc is not None:
@@ -617,7 +632,10 @@ class CommunityApi:
         # Raises CommunityApiError (with the server's reason) if refused.
         ticket = self.request_file_upload(filename=zip_path.name, model_info=model_info)
         self.upload_blob(
-            zip_path, ticket, content_type="application/zip", progress=progress,
+            zip_path,
+            ticket,
+            content_type="application/zip",
+            progress=progress,
         )
         self.complete_upload(ticket)
         final_uid = (

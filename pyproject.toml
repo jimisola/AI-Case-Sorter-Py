@@ -1,11 +1,12 @@
 [project]
 name = "ai-case-sorter-py"
-# Single-sourced from sorter/__init__.py so the packaged version, the version
-# the in-app updater compares against, and the release tag can't drift apart.
+# Derived from the git tag at build time (hatch-vcs, below) so the packaged
+# version and the release tag can never drift apart -- see sorter/__init__.py
+# for how the running app resolves this without needing .git itself.
 dynamic = ["version"]
 description ="Cross-platform desktop app that sorts spent brass cartridge casings by headstamp using a camera, an image classifier, and a serial-connected sorting machine."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = { text = "GPL-3.0-or-later" }
 authors = [{ name = "SJSeth Solutions" }]
 classifiers = [
@@ -17,9 +18,8 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Image Recognition",
 ]
 dependencies = [
@@ -30,6 +30,9 @@ dependencies = [
     "requests>=2.31",
     "msal>=1.28",
     "platformdirs>=4.0",
+    # Windows-only: enumerates friendly DirectShow camera names so the Camera
+    # tab can show real device names instead of just "Camera N".
+    "pygrabber>=0.2; platform_system == 'Windows'",
 ]
 
 [project.urls]
@@ -42,11 +45,98 @@ Issues = "https://github.com/sjseth/AI-Case-Sorter-Py/issues"
 ml = ["torch>=2.2", "torchvision>=0.17"]
 
 [build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling>=1.27", "hatch-vcs>=0.4"]
+build-backend = "hatchling.build"
 
-[tool.setuptools]
-packages = ["sorter", "sorter.ui", "sorter.training"]
+# Version comes from the git tag at build time -- only ever meaningful when
+# .git is actually present (CI, a real clone). fallback-version keeps a
+# git-less build (an extracted release archive with no .git) from hard
+# erroring; bootstrap.py's `--no-install-project`/`--no-sync` flags exist
+# specifically so this hook never runs at all for an end user, since running
+# it with no .git would silently overwrite a correctly pre-baked
+# sorter/_version.py with this fallback -- verified that failure mode
+# directly before choosing this design; see bootstrap.py's docstring.
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "0.0.0"
 
-[tool.setuptools.dynamic]
-version = { attr = "sorter.__version__" }
+[tool.hatch.version.raw-options]
+local_scheme = "no-local-version"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "sorter/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["sorter"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["build", "dist"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+]
+ignore = [
+    "E501",  # line length is enforced by the formatter, not the linter
+]
+# Pre-existing findings as of the tool-adoption PR: real, but not a formatting
+# concern, and fixing them changes behavior (closures, exception chaining, loop
+# variables), so they're deferred to a follow-up review pass.
+#
+# Pinned per-file rather than disabled repo-wide, which is what they were
+# first written as. B023 (closure doesn't bind the loop variable) and F841 are
+# bug classes, not style: switched off globally they'd also silence every
+# *new* occurrence anywhere in the tree, which is the opposite of "deferred" --
+# it's "permanently invisible". Scoped like this the deferral stays honest, the
+# rest of the codebase keeps the check, and the list shrinks visibly as the
+# follow-up lands. Ruff errors on a per-file-ignore whose file no longer trips
+# the rule only under --extend-select preview settings, so re-check with
+# `ruff check --select ...` when clearing one out.
+
+[tool.ruff.lint.per-file-ignores]
+# Must run on whatever ancient interpreter the user's system provides, since
+# its job is to provision a newer one. pyupgrade rewrites would silently
+# break it on exactly the systems it exists to serve.
+"bootstrap.py" = ["UP"]
+# Contains an embedded HTML/JS template as a verbatim port of the legacy
+# WinForms app's report (see CLAUDE.md). Whitespace inside that string is
+# part of the port; don't rewrite it.
+"sorter/eval_report.py" = ["W291", "W293"]
+
+# --- deferred pre-existing findings (see the note above [tool.ruff.lint]) ---
+"sorter/camera.py" = ["B023"]                     # backend-probe closures
+"sorter/community_api.py" = ["B904"]              # raise without `from` in except
+"sorter/evaluator.py" = ["B007"]                  # unused loop control variable
+"sorter/local_inference.py" = ["F841"]            # unused local
+"sorter/model_io.py" = ["UP042"]                  # str+Enum -> StrEnum changes behavior subtly
+"sorter/ui/dialog_training_config.py" = ["B007"]  # unused loop control variable
+"sorter/ui/tab_train.py" = ["F841"]               # unused local
+"tests/unit/test_db.py" = ["B017"]                     # assert-raises-Exception, deliberate here
+"tests/unit/test_repository.py" = ["F841"]             # unused fixture local
+
+[tool.ruff.lint.isort]
+known-first-party = ["sorter"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "integration: exercises a real external tool (uv build, git-cliff) instead of a synthetic fixture",
+]
+# The suite is threading-fragile by design (see tests/conftest.py): Tk widget
+# garbage collected on a worker thread calls into Tcl from the wrong thread
+# and can hang or abort the process. Do not add pytest-xdist or any plugin
+# that parallelizes or reorders test execution.
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.1",
+]

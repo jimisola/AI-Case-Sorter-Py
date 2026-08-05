@@ -4,14 +4,13 @@ The happy path: feed one → capture frame → crop → optional primer mask →
 classify → look up slot (below floor or unknown → slot 0) → sort to slot →
 post UI update. Loops until Stop pressed.
 """
+
 from __future__ import annotations
 
 import threading
-import time
 import traceback
-from typing import Any, Callable
-
-import numpy as np
+from collections.abc import Callable
+from typing import Any
 
 from . import classifier, image_proc, paths
 from .config import Config
@@ -19,7 +18,6 @@ from .events import EventBus
 from .feedback import FeedbackService, debug_log
 from .repository import ModelRepo
 from .training.dataset import save_training_image
-
 
 SlotCallback = Callable[[int], None]
 
@@ -219,7 +217,9 @@ class RunController:
             return  # AI Config mode has no per-model folder
         try:
             save_training_image(
-                image_bgr, paths.model_run_images_dir(model_id), label or "unknown",
+                image_bgr,
+                paths.model_run_images_dir(model_id),
+                label or "unknown",
             )
         except Exception:
             traceback.print_exc()
@@ -245,7 +245,12 @@ class RunController:
             self._feedback.clear_wish_list()
 
     def _maybe_capture_feedback(
-        self, image_bgr, label: str, confidence: float, *, wish_list: bool = False,
+        self,
+        image_bgr,
+        label: str,
+        confidence: float,
+        *,
+        wish_list: bool = False,
     ) -> None:
         """Stage a prediction for the community feedback loop.
 
@@ -257,9 +262,7 @@ class RunController:
         token) can drive the upload.
         """
         if self._feedback is None or image_bgr is None:
-            debug_log(
-                f"run-hook skipped (service={self._feedback is not None}, image={image_bgr is not None})"
-            )
+            debug_log(f"run-hook skipped (service={self._feedback is not None}, image={image_bgr is not None})")
             return
         model_id = self.config.settings.get_active_model_id()
         if model_id is None:
@@ -269,13 +272,15 @@ class RunController:
         try:
             model = ModelRepo(self.db).get(model_id)
             if not self._feedback.should_capture(
-                model, confidence, label, wish_list=wish_list,
+                model,
+                confidence,
+                label,
+                wish_list=wish_list,
             ):
                 return
             if self._feedback.capture(model, image_bgr, label, confidence):
                 debug_log(
-                    f"posting feedback/queued for model {model_id} "
-                    f"(upload_mode={model.feedback_loop_upload_mode})"
+                    f"posting feedback/queued for model {model_id} (upload_mode={model.feedback_loop_upload_mode})"
                 )
                 self.bus.post(
                     "feedback/queued",
@@ -416,8 +421,7 @@ class RunController:
             self._last_classified_slot = slot
             self.bus.post(
                 "run/classified",
-                {"label": label, "parent": result["parent"],
-                 "confidence": confidence, "slot": slot},
+                {"label": label, "parent": result["parent"], "confidence": confidence, "slot": slot},
             )
             self._post_history(result)
 
@@ -454,8 +458,13 @@ class RunController:
         was last classified.
         """
         result: dict[str, Any] = {
-            "ok": False, "label": "", "parent": None, "confidence": 0,
-            "slot": None, "cropped": None, "error": None,
+            "ok": False,
+            "label": "",
+            "parent": None,
+            "confidence": 0,
+            "slot": None,
+            "cropped": None,
+            "error": None,
         }
         try:
             slot_to_send = self._last_classified_slot
@@ -504,8 +513,7 @@ class RunController:
             self._maybe_capture_feedback(cropped, label, confidence)
             self.bus.post(
                 "run/classified",
-                {"label": label, "parent": result["parent"],
-                 "confidence": confidence, "slot": slot},
+                {"label": label, "parent": result["parent"], "confidence": confidence, "slot": slot},
             )
             self._post_history(result)
             # Stash for the next Manual feed click or continuous Run prime.

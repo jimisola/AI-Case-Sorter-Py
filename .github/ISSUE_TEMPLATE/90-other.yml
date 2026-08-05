@@ -1,0 +1,11 @@
+name: Other
+description: Anything that does not fit the other categories
+labels: ["triage"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe your issue or question in as much detail as possible.
+    validations:
+      required: true

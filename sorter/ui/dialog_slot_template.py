@@ -8,11 +8,12 @@ Two small dialogs, both driven by ``Config``'s template API:
 They deliberately stay tiny: the template list itself lives in the Run tab's
 toolbar, so these only handle the two operations that need typing.
 """
+
 from __future__ import annotations
 
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import messagebox, ttk
-from typing import Callable
 
 
 def _mode_noun(mode: str) -> str:
@@ -38,8 +39,7 @@ class _TemplateDialog(tk.Toplevel):
         self.bind("<Escape>", lambda _e: self.destroy())
 
     def _name_entry(self, variable: tk.StringVar) -> ttk.Entry:
-        ttk.Label(self.body, text="Template name", style="Muted.TLabel")\
-            .pack(anchor=tk.W)
+        ttk.Label(self.body, text="Template name", style="Muted.TLabel").pack(anchor=tk.W)
         entry = ttk.Entry(self.body, textvariable=variable, width=34)
         entry.pack(fill=tk.X, pady=(3, 0))
         entry.focus_set()
@@ -70,12 +70,16 @@ class NewSlotTemplateDialog(_TemplateDialog):
 
         self.copy_var = tk.BooleanVar(value=True)
         ttk.Radiobutton(
-            self.body, text=f"Copy the slot assignments from “{current_name}”",
-            variable=self.copy_var, value=True,
+            self.body,
+            text=f"Copy the slot assignments from “{current_name}”",
+            variable=self.copy_var,
+            value=True,
         ).pack(anchor=tk.W)
         ttk.Radiobutton(
-            self.body, text="Start fresh with no slot assignments",
-            variable=self.copy_var, value=False,
+            self.body,
+            text="Start fresh with no slot assignments",
+            variable=self.copy_var,
+            value=False,
         ).pack(anchor=tk.W, pady=(2, 0))
 
         ttk.Label(
@@ -84,13 +88,17 @@ class NewSlotTemplateDialog(_TemplateDialog):
                 f"Saved as a {_mode_noun(mode)}template for the active model. "
                 "Switching templates swaps the whole slot layout."
             ),
-            style="Subtle.TLabel", wraplength=330, justify=tk.LEFT,
+            style="Subtle.TLabel",
+            wraplength=330,
+            justify=tk.LEFT,
         ).pack(anchor=tk.W, pady=(10, 0))
 
-        ttk.Button(self.buttons, text="Cancel", command=self.destroy)\
-            .pack(side=tk.RIGHT, padx=(8, 0))
+        ttk.Button(self.buttons, text="Cancel", command=self.destroy).pack(side=tk.RIGHT, padx=(8, 0))
         ttk.Button(
-            self.buttons, text="Create", command=self._create, style="Accent.TButton",
+            self.buttons,
+            text="Create",
+            command=self._create,
+            style="Accent.TButton",
         ).pack(side=tk.RIGHT)
 
         entry.bind("<Return>", lambda _e: self._create())
@@ -98,7 +106,9 @@ class NewSlotTemplateDialog(_TemplateDialog):
     def _create(self) -> None:
         try:
             template = self.config_obj.create_slot_template(
-                self.name_var.get(), copy_current=self.copy_var.get(), mode=self.mode,
+                self.name_var.get(),
+                copy_current=self.copy_var.get(),
+                mode=self.mode,
             )
         except ValueError as exc:
             messagebox.showwarning("Can't create template", str(exc), parent=self)
@@ -134,23 +144,29 @@ class EditSlotTemplateDialog(_TemplateDialog):
             text=(
                 f"A {_mode_noun(template.mode)}template for the active model. "
                 + (
-                    "Deleting one drops its slot layout — the headstamps themselves "
-                    "are untouched."
+                    "Deleting one drops its slot layout — the headstamps themselves are untouched."
                     if can_delete
                     else "This is the only one, so it can't be deleted."
                 )
             ),
-            style="Subtle.TLabel", wraplength=330, justify=tk.LEFT,
+            style="Subtle.TLabel",
+            wraplength=330,
+            justify=tk.LEFT,
         ).pack(anchor=tk.W, pady=(10, 2))
 
         if can_delete:
             ttk.Button(
-                self.buttons, text="Delete", command=self._delete, style="Danger.TButton",
+                self.buttons,
+                text="Delete",
+                command=self._delete,
+                style="Danger.TButton",
             ).pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Button(self.buttons, text="Cancel", command=self.destroy)\
-            .pack(side=tk.RIGHT, padx=(8, 0))
+        ttk.Button(self.buttons, text="Cancel", command=self.destroy).pack(side=tk.RIGHT, padx=(8, 0))
         ttk.Button(
-            self.buttons, text="Save", command=self._save, style="Accent.TButton",
+            self.buttons,
+            text="Save",
+            command=self._save,
+            style="Accent.TButton",
         ).pack(side=tk.RIGHT)
 
         entry.bind("<Return>", lambda _e: self._save())

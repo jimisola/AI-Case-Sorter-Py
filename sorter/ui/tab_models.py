@@ -13,14 +13,16 @@ AI Config tab.
 The `mode/changed` bus topic is posted on every Activate so `app.py` can
 re-evaluate AI Config tab visibility.
 """
+
 from __future__ import annotations
 
 import re
 import shutil
 import tkinter as tk
+from collections.abc import Callable
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
-from typing import Any, Callable
+from typing import Any
 
 from .. import paths
 from ..config import Config
@@ -39,7 +41,6 @@ from .dialog_model_editor import ModelEditorDialog
 from .dialog_model_evaluator import ModelEvaluatorDialog
 from .dialog_model_images import ModelImagesDialog
 from .theme import PALETTE, row_style
-
 
 # Characters disallowed in headstamp / parent names — they would collide with
 # the training-image filename convention or the filesystem.
@@ -87,18 +88,24 @@ class ModelRowCard(ttk.Frame):
         title_row = ttk.Frame(left, style="CardRow.TFrame")
         title_row.pack(side=tk.TOP, fill=tk.X)
         self._title_lbl = ttk.Label(
-            title_row, text=title, style="CardTitle.TLabel",
+            title_row,
+            text=title,
+            style="CardTitle.TLabel",
         )
         self._title_lbl.pack(side=tk.LEFT)
         if active:
             self._active_dot = ttk.Label(
-                title_row, text="  ●  ACTIVE", style="Accent.TLabel",
+                title_row,
+                text="  ●  ACTIVE",
+                style="Accent.TLabel",
             )
             self._active_dot.pack(side=tk.LEFT, padx=(8, 0))
 
         if subtitle:
             self._subtitle_lbl = ttk.Label(
-                left, text=subtitle, style="CardMuted.TLabel",
+                left,
+                text=subtitle,
+                style="CardMuted.TLabel",
             )
             self._subtitle_lbl.pack(side=tk.TOP, anchor="w", pady=(2, 6))
 
@@ -117,11 +124,12 @@ class ModelRowCard(ttk.Frame):
         right = ttk.Frame(self, style="CardRow.TFrame")
         right.pack(side=tk.RIGHT)
         for label, cmd in actions:
-            style = "Accent.TButton" if label == primary_action else (
-                "Danger.TButton" if label == "Delete" else "TButton"
+            style = (
+                "Accent.TButton" if label == primary_action else ("Danger.TButton" if label == "Delete" else "TButton")
             )
             ttk.Button(right, text=label, command=cmd, style=style).pack(
-                side=tk.LEFT, padx=(0, 6),
+                side=tk.LEFT,
+                padx=(0, 6),
             )
 
         if on_select is not None:
@@ -161,6 +169,7 @@ class ModelRowCard(ttk.Frame):
                         child.configure(style=subtle_style)
                     else:
                         child.configure(style=muted_style)
+
         _walk(self)
 
 
@@ -196,17 +205,18 @@ class ModelsTab(ttk.Frame):
 
         ttk.Label(bar, text="Cartridge:").pack(side=tk.LEFT)
         self.cart_var = tk.StringVar(value=FILTER_TYPE_ALL)
-        self.cart_combo = ttk.Combobox(bar, state="readonly", width=14,
-                                       textvariable=self.cart_var)
+        self.cart_combo = ttk.Combobox(bar, state="readonly", width=14, textvariable=self.cart_var)
         self.cart_combo.pack(side=tk.LEFT, padx=(4, 12))
         self.cart_combo.bind("<<ComboboxSelected>>", lambda _e: self.refresh())
 
         ttk.Label(bar, text="Type:").pack(side=tk.LEFT)
         self.type_var = tk.StringVar(value=FILTER_TYPE_ALL)
         self.type_combo = ttk.Combobox(
-            bar, state="readonly", width=14, textvariable=self.type_var,
-            values=[FILTER_TYPE_ALL, FILTER_TYPE_STANDARD,
-                    FILTER_TYPE_COMMUNITY, FILTER_TYPE_READONLY],
+            bar,
+            state="readonly",
+            width=14,
+            textvariable=self.type_var,
+            values=[FILTER_TYPE_ALL, FILTER_TYPE_STANDARD, FILTER_TYPE_COMMUNITY, FILTER_TYPE_READONLY],
         )
         self.type_combo.current(0)
         self.type_combo.pack(side=tk.LEFT, padx=(4, 12))
@@ -363,8 +373,7 @@ class ModelsTab(ttk.Frame):
                 counts[int(entry.name)] = 0
                 continue
             counts[int(entry.name)] = sum(
-                1 for f in images_dir.iterdir()
-                if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg", ".png")
+                1 for f in images_dir.iterdir() if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg", ".png")
             )
         return counts
 
@@ -500,7 +509,7 @@ class ModelsTab(ttk.Frame):
             target = None
         if target is not None and not messagebox.askyesno(
             "Update installed model?",
-            f"This archive is a copy of \"{target.name}\", which is already "
+            f'This archive is a copy of "{target.name}", which is already '
             "installed.\n\nIt will be updated in place: its trained model is "
             "replaced, and its slot assignments and sorting templates are kept.",
             parent=self,
@@ -513,8 +522,7 @@ class ModelsTab(ttk.Frame):
             return
         messagebox.showinfo(
             "Import complete",
-            f"Updated \"{target.name}\"." if target is not None
-            else f"Imported model #{model_id}.",
+            f'Updated "{target.name}".' if target is not None else f"Imported model #{model_id}.",
             parent=self,
         )
         self.refresh()
@@ -621,8 +629,11 @@ class HeadstampManagerDialog(tk.Toplevel):
         plist_wrap.pack(fill=tk.BOTH, expand=True)
         pscroll = ttk.Scrollbar(plist_wrap, orient=tk.VERTICAL)
         self.parent_list = tk.Listbox(
-            plist_wrap, exportselection=False, activestyle="none",
-            yscrollcommand=pscroll.set, width=22,
+            plist_wrap,
+            exportselection=False,
+            activestyle="none",
+            yscrollcommand=pscroll.set,
+            width=22,
         )
         pscroll.config(command=self.parent_list.yview)
         pscroll.pack(side=tk.RIGHT, fill=tk.Y)
@@ -640,17 +651,22 @@ class HeadstampManagerDialog(tk.Toplevel):
         pbtns = ttk.Frame(left)
         pbtns.pack(fill=tk.X, pady=(6, 0))
         self.btn_rename_parent = ttk.Button(
-            pbtns, text="Rename", command=self._rename_parent, state=tk.DISABLED,
+            pbtns,
+            text="Rename",
+            command=self._rename_parent,
+            state=tk.DISABLED,
         )
         self.btn_rename_parent.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 3))
         self.btn_delete_parent = ttk.Button(
-            pbtns, text="Delete", command=self._delete_parent,
-            state=tk.DISABLED, style="Danger.TButton",
+            pbtns,
+            text="Delete",
+            command=self._delete_parent,
+            state=tk.DISABLED,
+            style="Danger.TButton",
         )
         self.btn_delete_parent.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(3, 0))
 
-        ttk.Button(left, text="Auto-Suggest Parents", command=self._auto_suggest)\
-            .pack(fill=tk.X, pady=(6, 0))
+        ttk.Button(left, text="Auto-Suggest Parents", command=self._auto_suggest).pack(fill=tk.X, pady=(6, 0))
 
         # ---- Right: headstamps ---------------------------------------------
         right = ttk.LabelFrame(paned, text="Headstamps", padding=8)
@@ -660,8 +676,11 @@ class HeadstampManagerDialog(tk.Toplevel):
         tree_wrap.pack(fill=tk.BOTH, expand=True)
         tscroll = ttk.Scrollbar(tree_wrap, orient=tk.VERTICAL)
         self.tree = ttk.Treeview(
-            tree_wrap, columns=("name", "parent"), show="headings",
-            selectmode="browse", yscrollcommand=tscroll.set,
+            tree_wrap,
+            columns=("name", "parent"),
+            show="headings",
+            selectmode="browse",
+            yscrollcommand=tscroll.set,
         )
         tscroll.config(command=self.tree.yview)
         self.tree.heading("name", text="Headstamp")
@@ -687,7 +706,8 @@ class HeadstampManagerDialog(tk.Toplevel):
             self.tree.bind(seq, lambda _e: self._commit_editor(), add="+")
 
         hint = ttk.Label(
-            right, text="Click a row's Parent cell (▾) to assign it to a group.",
+            right,
+            text="Click a row's Parent cell (▾) to assign it to a group.",
             style="Subtle.TLabel",
         )
         hint.pack(fill=tk.X, pady=(6, 0))
@@ -701,7 +721,9 @@ class HeadstampManagerDialog(tk.Toplevel):
         he.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
         he.bind("<Return>", lambda _e: self._add_headstamp())
         ttk.Button(
-            add_hs, text="Add Headstamp", command=self._add_headstamp,
+            add_hs,
+            text="Add Headstamp",
+            command=self._add_headstamp,
             style="Accent.TButton",
         ).pack(side=tk.LEFT, padx=(6, 0))
 
@@ -709,16 +731,21 @@ class HeadstampManagerDialog(tk.Toplevel):
         action_row = ttk.Frame(right)
         action_row.pack(fill=tk.X, pady=(8, 0))
         self.btn_rename_hs = ttk.Button(
-            action_row, text="Rename", command=self._rename_headstamp, state=tk.DISABLED,
+            action_row,
+            text="Rename",
+            command=self._rename_headstamp,
+            state=tk.DISABLED,
         )
         self.btn_rename_hs.pack(side=tk.LEFT)
         self.btn_delete_hs = ttk.Button(
-            action_row, text="Delete", command=self._delete_headstamp,
-            state=tk.DISABLED, style="Danger.TButton",
+            action_row,
+            text="Delete",
+            command=self._delete_headstamp,
+            state=tk.DISABLED,
+            style="Danger.TButton",
         )
         self.btn_delete_hs.pack(side=tk.LEFT, padx=(6, 0))
-        ttk.Button(action_row, text="Save", command=self._save, style="Accent.TButton")\
-            .pack(side=tk.RIGHT)
+        ttk.Button(action_row, text="Save", command=self._save, style="Accent.TButton").pack(side=tk.RIGHT)
 
         # Save / suggestion status — its own full-width line so the (sometimes
         # long) message never crowds the buttons.
@@ -749,8 +776,7 @@ class HeadstampManagerDialog(tk.Toplevel):
             return None
         if cleaned != name and not messagebox.askyesno(
             "Clean name",
-            "The name contains invalid characters and will be changed to:\n\n"
-            f"{cleaned}\n\nContinue?",
+            f"The name contains invalid characters and will be changed to:\n\n{cleaned}\n\nContinue?",
             parent=self,
         ):
             return None
@@ -825,9 +851,7 @@ class HeadstampManagerDialog(tk.Toplevel):
         self._status_after = None
         n = len(self._suggested)
         if n:
-            self.save_status_var.set(
-                f"{n} suggestion{'' if n == 1 else 's'} applied — review and Save"
-            )
+            self.save_status_var.set(f"{n} suggestion{'' if n == 1 else 's'} applied — review and Save")
         else:
             self.save_status_var.set("")
 
@@ -859,8 +883,7 @@ class HeadstampManagerDialog(tk.Toplevel):
 
     def _on_tree_motion(self, event: tk.Event) -> None:
         over_parent = (
-            self.tree.identify("region", event.x, event.y) == "cell"
-            and self.tree.identify_column(event.x) == "#2"
+            self.tree.identify("region", event.x, event.y) == "cell" and self.tree.identify_column(event.x) == "#2"
         )
         self._set_tree_cursor("hand2" if over_parent else "")
 
@@ -903,7 +926,8 @@ class HeadstampManagerDialog(tk.Toplevel):
             return
         x, y, w, h = bbox
         combo = ttk.Combobox(
-            self.tree, state="readonly",
+            self.tree,
+            state="readonly",
             values=[self.NONE_LABEL] + [p.name for p in self._parents_cache],
         )
         combo.set(self._parent_name(self._assignments.get(hs.id)) or self.NONE_LABEL)
@@ -964,7 +988,9 @@ class HeadstampManagerDialog(tk.Toplevel):
             return
         if self.parents.find_by_name(self.model.id, name) is not None:
             messagebox.showwarning(
-                "Duplicate", "A parent with that name already exists.", parent=self,
+                "Duplicate",
+                "A parent with that name already exists.",
+                parent=self,
             )
             return
         with self.db.transaction():
@@ -978,7 +1004,10 @@ class HeadstampManagerDialog(tk.Toplevel):
             return
         name = self._confirm_clean(
             simpledialog.askstring(
-                "Rename parent", "New name:", initialvalue=p.name, parent=self,
+                "Rename parent",
+                "New name:",
+                initialvalue=p.name,
+                parent=self,
             )
         )
         if not name or name == p.name:
@@ -986,7 +1015,9 @@ class HeadstampManagerDialog(tk.Toplevel):
         other = self.parents.find_by_name(self.model.id, name)
         if other is not None and other.id != p.id:
             messagebox.showwarning(
-                "Duplicate", "A parent with that name already exists.", parent=self,
+                "Duplicate",
+                "A parent with that name already exists.",
+                parent=self,
             )
             return
         with self.db.transaction():
@@ -1000,8 +1031,7 @@ class HeadstampManagerDialog(tk.Toplevel):
             return
         if not messagebox.askyesno(
             "Delete parent",
-            f'Delete parent "{p.name}"? Its child headstamps will be unlinked '
-            "but not deleted.",
+            f'Delete parent "{p.name}"? Its child headstamps will be unlinked but not deleted.',
             parent=self,
         ):
             return
@@ -1025,7 +1055,9 @@ class HeadstampManagerDialog(tk.Toplevel):
         existing = {h.name.casefold() for h in self.headstamps.list_for_model(self.model.id)}
         if name.casefold() in existing:
             messagebox.showwarning(
-                "Duplicate", "A headstamp with that name already exists.", parent=self,
+                "Duplicate",
+                "A headstamp with that name already exists.",
+                parent=self,
             )
             return
         try:
@@ -1049,18 +1081,20 @@ class HeadstampManagerDialog(tk.Toplevel):
             return
         name = self._confirm_clean(
             simpledialog.askstring(
-                "Rename headstamp", "New name:", initialvalue=hs.name, parent=self,
+                "Rename headstamp",
+                "New name:",
+                initialvalue=hs.name,
+                parent=self,
             )
         )
         if not name or name == hs.name:
             return
-        existing = {
-            h.name.casefold(): h.id
-            for h in self.headstamps.list_for_model(self.model.id)
-        }
+        existing = {h.name.casefold(): h.id for h in self.headstamps.list_for_model(self.model.id)}
         if existing.get(name.casefold(), hs.id) != hs.id:
             messagebox.showwarning(
-                "Duplicate", "A headstamp with that name already exists.", parent=self,
+                "Duplicate",
+                "A headstamp with that name already exists.",
+                parent=self,
             )
             return
         # Keep training images in sync with the new label.
@@ -1074,7 +1108,9 @@ class HeadstampManagerDialog(tk.Toplevel):
         if hs is None:
             return
         if not messagebox.askyesno(
-            "Delete headstamp", f'Delete headstamp "{hs.name}"?', parent=self,
+            "Delete headstamp",
+            f'Delete headstamp "{hs.name}"?',
+            parent=self,
         ):
             return
         with self.db.transaction():
@@ -1097,7 +1133,7 @@ class HeadstampManagerDialog(tk.Toplevel):
         for path in list(images_dir.iterdir()):
             if not path.is_file() or not path.name.startswith(prefix):
                 continue
-            dest = images_dir / (new_name + path.name[len(old_name):])
+            dest = images_dir / (new_name + path.name[len(old_name) :])
             if dest.exists():
                 continue
             try:
@@ -1111,7 +1147,9 @@ class HeadstampManagerDialog(tk.Toplevel):
         rows = self.headstamps.list_for_model(self.model.id)
         if len(rows) < 2:
             messagebox.showinfo(
-                "Auto-suggest", "Not enough headstamps to suggest parents.", parent=self,
+                "Auto-suggest",
+                "Not enough headstamps to suggest parents.",
+                parent=self,
             )
             return
         groups = self._build_prefix_groups(sorted(r.name for r in rows))
@@ -1143,7 +1181,8 @@ class HeadstampManagerDialog(tk.Toplevel):
             self._dirty = True
         else:
             messagebox.showinfo(
-                "Auto-suggest", "All headstamps already have parents assigned.",
+                "Auto-suggest",
+                "All headstamps already have parents assigned.",
                 parent=self,
             )
 

@@ -27,6 +27,7 @@ Counts column:
 Training progress moves to a `TrainingProgressDialog` Toplevel that pops up
 when Train is clicked and closes on `training/done|failed|cancelled`.
 """
+
 from __future__ import annotations
 
 import threading
@@ -46,7 +47,6 @@ from ..training.manager import TrainingJob, TrainingManager
 from . import torch_gate
 from .dialog_training_config import TrainingConfigDialog
 from .dialog_training_progress import TrainingProgressDialog
-from .theme import PALETTE
 from .widgets import ImagePanel
 
 
@@ -139,13 +139,9 @@ class TrainTab(ttk.Frame):
         row.pack(fill=tk.X, padx=8, pady=(8, 4))
         ttk.Label(row, text="Active model:", style="Muted.TLabel").pack(side=tk.LEFT)
         self.active_var = tk.StringVar(value="(none)")
-        ttk.Label(row, textvariable=self.active_var,
-                  style="Header.TLabel").pack(side=tk.LEFT, padx=(6, 12))
-        ttk.Button(row, text="Train",
-                   command=self._start_training,
-                   style="Accent.TButton").pack(side=tk.RIGHT)
-        ttk.Button(row, text="Settings…",
-                   command=self._open_settings).pack(side=tk.RIGHT, padx=(0, 8))
+        ttk.Label(row, textvariable=self.active_var, style="Header.TLabel").pack(side=tk.LEFT, padx=(6, 12))
+        ttk.Button(row, text="Train", command=self._start_training, style="Accent.TButton").pack(side=tk.RIGHT)
+        ttk.Button(row, text="Settings…", command=self._open_settings).pack(side=tk.RIGHT, padx=(0, 8))
 
     def _build_main_split(self) -> None:
         body = ttk.Frame(self)
@@ -165,12 +161,11 @@ class TrainTab(ttk.Frame):
 
         feed_row = ttk.Frame(controls)
         feed_row.pack(fill=tk.X)
-        ttk.Button(feed_row, text="Feed",
-                   command=self._feed,
-                   style="Accent.TButton").pack(side=tk.LEFT)
+        ttk.Button(feed_row, text="Feed", command=self._feed, style="Accent.TButton").pack(side=tk.LEFT)
         self.classify_label_var = tk.StringVar(value="")
-        ttk.Label(feed_row, textvariable=self.classify_label_var,
-                  style="Accent.TLabel").pack(side=tk.LEFT, padx=(12, 0))
+        ttk.Label(feed_row, textvariable=self.classify_label_var, style="Accent.TLabel").pack(
+            side=tk.LEFT, padx=(12, 0)
+        )
 
         # Sort While Training — feed the labelled case to its configured run
         # slot (xf:<slot>) instead of the catch-all (xf:0). Mirrors
@@ -179,13 +174,15 @@ class TrainTab(ttk.Frame):
         sort_row.pack(fill=tk.X, pady=(8, 0))
         self._sort_while_training_var = tk.BooleanVar(value=self.config.sort_while_training)
         ttk.Checkbutton(
-            sort_row, text="Sort While Training",
+            sort_row,
+            text="Sort While Training",
             variable=self._sort_while_training_var,
             command=self._on_toggle_sort_while_training,
         ).pack(side=tk.LEFT)
 
         ttk.Label(controls, text="Label:", style="Muted.TLabel").pack(
-            anchor=tk.W, pady=(12, 2),
+            anchor=tk.W,
+            pady=(12, 2),
         )
         self.label_var = tk.StringVar()
         # Fixed widths so these don't stretch across the panel as the window
@@ -193,8 +190,7 @@ class TrainTab(ttk.Frame):
         self.label_combo = ttk.Combobox(controls, textvariable=self.label_var, width=28)
         self.label_combo.pack(anchor=tk.W)
 
-        ttk.Button(controls, text="Save image", width=22,
-                   command=self._save_clicked).pack(anchor=tk.W, pady=(8, 0))
+        ttk.Button(controls, text="Save image", width=22, command=self._save_clicked).pack(anchor=tk.W, pady=(8, 0))
 
         # Per-Feed timing. `image_proc_ms` covers feed + capture + crop +
         # primer mask; `predict_ms` covers the local_inference.classify
@@ -210,20 +206,24 @@ class TrainTab(ttk.Frame):
         rows: tuple[tuple[str, tk.StringVar, dict], ...] = (
             ("Image processing", self.image_proc_ms_var, {}),
             ("Prediction", self.predict_ms_var, {}),
-            ("Breakdown", self.predict_breakdown_var,
-             {"wraplength": 320, "justify": tk.LEFT}),
+            ("Breakdown", self.predict_breakdown_var, {"wraplength": 320, "justify": tk.LEFT}),
         )
         for row, (label, var, value_kwargs) in enumerate(rows):
             ttk.Label(timings, text=f"{label}:", style="Muted.TLabel").grid(
-                row=row, column=0, sticky="nw", padx=(0, 8),
+                row=row,
+                column=0,
+                sticky="nw",
+                padx=(0, 8),
             )
-            ttk.Label(timings, textvariable=var, style="Accent.TLabel",
-                      **value_kwargs).grid(row=row, column=1, sticky="w")
+            ttk.Label(timings, textvariable=var, style="Accent.TLabel", **value_kwargs).grid(
+                row=row, column=1, sticky="w"
+            )
 
         self.status_var = tk.StringVar(value="")
-        ttk.Label(controls, textvariable=self.status_var,
-                  style="Muted.TLabel", wraplength=300, justify=tk.LEFT).pack(
-            anchor=tk.W, fill=tk.X, pady=(8, 0),
+        ttk.Label(controls, textvariable=self.status_var, style="Muted.TLabel", wraplength=300, justify=tk.LEFT).pack(
+            anchor=tk.W,
+            fill=tk.X,
+            pady=(8, 0),
         )
 
         # Right — counts column (fixed width, full vertical). Wide enough to
@@ -277,14 +277,19 @@ class TrainTab(ttk.Frame):
         for child in list(self._counts_wrap.winfo_children()):
             child.destroy()
         if m is None or not counts:
-            ttk.Label(self._counts_wrap,
-                      text="No headstamps yet for this model.",
-                      style="Subtle.TLabel", wraplength=180,
-                      justify=tk.LEFT).pack(anchor=tk.NW, pady=(8, 0))
+            ttk.Label(
+                self._counts_wrap,
+                text="No headstamps yet for this model.",
+                style="Subtle.TLabel",
+                wraplength=180,
+                justify=tk.LEFT,
+            ).pack(anchor=tk.NW, pady=(8, 0))
             return
         for label in sorted(counts.keys()):
             _LabelCountCard(
-                self._counts_wrap, label, counts[label],
+                self._counts_wrap,
+                label,
+                counts[label],
                 on_click=self._on_count_click,
             ).pack(side=tk.TOP, fill=tk.X, pady=(0, 4))
 
@@ -318,7 +323,8 @@ class TrainTab(ttk.Frame):
         self._torch_prompt_shown = True
         resume = lambda: self._feed(sort_label=sort_label)  # noqa: E731
         return torch_gate.ensure_torch(
-            self, resume,
+            self,
+            resume,
             reason="Predicting labels needs PyTorch",
             on_cancel=resume,
         )
@@ -341,9 +347,7 @@ class TrainTab(ttk.Frame):
         # prediction. An unmapped/empty label falls through to the catch-all.
         feed_slot = 0
         if self._sort_while_training_var.get():
-            label_for_slot = (
-                sort_label if sort_label is not None else self.label_var.get()
-            )
+            label_for_slot = sort_label if sort_label is not None else self.label_var.get()
             label_for_slot = (label_for_slot or "").strip()
             if label_for_slot:
                 feed_slot = self.config.slot_for_headstamp(label_for_slot) or 0
@@ -355,10 +359,7 @@ class TrainTab(ttk.Frame):
         # at, which is often 480 for the legacy-app-default ConvNeXts.
         # Feeding the model the wrong resolution silently degrades
         # predictions, so pass the trained size through to local_inference.
-        train_image_size = (
-            int(active.training_config.image_size)
-            if active and active.training_config else None
-        )
+        train_image_size = int(active.training_config.image_size) if active and active.training_config else None
         api_cfg = dict(self.config.api)
 
         def _work():
@@ -382,7 +383,8 @@ class TrainTab(ttk.Frame):
             cropped = image_proc.crop_headstamp(frame, self.config.image_proc)
             primer = self.config.image_proc
             cropped = image_proc.apply_primer_mask(
-                cropped, primer.get("primer_mode", "none"),
+                cropped,
+                primer.get("primer_mode", "none"),
                 int(primer.get("primer_radius", 0)),
             )
             ip_ms = (time.perf_counter() - ip_start) * 1000.0
@@ -390,10 +392,13 @@ class TrainTab(ttk.Frame):
             result: dict[str, Any] = {"cropped": cropped, "image_proc_ms": ip_ms}
             if model_path and Path(model_path).exists():
                 from .. import local_inference
+
                 try:
                     pr_start = time.perf_counter()
                     label, conf = local_inference.classify(
-                        cropped, model_path, image_size=train_image_size,
+                        cropped,
+                        model_path,
+                        image_size=train_image_size,
                     )
                     result["predict_ms"] = (time.perf_counter() - pr_start) * 1000.0
                     result["predict_device"] = local_inference.current_device_label()
@@ -458,8 +463,7 @@ class TrainTab(ttk.Frame):
     def _save_clicked(self) -> None:
         label = (self.label_var.get() or "").strip()
         if not label:
-            messagebox.showwarning("Missing label",
-                                   "Pick or type a classification label.", parent=self)
+            messagebox.showwarning("Missing label", "Pick or type a classification label.", parent=self)
             return
         # Save-and-feed mirrors the counts-grid click behaviour so typing a
         # brand-new label keeps the rapid-labelling loop going.
@@ -476,12 +480,10 @@ class TrainTab(ttk.Frame):
     def _save_with_label(self, label: str, *, auto_feed_next: bool) -> None:
         m = self._active_model()
         if m is None:
-            messagebox.showinfo("Pick a model first",
-                                "Activate a model on the Models tab.", parent=self)
+            messagebox.showinfo("Pick a model first", "Activate a model on the Models tab.", parent=self)
             return
         if self._last_cropped is None:
-            messagebox.showinfo("Capture first",
-                                "Click Feed before saving.", parent=self)
+            messagebox.showinfo("Capture first", "Click Feed before saving.", parent=self)
             return
         try:
             dest = save_training_image(
@@ -526,8 +528,7 @@ class TrainTab(ttk.Frame):
     def _start_training(self) -> None:
         m = self._active_model()
         if m is None:
-            messagebox.showinfo("Pick a model first",
-                                "Activate a model on the Models tab.", parent=self)
+            messagebox.showinfo("Pick a model first", "Activate a model on the Models tab.", parent=self)
             return
         if not is_trainable(m):
             # The tab is hidden for these, so reaching here means the active
@@ -543,20 +544,20 @@ class TrainTab(ttk.Frame):
             )
             return
         if self.training_manager.is_running:
-            messagebox.showinfo("Training in progress",
-                                "Cancel the current run first.", parent=self)
+            messagebox.showinfo("Training in progress", "Cancel the current run first.", parent=self)
             return
         img_dir = paths.model_images_dir(m.id)
         if not img_dir.exists() or not any(img_dir.iterdir()):
-            messagebox.showwarning("No images",
-                                   "Save at least one training image first.", parent=self)
+            messagebox.showwarning("No images", "Save at least one training image first.", parent=self)
             return
 
         # Torch isn't shipped in the base venv (~2 GB; AI-Config-only users
         # don't need it). Prompt for the install once on first Train click,
         # then re-enter this method when it finishes.
         if not torch_gate.ensure_torch(
-            self, self._start_training, reason="Training needs PyTorch",
+            self,
+            self._start_training,
+            reason="Training needs PyTorch",
         ):
             return
 
@@ -567,7 +568,8 @@ class TrainTab(ttk.Frame):
         # Open the progress dialog before kicking off so it catches the
         # `training/start` event from the manager.
         self.training_dialog = TrainingProgressDialog(
-            self, self.bus,
+            self,
+            self.bus,
             on_cancel=self.training_manager.cancel,
             on_closed=self._on_training_dialog_closed,
         )

@@ -6,6 +6,7 @@ Exposes a single `Database` class that owns:
   - `ensure_initialized()` that creates the DB if missing and runs the
     one-shot import from `data/config.json` when present.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -13,11 +14,11 @@ import json
 import shutil
 import sqlite3
 import threading
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from . import paths
-
 
 SCHEMA_VERSION = 4
 
@@ -224,9 +225,7 @@ class Database:
         is safe to call on every startup (fresh DBs already have the column
         from the DDL and skip the ALTER).
         """
-        headstamp_cols = {
-            row[1] for row in conn.execute("PRAGMA table_info(headstamps)").fetchall()
-        }
+        headstamp_cols = {row[1] for row in conn.execute("PRAGMA table_info(headstamps)").fetchall()}
         if "parent_id" not in headstamp_cols:
             # NULL default keeps this a legal ALTER even with a REFERENCES clause.
             conn.execute(
@@ -234,13 +233,9 @@ class Database:
                 "REFERENCES headstamp_parents(id) ON DELETE SET NULL"
             )
 
-        parent_cols = {
-            row[1] for row in conn.execute("PRAGMA table_info(headstamp_parents)").fetchall()
-        }
+        parent_cols = {row[1] for row in conn.execute("PRAGMA table_info(headstamp_parents)").fetchall()}
         if parent_cols and "slot" not in parent_cols:
-            conn.execute(
-                "ALTER TABLE headstamp_parents ADD COLUMN slot INTEGER NOT NULL DEFAULT 0"
-            )
+            conn.execute("ALTER TABLE headstamp_parents ADD COLUMN slot INTEGER NOT NULL DEFAULT 0")
 
     def _migrate_from_json(self, json_path: Path) -> None:
         """One-shot import. Reads `config.json`, writes rows, renames to `.bak`."""
@@ -277,8 +272,7 @@ class Database:
                     continue
                 hs_slot = int(entry.get("slot", 0))
                 conn.execute(
-                    "INSERT OR IGNORE INTO headstamps(name, model_id, slot) "
-                    "VALUES (?, ?, ?)",
+                    "INSERT OR IGNORE INTO headstamps(name, model_id, slot) VALUES (?, ?, ?)",
                     (hs_name, model_id, hs_slot),
                 )
 

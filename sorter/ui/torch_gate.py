@@ -27,10 +27,11 @@ to be factored out into a continuation.
 Must be called on the Tk main thread (it may open a modal) — so from button
 handlers and event callbacks, never from inside `run_worker`.
 """
+
 from __future__ import annotations
 
 import tkinter as tk
-from typing import Callable
+from collections.abc import Callable
 
 from .. import local_inference
 from .dialog_install_torch import TorchInstallDialog
@@ -58,6 +59,9 @@ def ensure_torch(
     if local_inference.is_installed():
         return True
     TorchInstallDialog(
-        parent, on_success=proceed, on_cancel=on_cancel, reason=reason,
+        parent,
+        on_success=proceed,
+        on_cancel=on_cancel,
+        reason=reason,
     )
     return False

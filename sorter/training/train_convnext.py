@@ -19,6 +19,7 @@ IMPORTANT: All Dataset subclasses must be defined at module scope (not
 inside helper functions) — Windows multiprocessing `spawn` workers pickle
 them when DataLoader spins up, and local classes can't be pickled.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -37,13 +38,11 @@ try:
     import torch.nn as nn
     import torch.nn.functional as F
     from PIL import Image
-    from torch.optim.swa_utils import AveragedModel, SWALR, update_bn
+    from torch.optim.swa_utils import SWALR, AveragedModel, update_bn
     from torch.utils.data import DataLoader, Dataset, random_split
     from torchvision import models, transforms
 except ImportError as exc:  # pragma: no cover - guarded by Train UI
-    sys.stderr.write(
-        f"[train_convnext] PyTorch is required. Install with the Train tab. ({exc})\n"
-    )
+    sys.stderr.write(f"[train_convnext] PyTorch is required. Install with the Train tab. ({exc})\n")
     raise
 
 
@@ -138,36 +137,38 @@ class TransformSubset(Dataset):
 class FocalLoss(nn.Module):
     """Single-class focal loss with label smoothing."""
 
-    def __init__(self, gamma: float = 1.0, alpha: float = 1.0,
-                 label_smoothing: float = 0.1) -> None:
+    def __init__(self, gamma: float = 1.0, alpha: float = 1.0, label_smoothing: float = 0.1) -> None:
         super().__init__()
         self.gamma = gamma
         self.alpha = alpha
         self.label_smoothing = label_smoothing
 
     def forward(self, inputs, targets):
-        ce = F.cross_entropy(inputs, targets, reduction="none",
-                             label_smoothing=self.label_smoothing)
+        ce = F.cross_entropy(inputs, targets, reduction="none", label_smoothing=self.label_smoothing)
         log_pt = F.log_softmax(inputs, dim=-1)
         pt = torch.exp(log_pt.gather(1, targets.unsqueeze(1)).squeeze())
         return (self.alpha * (1 - pt) ** self.gamma * ce).mean()
 
 
 def _get_transforms(image_size: int):
-    train_tf = transforms.Compose([
-        transforms.Resize((image_size, image_size)),
-        transforms.RandomRotation(degrees=(0, 360)),
-        transforms.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
-        transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0)),
-        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2),
-        transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-    ])
-    val_tf = transforms.Compose([
-        transforms.Resize((image_size, image_size)),
-        transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-    ])
+    train_tf = transforms.Compose(
+        [
+            transforms.Resize((image_size, image_size)),
+            transforms.RandomRotation(degrees=(0, 360)),
+            transforms.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
+            transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0)),
+            transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]
+    )
+    val_tf = transforms.Compose(
+        [
+            transforms.Resize((image_size, image_size)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]
+    )
     return train_tf, val_tf
 
 
@@ -181,8 +182,9 @@ def _get_model_weights(model_name: str):
     return getattr(models, model_name), weights_map[model_name]
 
 
-def _run_epoch(model, loader, criterion, optimizer, scaler, device,
-               is_train: bool, use_channels_last: bool) -> tuple[float, float]:
+def _run_epoch(
+    model, loader, criterion, optimizer, scaler, device, is_train: bool, use_channels_last: bool
+) -> tuple[float, float]:
     if is_train:
         model.train()
     else:
@@ -245,7 +247,8 @@ def main() -> int:
         val_sub = None
     else:
         train_sub, val_sub = random_split(
-            dataset, [n_train, n_val],
+            dataset,
+            [n_train, n_val],
             generator=torch.Generator().manual_seed(42),
         )
 
@@ -323,15 +326,27 @@ def main() -> int:
 
     for epoch in range(1, args.epochs + 1):
         train_loss, train_acc = _run_epoch(
-            model, train_loader, criterion, optimizer, scaler, device,
-            is_train=True, use_channels_last=use_channels_last,
+            model,
+            train_loader,
+            criterion,
+            optimizer,
+            scaler,
+            device,
+            is_train=True,
+            use_channels_last=use_channels_last,
         )
         val_loss: float | None = None
         val_acc: float | None = None
         if val_loader is not None:
             val_loss, val_acc = _run_epoch(
-                model, val_loader, criterion, None, None, device,
-                is_train=False, use_channels_last=use_channels_last,
+                model,
+                val_loader,
+                criterion,
+                None,
+                None,
+                device,
+                is_train=False,
+                use_channels_last=use_channels_last,
             )
             if val_loss < best_plateau_loss:
                 best_plateau_loss = val_loss
@@ -345,8 +360,7 @@ def main() -> int:
                 should_start = epoch >= swa_fallback_epoch
             else:
                 hit_threshold = val_acc is not None and val_acc >= args.swa_acc_threshold
-                plateaued = (epochs_no_improve >= args.swa_patience
-                             and epoch >= args.swa_min_epoch)
+                plateaued = epochs_no_improve >= args.swa_patience and epoch >= args.swa_min_epoch
                 fallback = epoch >= swa_fallback_epoch
                 should_start = hit_threshold or plateaued or fallback
             if should_start:
@@ -398,12 +412,15 @@ def main() -> int:
     if args.use_swa and swa_active:
         update_bn(train_loader, swa_model, device=device)
         swa_path = args.output_model.replace(".pth", "_swa.pth")
-        torch.save({
-            "model_state_dict": swa_model.state_dict(),
-            "classes": dataset.classes,
-            "base": args.model_name,
-            "image_size": int(args.imgsize),
-        }, swa_path)
+        torch.save(
+            {
+                "model_state_dict": swa_model.state_dict(),
+                "classes": dataset.classes,
+                "base": args.model_name,
+                "image_size": int(args.imgsize),
+            },
+            swa_path,
+        )
 
     _emit("done", best_val_acc=best_acc if best_acc >= 0 else None, best_val_loss=best_loss)
     return 0
