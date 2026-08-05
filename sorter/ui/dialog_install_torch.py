@@ -10,13 +10,19 @@ On open we detect a supported Nvidia GPU (compute capability ≥ 8.0). If one is
 present, the user gets to pick between the GPU build (CUDA 12.8 wheels) and the
 CPU build; otherwise only the CPU build is offered.
 
-`pip install` runs in a subprocess and streams its output to the dialog's
-console. On success the caller's `on_success` callback fires and the gated
-action proceeds; on cancel/failure the venv is left as-is.
+`uv pip install --python <this interpreter>` runs in a subprocess and streams
+its output to the dialog's console. Prefers uv over `python -m pip` because a
+uv-managed venv (see bootstrap.py) doesn't ship pip by default -- `--python`
+targets the running venv explicitly regardless of how it was created. Falls
+back to `python -m pip` when uv isn't installed, which is the normal state of
+a plain `python -m venv` checkout. On success the caller's `on_success`
+callback fires and the gated action proceeds; on cancel/failure the venv is
+left as-is.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 import threading
@@ -25,6 +31,7 @@ from collections.abc import Callable
 from tkinter import ttk
 
 from ..gpu_detect import GpuInfo, detect_supported_nvidia_gpu
+from ..paths import find_uv
 from .theme import PALETTE
 
 # Pin exactly the versions the legacy project validates against. Floating
@@ -186,7 +193,27 @@ class TorchInstallDialog(tk.Toplevel):
         active_btn = self.gpu_btn if (use_gpu and self._gpu is not None) else self.cpu_btn
         active_btn.config(text="Installing…")
 
-        cmd: list[str] = [sys.executable, "-u", "-m", "pip", "install", *list(_CPU_TARGETS)]
+        # uv first, because a uv-managed venv (the launcher's default) has no
+        # pip in it at all. But a plain `python -m venv` + `pip install -e .`
+        # checkout is a documented way to run this app, and there uv may
+        # legitimately be absent while pip is right there -- so fall back
+        # rather than refusing to install. Only give up if neither exists.
+        uv = find_uv()
+        if uv is not None:
+            cmd: list[str] = [uv, "pip", "install", "--python", sys.executable, *list(_CPU_TARGETS)]
+        elif importlib.util.find_spec("pip") is not None:
+            self._append("uv not found; falling back to pip in the running interpreter.\n")
+            cmd = [sys.executable, "-u", "-m", "pip", "install", *list(_CPU_TARGETS)]
+        else:
+            self._append(
+                "Could not find uv or pip. uv should have been installed by "
+                "bootstrap.py on first launch -- try restarting the app via "
+                "start.sh/start.bat, or install uv yourself from "
+                "https://docs.astral.sh/uv/.\n"
+            )
+            self._finish(success=False)
+            return
+
         if use_gpu:
             cmd.extend(["--index-url", _CUDA_INDEX])
         self._append("$ " + " ".join(cmd) + "\n")
@@ -200,7 +227,7 @@ class TorchInstallDialog(tk.Toplevel):
                 bufsize=1,
             )
         except OSError as exc:
-            self._append(f"Failed to spawn pip: {exc}\n")
+            self._append(f"Failed to spawn {cmd[0]}: {exc}\n")
             self._finish(success=False)
             return
         threading.Thread(target=self._pump, daemon=True).start()
