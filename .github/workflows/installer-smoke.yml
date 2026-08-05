@@ -40,6 +40,16 @@ on:
         required: false
         type: string
 
+  # Manual runs, with the same optional pin. Useful when /releases/latest is not
+  # the release you want to check -- including the case where it predates a
+  # package rename and so carries an sdist the current installer cannot match.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to verify. Omit to test whatever /releases/latest resolves to."
+        required: false
+        type: string
+
 permissions:
   contents: read
 
@@ -70,6 +80,27 @@ jobs:
       # calls out by name for its BOM/codepage decoding quirks -- pwsh would
       # not exercise that at all.
       #
+      # Cheap up-front diagnosis. When this job fails it is usually not the
+      # installer being broken but the release it resolved to not carrying an
+      # sdist under the name the installer matches -- after a package rename
+      # every release cut before it is in exactly that state, and the symptom
+      # is an unhelpful "sorter\_version.py is missing" three steps later.
+      - name: Show the release under test
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [ -n "$TAG" ]; then
+            ENDPOINT="releases/tags/$TAG"
+          else
+            ENDPOINT="releases/latest"
+          fi
+          echo "Resolving $ENDPOINT"
+          gh api "repos/${GITHUB_REPOSITORY}/${ENDPOINT}" \
+            --jq '"tag: \(.tag_name)   prerelease: \(.prerelease)", "assets:", (.assets[].name | "  - \(.)")' \
+            || echo "::warning::No release at $ENDPOINT -- the installer will fall back to the source archive and this job will fail."
+
       # -NoLaunch keeps this scoped to install + extract; the full
       # bootstrap.py/uv-sync path is launcher-smoke's job, not this one's.
       #
