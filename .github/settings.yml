@@ -151,6 +151,43 @@ labels:
     color: "d876e3"
     description: "Further information is requested"
 
+  # Applied by labeler.yml on any PR touching .github/settings.yml. Merging one
+  # of those does not just change a file -- the Settings app applies it to the
+  # live repo, including things no diff makes obvious (merge methods, branch
+  # protection, who can approve a deployment). Loud on purpose.
+  - name: "⚠️ REPO SETTINGS"
+    color: "b60205"
+    description: "⚠️ Changes .github/settings.yml -- merging APPLIES it to the live repository"
+
+# Deployment environments, referenced by .github/workflows/publish.yml.
+#
+# `stable` is the PyPI publish, and it is the one irreversible step in the whole
+# release: a version can be yanked but never replaced. The reviewer requirement
+# is the in-flow confirmation before that happens -- the job sits pending until
+# somebody approves it.
+#
+# Free on public repos; protection rules only cost money on private ones.
+#
+# No deployment_branch_policy on purpose. `protected_branches: true` would
+# restrict deployments to protected branches, and (a) nothing is protected here
+# yet -- the branches: block above is commented out -- and (b) these jobs run on
+# `release` events, where the ref is a tag, not a branch. Either alone would
+# block every deployment.
+# Both gated by the same reviewer, so a release takes two approvals: one before
+# the TestPyPI rehearsal, one before the PyPI publish. Nothing reaches an index
+# without a human saying so.
+environments:
+  # TestPyPI, the rehearsal.
+  - name: test
+    reviewers:
+      - id: 3073671 # sjseth
+        type: User
+
+  - name: stable
+    reviewers:
+      - id: 3073671 # sjseth
+        type: User
+
 # Uncomment upstream. Deliberately inactive by default -- see the note at the
 # top: required_approving_review_count: 1 prevents a solo maintainer from
 # merging their own PR at all.
