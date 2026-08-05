@@ -199,8 +199,13 @@ def test_subscribing_during_a_drain_does_not_disturb_the_dispatch() -> None:
 
 def test_posts_from_worker_threads_are_all_delivered() -> None:
     bus = EventBus()
-    seen: list[object] = []
-    bus.subscribe("t", seen.append)
+    seen: list[int] = []
+
+    def record(payload: object) -> None:
+        assert isinstance(payload, int)
+        seen.append(payload)
+
+    bus.subscribe("t", record)
 
     def worker(base: int) -> None:
         for i in range(20):
