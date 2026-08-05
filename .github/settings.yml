@@ -24,17 +24,11 @@
 #
 #   1. labels: safe-settings nests them under `labels: { include: [...] }`
 #      (and supports `exclude:`); this format takes a flat `labels: [...]`.
-#   2. security: safe-settings has a `repository.security` block with
-#      `enableVulnerabilityAlerts` / `enableAutomatedSecurityFixes`. There is
-#      no equivalent here, so those two stay manual. The wanted state is
-#      alerts ON, automated fixes OFF: Renovate owns dependency PRs here, and
-#      running both bots opens duplicate PRs for the same CVE.
-#
-# NOTE ON BRANCH PROTECTION: the `branches:` block below is commented out on
-# purpose. Requiring an approving review makes it impossible to merge your own
-# PR (GitHub won't let you approve your own), which locks a solo maintainer or
-# a fork owner out of their own repo. Uncomment it upstream, where PRs get an
-# actual second pair of eyes -- see the comment on that block.
+#   2. security: safe-settings puts these in a `repository.security` block as
+#      `enableVulnerabilityAlerts` / `enableAutomatedSecurityFixes`; this
+#      format takes them as flat `enable_vulnerability_alerts` /
+#      `enable_automated_security_fixes` keys inside `repository:`. Same
+#      effect, different spelling -- a rename if this file ever moves.
 
 repository:
   has_issues: true
@@ -61,8 +55,26 @@ repository:
   squash_merge_commit_message: COMMIT_MESSAGES
 
   delete_branch_on_merge: true
+  # Required for Renovate's `platformAutomerge` -- without it Renovate merges
+  # the PR itself rather than GitHub holding it until the checks pass. The
+  # branches block below is the other half: GitHub only offers auto-merge on a
+  # branch that requires something.
   allow_auto_merge: true
   allow_update_branch: true
+
+  # The Renovate/Dependabot boundary: Dependabot detects, Renovate fixes.
+  # There is deliberately no .github/dependabot.yml -- Renovate covers both
+  # ecosystems here (pypi, github-actions), and without that file Dependabot
+  # opens nothing.
+  #
+  # Alerts ON is load-bearing: Renovate's `vulnerabilityAlerts` reads them, so
+  # with alerts off that block is inert and coverage narrows to OSV silently.
+  # Automated fixes OFF is the toggle that would have Dependabot open PRs of
+  # its own -- two bots fixing the same CVE, and its PR titles are not
+  # Conventional Commits, which check-semantic-pr.yml rejects and git-cliff
+  # needs.
+  enable_vulnerability_alerts: true
+  enable_automated_security_fixes: false
 
 # Referenced by .github/labeler.yml, which auto-applies them by changed path.
 # actions/labeler does NOT create labels -- it errors on any that don't exist,
@@ -155,26 +167,39 @@ labels:
     color: "d876e3"
     description: "Further information is requested"
 
-# Uncomment upstream. Deliberately inactive by default -- see the note at the
-# top: required_approving_review_count: 1 prevents a solo maintainer from
-# merging their own PR at all.
-#
-# branches:
-#   - name: main
-#     protection:
-#       required_pull_request_reviews:
-#         required_approving_review_count: 1
-#         dismiss_stale_reviews: true
-#         require_code_owner_reviews: false
-#       required_status_checks:
-#         strict: true
-#         contexts:
-#           - "ruff (check + format)"
-#           - "lint the workflows themselves"
-#           - "release version mapping"
-#           - "pytest (ubuntu-latest, py3.12)"
-#           - "pytest (windows-latest, py3.12)"
-#           - "Validate PR title"
-#       required_conversation_resolution: true
-#       enforce_admins: false
-#       restrictions: null
+# This block used to be commented out wholesale because
+# `required_approving_review_count: 1` locks a solo maintainer out of their own
+# repo -- GitHub won't let you approve your own PR. Only the count needed
+# relaxing, so only the count is relaxed: 0 still requires a *pull request*,
+# still runs the checks, still resolves conversations. Raise it to 1 on any
+# repo with a second maintainer and change nothing else.
+branches:
+  - name: main
+    protection:
+      required_pull_request_reviews:
+        required_approving_review_count: 0
+        # On at 0 so an approval can't outlive the commits it approved, and so
+        # raising the count inherits the right behaviour.
+        dismiss_stale_reviews: true
+        require_code_owner_reviews: false
+
+      required_status_checks:
+        # The branch must be current with main to merge; Renovate rebases its
+        # own branches to satisfy this.
+        strict: true
+        contexts:
+          - "ruff (check + format)"
+          - "lint the workflows themselves"
+          - "release version mapping"
+          - "pytest (ubuntu-latest, py3.12)"
+          - "pytest (windows-latest, py3.12)"
+          - "Validate PR title"
+
+      # Off by default on GitHub: a review comment can't be merged past
+      # without being answered or explicitly resolved.
+      required_conversation_resolution: true
+
+      # False so an admin can bypass a broken required check without turning
+      # protection off in a hurry and forgetting to turn it back on.
+      enforce_admins: false
+      restrictions: null

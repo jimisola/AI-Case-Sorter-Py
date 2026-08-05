@@ -35,11 +35,25 @@
     enabled: true,
   },
 
+  // Renovate fixes CVEs; Dependabot only reports them. This reads GitHub's
+  // Dependabot alerts, so it is inert unless settings.yml's
+  // `enable_vulnerability_alerts` is applied.
+  //
+  // Renovate defaults this block to `minimumReleaseAge: null` and
+  // `prCreation: "immediate"`, so the soak times below never delay a security
+  // fix -- they guard against a freshly published malicious version, which is
+  // the opposite situation.
   vulnerabilityAlerts: {
     enabled: true,
     addLabels: ["security"],
+    // Not the usual `chore`: puts a CVE fix in cliff.toml's Security group
+    // rather than Miscellaneous, matching Dependabot's prefix for the same
+    // change. Accepted type in check-semantic-pr.yml.
+    semanticCommitType: "security",
   },
 
+  // OSV.dev directly rather than GitHub's advisories -- a supplement to the
+  // above, not a substitute for it.
   osvVulnerabilityAlerts: true,
 
   packageRules: [
