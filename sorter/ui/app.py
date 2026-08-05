@@ -9,7 +9,7 @@ from collections.abc import Callable
 from tkinter import ttk
 from typing import Any
 
-from .. import serial_broker
+from .. import __version__, serial_broker
 from ..camera import Camera
 from ..config import Config
 from ..events import EventBus
@@ -55,7 +55,7 @@ class MainWindow:
         self.db = db if db is not None else getattr(config, "db", None)
         self.bus = EventBus()
         self.root = tk.Tk()
-        self.root.title("AI Case Sorter - v2.0.1")
+        self.root.title(f"AI Case Sorter - v{__version__}")
         self.root.geometry("1024x768")
         self.root.minsize(960, 660)
 
