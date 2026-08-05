@@ -33,10 +33,10 @@ Key invariants borrowed from the server:
 Diagnostic stderr prints (env dump, per-call timing breakdown, model
 device confirmation) are intentionally retained.
 """
+
 from __future__ import annotations
 
 import concurrent.futures
-import os
 import threading
 import time
 from dataclasses import dataclass
@@ -45,9 +45,8 @@ from typing import Any
 
 import numpy as np
 
-
 _lock = threading.Lock()
-_cache: dict[tuple[str, int], "_LoadedModel"] = {}
+_cache: dict[tuple[str, int], _LoadedModel] = {}
 _torch_mod: Any = None
 _models_mod: Any = None
 _F_mod: Any = None
@@ -73,7 +72,7 @@ last_timings: dict[str, float] = {}
 
 @dataclass
 class _LoadedModel:
-    net: Any            # Resident on the cached device after _load()
+    net: Any  # Resident on the cached device after _load()
     classes: list[str]
     base: str
     image_size: int
@@ -92,15 +91,14 @@ def _torch():
         # site-packages predates it. Without this the first post-install
         # import fails and the user is told to install what they just did.
         import importlib
+
         importlib.invalidate_caches()
         try:
             import torch
-            from torchvision import models
             import torch.nn.functional as F
+            from torchvision import models
         except ImportError as exc:
-            raise LocalInferenceError(
-                "PyTorch is not installed. Install with `pip install .[ml]`."
-            ) from exc
+            raise LocalInferenceError("PyTorch is not installed. Install with `pip install .[ml]`.") from exc
         _torch_mod = torch
         _models_mod = models
         _F_mod = F
@@ -126,6 +124,7 @@ def _pick_device(torch_mod: Any) -> Any:
     """
     global _device_cache
     import sys
+
     if not torch_mod.cuda.is_available():
         _device_cache = torch_mod.device("cpu")
         print("[device] CUDA unavailable; using CPU", file=sys.stderr, flush=True)
@@ -134,18 +133,17 @@ def _pick_device(torch_mod: Any) -> Any:
         probe = torch_mod.randn(1, 3, 8, 8, device="cuda")
         _ = probe.sum().item()
         _device_cache = torch_mod.device("cuda")
-        print(f"[device] CUDA ok: {torch_mod.cuda.get_device_name(0)}",
-              file=sys.stderr, flush=True)
+        print(f"[device] CUDA ok: {torch_mod.cuda.get_device_name(0)}", file=sys.stderr, flush=True)
     except Exception as exc:
         _device_cache = torch_mod.device("cpu")
-        print(f"[device] CUDA probe failed ({exc}); using CPU",
-              file=sys.stderr, flush=True)
+        print(f"[device] CUDA probe failed ({exc}); using CPU", file=sys.stderr, flush=True)
     return _device_cache
 
 
 def _dump_environment(torch_mod: Any) -> None:
     """Print a one-time summary of torch/CUDA configuration to stderr."""
     import sys
+
     try:
         cuda_avail = torch_mod.cuda.is_available()
         cudnn_v = None
@@ -159,35 +157,40 @@ def _dump_environment(torch_mod: Any) -> None:
                 arch_list = list(torch_mod.cuda.get_arch_list())
             except Exception:
                 pass
-        print(f"[env] torch={torch_mod.__version__} "
-              f"cuda_available={cuda_avail} "
-              f"cuda_version={torch_mod.version.cuda} "
-              f"cudnn={cudnn_v} "
-              f"threads={torch_mod.get_num_threads()}",
-              file=sys.stderr, flush=True)
+        print(
+            f"[env] torch={torch_mod.__version__} "
+            f"cuda_available={cuda_avail} "
+            f"cuda_version={torch_mod.version.cuda} "
+            f"cudnn={cudnn_v} "
+            f"threads={torch_mod.get_num_threads()}",
+            file=sys.stderr,
+            flush=True,
+        )
         if cuda_avail:
             print(f"[env] arch_list={arch_list}", file=sys.stderr, flush=True)
             for i in range(torch_mod.cuda.device_count()):
                 name = torch_mod.cuda.get_device_name(i)
                 cap = torch_mod.cuda.get_device_capability(i)
                 props = torch_mod.cuda.get_device_properties(i)
-                mem_gb = props.total_memory / (1024 ** 3)
+                mem_gb = props.total_memory / (1024**3)
                 sm_tag = f"sm_{cap[0]}{cap[1]}"
                 # If arch_list doesn't include this sm tag, PyTorch
                 # JIT-compiles kernels from PTX on every launch and
                 # performance is unusable. We still report it but make
                 # the situation obvious.
-                supported = any(sm_tag in a or f"compute_{cap[0]}{cap[1]}" in a
-                                for a in arch_list)
+                supported = any(sm_tag in a or f"compute_{cap[0]}{cap[1]}" in a for a in arch_list)
                 marker = "" if supported else "  ⚠  NOT in arch_list — PTX JIT fallback"
-                print(f"[env] device[{i}]={name!r} {sm_tag} "
-                      f"vram={mem_gb:.1f}GB mp={props.multi_processor_count}"
-                      f"{marker}", file=sys.stderr, flush=True)
+                print(
+                    f"[env] device[{i}]={name!r} {sm_tag} vram={mem_gb:.1f}GB mp={props.multi_processor_count}{marker}",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 if not supported:
                     print(
                         f"[env] FIX: install a PyTorch build that bakes {sm_tag} "
                         "in its arch list (e.g. the nightly cu128 build).",
-                        file=sys.stderr, flush=True,
+                        file=sys.stderr,
+                        flush=True,
                     )
             # Synthetic benchmarks decouple raw GPU / cuDNN throughput
             # from anything in our classify pipeline.
@@ -203,11 +206,9 @@ def _dump_environment(torch_mod: Any) -> None:
                     y = x @ x
                 torch_mod.cuda.synchronize()
                 ms_per = (time.perf_counter() - t) * 1000.0 / iters
-                print(f"[env] matmul_1024x1024_fp32: {ms_per:.2f} ms/iter",
-                      file=sys.stderr, flush=True)
+                print(f"[env] matmul_1024x1024_fp32: {ms_per:.2f} ms/iter", file=sys.stderr, flush=True)
             except Exception as exc:
-                print(f"[env] matmul benchmark failed: {exc}",
-                      file=sys.stderr, flush=True)
+                print(f"[env] matmul benchmark failed: {exc}", file=sys.stderr, flush=True)
 
             # ConvNeXt-Tiny forward — same model class our classify uses.
             # If this matches our 800+ ms classify time, the bottleneck is
@@ -216,6 +217,7 @@ def _dump_environment(torch_mod: Any) -> None:
             # tensor strides, etc.).
             try:
                 from torchvision import models as tv_models  # noqa: F401
+
                 bench_net = tv_models.convnext_tiny(weights=None).cuda().eval()
                 bench_x = torch_mod.randn(1, 3, 224, 224, device="cuda")
                 with torch_mod.inference_mode():
@@ -229,14 +231,16 @@ def _dump_environment(torch_mod: Any) -> None:
                         _ = bench_net(bench_x)
                 torch_mod.cuda.synchronize()
                 ms_per = (time.perf_counter() - t) * 1000.0 / iters
-                print(f"[env] convnext_tiny_fp32_synthetic: {ms_per:.1f} ms/iter "
-                      f"(expected ~10-30 on sm_80+, 30-80 on sm_120 with cuDNN 9.x)",
-                      file=sys.stderr, flush=True)
+                print(
+                    f"[env] convnext_tiny_fp32_synthetic: {ms_per:.1f} ms/iter "
+                    f"(expected ~10-30 on sm_80+, 30-80 on sm_120 with cuDNN 9.x)",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 del bench_net, bench_x
                 torch_mod.cuda.empty_cache()
             except Exception as exc:
-                print(f"[env] convnext benchmark failed: {exc}",
-                      file=sys.stderr, flush=True)
+                print(f"[env] convnext benchmark failed: {exc}", file=sys.stderr, flush=True)
     except Exception as exc:
         print(f"[env] dump failed: {exc}", file=sys.stderr, flush=True)
 
@@ -346,17 +350,16 @@ def _load(model_path: str) -> _LoadedModel:
 
         state = ckpt.get("model_state_dict") or ckpt.get("state_dict") or ckpt
         # Tolerate DataParallel-wrapped checkpoints and strip SWA bookkeeping.
-        cleaned = {
-            k.removeprefix("module."): v
-            for k, v in state.items()
-            if k != "n_averaged"
-        }
+        cleaned = {k.removeprefix("module."): v for k, v in state.items() if k != "n_averaged"}
         layout = _detect_classifier_layout(cleaned)
         dropout = float(ckpt.get("dropout", 0.0) or 0.0)
 
         net = _build_base(base)
         net = _replace_classifier(
-            net, num_classes=len(classes), layout=layout, dropout=dropout,
+            net,
+            num_classes=len(classes),
+            layout=layout,
+            dropout=dropout,
         )
         # strict=True so a head/backbone mismatch raises here instead of
         # silently leaving random head weights (which produces garbage
@@ -375,12 +378,16 @@ def _load(model_path: str) -> _LoadedModel:
         _cache[key] = loaded
         # Diagnostic: confirm where the model parameters live after load.
         import sys
+
         try:
             param = next(net.parameters())
-            print(f"[model] loaded {base!r} from {path.name} "
-                  f"device={param.device} dtype={param.dtype} "
-                  f"classifier_layout={layout} image_size={image_size}",
-                  file=sys.stderr, flush=True)
+            print(
+                f"[model] loaded {base!r} from {path.name} "
+                f"device={param.device} dtype={param.dtype} "
+                f"classifier_layout={layout} image_size={image_size}",
+                file=sys.stderr,
+                flush=True,
+            )
         except Exception:
             pass
         return loaded
@@ -395,9 +402,7 @@ def _get_executor() -> concurrent.futures.ThreadPoolExecutor:
     """
     global _executor
     if _executor is None:
-        _executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="local-inference"
-        )
+        _executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="local-inference")
     return _executor
 
 
@@ -422,13 +427,22 @@ def classify(
     blocks on the future; on a CPU-only build this is functionally
     identical to running the work inline.
     """
-    return _get_executor().submit(
-        _classify_impl, image_bgr, model_path, image_size,
-    ).result()
+    return (
+        _get_executor()
+        .submit(
+            _classify_impl,
+            image_bgr,
+            model_path,
+            image_size,
+        )
+        .result()
+    )
 
 
 def _classify_impl(
-    image_bgr: np.ndarray, model_path: str, image_size: int | None = None,
+    image_bgr: np.ndarray,
+    model_path: str,
+    image_size: int | None = None,
 ) -> tuple[str, float]:
     """Inner classify implementation. Always runs on the inference thread.
 
@@ -470,8 +484,7 @@ def _classify_impl(
     rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     resized = cv2.resize(rgb, (effective_size, effective_size), interpolation=cv2.INTER_AREA)
     arr = resized.astype(np.float32) / 255.0
-    arr = (arr - np.array([0.485, 0.456, 0.406], dtype=np.float32)) / \
-          np.array([0.229, 0.224, 0.225], dtype=np.float32)
+    arr = (arr - np.array([0.485, 0.456, 0.406], dtype=np.float32)) / np.array([0.229, 0.224, 0.225], dtype=np.float32)
     tensor = torch.from_numpy(arr.transpose(2, 0, 1)).unsqueeze(0).to(device)
     timings["preprocess"] = (time.perf_counter() - t0) * 1000.0
 
@@ -491,8 +504,7 @@ def _classify_impl(
     last_timings.clear()
     last_timings.update(timings)
     parts = " ".join(f"{k}:{v:.0f}" for k, v in timings.items())
-    print(f"[classify] device={device.type} {parts}  total:{sum(timings.values()):.0f}ms",
-          file=sys.stderr, flush=True)
+    print(f"[classify] device={device.type} {parts}  total:{sum(timings.values()):.0f}ms", file=sys.stderr, flush=True)
 
     label = loaded.classes[top_idx] if 0 <= top_idx < len(loaded.classes) else ""
     return label, top_prob * 100.0
@@ -523,14 +535,12 @@ def is_installed() -> bool:
     `LocalInferenceError` as it always has.
     """
     import importlib.util
+
     # Same rationale as _torch(): a just-installed torch is invisible to a
     # stale finder cache.
     importlib.invalidate_caches()
     try:
-        return (
-            importlib.util.find_spec("torch") is not None
-            and importlib.util.find_spec("torchvision") is not None
-        )
+        return importlib.util.find_spec("torch") is not None and importlib.util.find_spec("torchvision") is not None
     except (ImportError, ValueError):
         # ImportError: a parent package is missing. ValueError: the module is
         # in sys.modules with a None __spec__. Both mean "not usable".

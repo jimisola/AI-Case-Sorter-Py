@@ -12,6 +12,7 @@ fit and rebuilds the grid, preserving the newest records.
 
 Ports the legacy app's image-history tray.
 """
+
 from __future__ import annotations
 
 import tkinter as tk
@@ -22,7 +23,6 @@ from PIL import Image, ImageTk
 
 from ..events import EventBus
 from .theme import PALETTE
-
 
 # Tile geometry (px). The image is square; text sits to its right.
 THUMB = 76
@@ -69,18 +69,29 @@ class _Tile(tk.Frame):
         self._conf_var = tk.StringVar(value="")
         self._slot_var = tk.StringVar(value="")
         tk.Label(
-            text, textvariable=self._label_var, bg=PALETTE["bg_surface"],
-            fg=PALETTE["text"], font=("TkDefaultFont", 9, "bold"),
-            anchor=tk.W, justify=tk.LEFT, wraplength=TILE_W - THUMB - 24,
+            text,
+            textvariable=self._label_var,
+            bg=PALETTE["bg_surface"],
+            fg=PALETTE["text"],
+            font=("TkDefaultFont", 9, "bold"),
+            anchor=tk.W,
+            justify=tk.LEFT,
+            wraplength=TILE_W - THUMB - 24,
         ).pack(anchor=tk.W, pady=(6, 0))
         tk.Label(
-            text, textvariable=self._conf_var, bg=PALETTE["bg_surface"],
-            fg=PALETTE["text_muted"], font=("TkDefaultFont", 8),
+            text,
+            textvariable=self._conf_var,
+            bg=PALETTE["bg_surface"],
+            fg=PALETTE["text_muted"],
+            font=("TkDefaultFont", 8),
             anchor=tk.W,
         ).pack(anchor=tk.W)
         tk.Label(
-            text, textvariable=self._slot_var, bg=PALETTE["bg_surface"],
-            fg=PALETTE["text_muted"], font=("TkDefaultFont", 8),
+            text,
+            textvariable=self._slot_var,
+            bg=PALETTE["bg_surface"],
+            fg=PALETTE["text_muted"],
+            font=("TkDefaultFont", 8),
             anchor=tk.W,
         ).pack(anchor=tk.W)
 
@@ -122,8 +133,8 @@ class MonitorWindow(tk.Toplevel):
         self._grid = tk.Frame(self, bg=PALETTE["bg_window"])
         self._grid.pack(fill=tk.BOTH, expand=True, padx=GUTTER, pady=GUTTER)
 
-        self._tiles: list[_Tile] = []      # fixed-position ring buffer
-        self._recency: list[_Tile] = []    # newest-first, drives border colour
+        self._tiles: list[_Tile] = []  # fixed-position ring buffer
+        self._recency: list[_Tile] = []  # newest-first, drives border colour
         self._write_index = 0
         self._capacity = 0
         self._cols = 1
@@ -174,8 +185,7 @@ class MonitorWindow(tk.Toplevel):
 
         for i, tile in enumerate(self._tiles):
             row, col = self._position(i)
-            tile.grid(row=row, column=col, padx=GUTTER // 2, pady=GUTTER // 2,
-                      sticky=tk.NW)
+            tile.grid(row=row, column=col, padx=GUTTER // 2, pady=GUTTER // 2, sticky=tk.NW)
         self._recolor()
 
     def _position(self, index: int) -> tuple[int, int]:
@@ -195,8 +205,7 @@ class MonitorWindow(tk.Toplevel):
             target = _Tile(self._grid)
             self._tiles.append(target)
             row, col = self._position(len(self._tiles) - 1)
-            target.grid(row=row, column=col, padx=GUTTER // 2, pady=GUTTER // 2,
-                        sticky=tk.NW)
+            target.grid(row=row, column=col, padx=GUTTER // 2, pady=GUTTER // 2, sticky=tk.NW)
         else:
             if self._write_index >= len(self._tiles):
                 self._write_index = 0

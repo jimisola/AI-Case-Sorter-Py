@@ -15,6 +15,7 @@ If any one fails it falls back to the AI Config HTTP server, which is what a
 `localhost:8000 /v1/chat/completions` connection error means. This prints each
 condition separately so you can see which one is the problem.
 """
+
 from __future__ import annotations
 
 import sys

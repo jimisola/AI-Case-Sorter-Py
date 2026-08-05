@@ -1,4 +1,5 @@
 """Run-tab sorting-template bar wiring (needs a Tk display)."""
+
 from __future__ import annotations
 
 import pytest
@@ -8,7 +9,7 @@ pytest.importorskip("cv2")
 
 import tkinter as tk  # noqa: E402
 
-from sorter.config import Config, DEFAULT_SLOT_TEMPLATE_NAME  # noqa: E402
+from sorter.config import DEFAULT_SLOT_TEMPLATE_NAME, Config  # noqa: E402
 from sorter.db import Database  # noqa: E402
 from sorter.events import EventBus  # noqa: E402
 from sorter.repository import ModelRepo, SettingsRepo  # noqa: E402
@@ -74,9 +75,7 @@ def test_selecting_a_template_applies_its_layout(root, tmp_path, monkeypatch) ->
         cfg.create_slot_template("Blank", copy_current=False)
         tab._refresh_templates()
 
-        tab._template_combo.current(
-            [t.name for t in tab._templates].index(default.name)
-        )
+        tab._template_combo.current([t.name for t in tab._templates].index(default.name))
         tab._on_template_selected()
 
         assert cfg.active_slot_template().id == default.id
@@ -121,14 +120,12 @@ def test_templates_are_locked_while_a_run_is_active(root, tmp_path, monkeypatch)
             "sorter.ui.tab_run.messagebox.showinfo",
             lambda *a, **k: warned.setdefault("shown", True),
         )
-        tab._template_combo.current(
-            [t.name for t in tab._templates].index(default.name)
-        )
+        tab._template_combo.current([t.name for t in tab._templates].index(default.name))
         tab._on_template_selected()
 
         assert warned.get("shown") is True
-        assert cfg.active_slot_template().id == other.id     # unchanged
-        assert tab._template_var.get() == other.name         # combobox snapped back
+        assert cfg.active_slot_template().id == other.id  # unchanged
+        assert tab._template_var.get() == other.name  # combobox snapped back
     finally:
         tab.destroy()
 
@@ -138,7 +135,7 @@ def test_active_model_change_reloads_the_template_list(root, tmp_path, monkeypat
     try:
         cfg.create_slot_template("Model one")
         tab._refresh_templates()
-        SettingsRepo(cfg.db).clear_active_model()      # -> AI Config mode
+        SettingsRepo(cfg.db).clear_active_model()  # -> AI Config mode
         tab._on_active_model_changed()
         assert list(tab._template_combo["values"]) == [DEFAULT_SLOT_TEMPLATE_NAME]
     finally:

@@ -22,6 +22,7 @@ routing decision on its own so the UI can answer "is this about to need
 PyTorch?" and "can this model actually classify?" *before* starting a run.
 Keep them in lock-step with `classify_active`.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -45,11 +46,7 @@ class NoLocalCheckpointError(Exception):
 
 def has_local_checkpoint(model: Model | None) -> bool:
     """True when `model` has a trained checkpoint present on disk."""
-    return bool(
-        model is not None
-        and model.model_path
-        and Path(model.model_path).exists()
-    )
+    return bool(model is not None and model.model_path and Path(model.model_path).exists())
 
 
 def active_model(db: Database | None) -> Model | None:
@@ -100,30 +97,21 @@ def _checkpoint_summary(model: Model) -> str:
     """
     name = model.name or f"model #{model.id}"
     if not model.model_path:
-        return (
-            f"“{name}” has no trained model file — train it or re-download it "
-            "before sorting."
-        )
+        return f"“{name}” has no trained model file — train it or re-download it before sorting."
     return f"“{name}”: trained model file is missing — {model.model_path}"
 
 
 def _checkpoint_detail(model: Model) -> str:
     name = model.name or f"model #{model.id}"
     if not model.model_path:
-        detail = (
-            f"“{name}” has no trained model file yet.\n\n"
-            f"Expected it in:\n{paths.model_trained_dir(model.id)}"
-        )
+        detail = f"“{name}” has no trained model file yet.\n\nExpected it in:\n{paths.model_trained_dir(model.id)}"
         hint = (
             "Train the model on the Train tab, or — if it came from the "
             "Community tab — re-download it, since an images-only share "
             "carries no model file."
         )
     else:
-        detail = (
-            f"“{name}” points at a trained model file that isn't there:\n\n"
-            f"{model.model_path}"
-        )
+        detail = f"“{name}” points at a trained model file that isn't there:\n\n{model.model_path}"
         hint = (
             "This usually means the data folder was moved or renamed. Put it "
             "back, re-download the model, or re-train it."
@@ -156,10 +144,9 @@ def classify_active(
 
     # Pass the trained image size from the model record so imported community
     # models (often trained at 480) get the right resolution at inference.
-    image_size = (
-        int(model.training_config.image_size)
-        if model.training_config else None
-    )
+    image_size = int(model.training_config.image_size) if model.training_config else None
     return local_inference.classify(
-        image_bgr, model.model_path, image_size=image_size,
+        image_bgr,
+        model.model_path,
+        image_size=image_size,
     )

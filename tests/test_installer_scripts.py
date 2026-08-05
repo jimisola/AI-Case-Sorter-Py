@@ -10,6 +10,7 @@ U+201D as a **closing double quote**. Inside a string literal that silently
 truncates the string and misparses everything after it, so the reported error
 lands on some unrelated line much further down.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -30,12 +31,11 @@ def test_script_exists(name: str) -> None:
 def test_script_is_pure_ascii(name: str) -> None:
     """Non-ASCII in these files is a parse hazard, not a style preference."""
     raw = (INSTALLER / name).read_bytes()
-    offenders = [
-        (n, line) for n, line in enumerate(raw.split(b"\n"), 1)
-        if any(b > 0x7F for b in line)
-    ]
+    offenders = [(n, line) for n, line in enumerate(raw.split(b"\n"), 1) if any(b > 0x7F for b in line)]
     assert not offenders, (
-        "Non-ASCII bytes in installer/" + name + " at line(s) "
+        "Non-ASCII bytes in installer/"
+        + name
+        + " at line(s) "
         + ", ".join(str(n) for n, _ in offenders)
         + ". Use '-' for dashes and '...' for ellipses -- PowerShell 5.1 reads "
         "this file as ANSI and a UTF-8 em-dash becomes a closing quote."

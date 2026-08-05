@@ -24,15 +24,18 @@ Environment overrides:
   ``CASESORTER_UPDATE_API_BASE``  — GitHub API base, for testing
   ``CASESORTER_UPDATE_DISABLED``  — ``1`` disables checking entirely
 """
+
 from __future__ import annotations
 
 import json
 import os
 import shutil
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable
+from typing import Any
 
 import requests
 
@@ -67,10 +70,10 @@ class UpdateError(RuntimeError):
 class UpdateInfo:
     """A release newer than what's running."""
 
-    version: str          # normalized, no leading "v"
-    tag: str              # the tag as GitHub reports it
-    url: str              # ZIP to download
-    notes: str = ""       # release body (markdown)
+    version: str  # normalized, no leading "v"
+    tag: str  # the tag as GitHub reports it
+    url: str  # ZIP to download
+    notes: str = ""  # release body (markdown)
     size: int | None = None
     published_at: str = ""
 
@@ -314,8 +317,13 @@ def _safe_members(zf: zipfile.ZipFile) -> list[tuple[zipfile.ZipInfo, PurePosixP
     return raw
 
 
-def _download(url: str, dest: Path, progress: Callable[[int, int | None], None] | None,
-              session: requests.Session | None, timeout: int) -> Path:
+def _download(
+    url: str,
+    dest: Path,
+    progress: Callable[[int, int | None], None] | None,
+    session: requests.Session | None,
+    timeout: int,
+) -> Path:
     """Stream ``url`` to ``dest`` with an atomic ``.tmp`` → ``os.replace``."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".tmp")
@@ -381,10 +389,7 @@ def stage_update(
             names = {str(rel) for _, rel in members}
             missing = [e for e in REQUIRED_ENTRIES if e not in names]
             if missing:
-                raise UpdateError(
-                    "Update archive does not look like the app "
-                    f"(missing {', '.join(missing)})."
-                )
+                raise UpdateError(f"Update archive does not look like the app (missing {', '.join(missing)}).")
             staging.mkdir(parents=True, exist_ok=True)
             for entry, rel in members:
                 out = staging / Path(*rel.parts)
@@ -402,9 +407,9 @@ def stage_update(
     clear_pending()
     os.replace(staging, pending_dir())
 
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    staged_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    staged_at = datetime.now(UTC).isoformat(timespec="seconds")
     _pending_meta_path().write_text(
         json.dumps(
             {
@@ -417,6 +422,4 @@ def stage_update(
         ),
         encoding="utf-8",
     )
-    return PendingUpdate(
-        version=info.version, tag=info.tag, path=pending_dir(), staged_at=staged_at
-    )
+    return PendingUpdate(version=info.version, tag=info.tag, path=pending_dir(), staged_at=staged_at)

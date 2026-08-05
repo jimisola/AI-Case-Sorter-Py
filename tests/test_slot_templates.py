@@ -1,11 +1,12 @@
 """Sorting templates: named slot layouts per model + run mode."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
 
-from sorter.config import Config, DEFAULT_SLOT_TEMPLATE_NAME
+from sorter.config import DEFAULT_SLOT_TEMPLATE_NAME, Config
 from sorter.db import Database
 from sorter.models import Model
 from sorter.repository import HeadstampParentRepo, ModelRepo, SettingsRepo, SlotTemplateRepo
@@ -68,8 +69,8 @@ def test_create_copy_keeps_layout_and_switching_restores_each(tmp_path: Path) ->
     default = cfg.active_slot_template()
 
     match = cfg.create_slot_template("Match prep", copy_current=True)
-    assert _slots(cfg)["WIN"] == 3            # copied layout stays live
-    cfg.set_headstamp_slot("WIN", 5)          # diverge from Default
+    assert _slots(cfg)["WIN"] == 3  # copied layout stays live
+    cfg.set_headstamp_slot("WIN", 5)  # diverge from Default
 
     cfg.activate_slot_template(default.id)
     assert _slots(cfg)["WIN"] == 3
@@ -149,7 +150,7 @@ def test_delete_active_template_loads_the_next_one(tmp_path: Path) -> None:
 
     now_active = cfg.delete_slot_template(fresh.id)
     assert now_active.id == default.id
-    assert _slots(cfg)["WIN"] == 3            # Default's layout came back
+    assert _slots(cfg)["WIN"] == 3  # Default's layout came back
 
 
 def test_delete_inactive_template_leaves_the_layout_alone(tmp_path: Path) -> None:
@@ -194,7 +195,8 @@ def test_package_mode_has_its_own_template_list(tmp_path: Path) -> None:
     # Standard-mode templates are untouched by any of that.
     cfg.set_run_package_mode(False)
     assert sorted(t.name for t in cfg.list_slot_templates()) == [
-        DEFAULT_SLOT_TEMPLATE_NAME, "Standard only",
+        DEFAULT_SLOT_TEMPLATE_NAME,
+        "Standard only",
     ]
 
 
@@ -206,22 +208,26 @@ def test_templates_are_scoped_per_model(tmp_path: Path) -> None:
     cfg.create_slot_template("Model one layout")
 
     models = ModelRepo(db)
-    second = models.create(Model(
-        name="Second", cartridge_id=models.get(first).cartridge_id,
-        model_mode="convnext_tiny",
-    ))
+    second = models.create(
+        Model(
+            name="Second",
+            cartridge_id=models.get(first).cartridge_id,
+            model_mode="convnext_tiny",
+        )
+    )
     SettingsRepo(db).set_active_model_id(second.id)
 
     assert [t.name for t in cfg.list_slot_templates()] == [DEFAULT_SLOT_TEMPLATE_NAME]
     SettingsRepo(db).set_active_model_id(first)
     assert sorted(t.name for t in cfg.list_slot_templates()) == [
-        DEFAULT_SLOT_TEMPLATE_NAME, "Model one layout",
+        DEFAULT_SLOT_TEMPLATE_NAME,
+        "Model one layout",
     ]
 
 
 def test_ai_config_mode_has_its_own_templates(tmp_path: Path) -> None:
     db = _new_db(tmp_path)
-    cfg = Config(db).load()          # no active model -> AI Config mode
+    cfg = Config(db).load()  # no active model -> AI Config mode
     cfg.add_headstamp("WIN")
     cfg.set_headstamp_slot("WIN", 4)
 
@@ -242,10 +248,13 @@ def test_templates_are_dropped_with_their_model(tmp_path: Path) -> None:
     cfg.create_slot_template("Doomed")
 
     models = ModelRepo(db)
-    keeper = models.create(Model(
-        name="Keeper", cartridge_id=models.get(first).cartridge_id,
-        model_mode="convnext_tiny",
-    ))
+    keeper = models.create(
+        Model(
+            name="Keeper",
+            cartridge_id=models.get(first).cartridge_id,
+            model_mode="convnext_tiny",
+        )
+    )
     models.delete(first, replacement_active_id=keeper.id)
 
     assert SlotTemplateRepo(db).list_for_scope(first, "standard") == []

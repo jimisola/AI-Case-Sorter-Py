@@ -3,6 +3,7 @@
 The invariants that matter: user data survives, stale modules get pruned, a
 failure rolls back, and the launcher is never blocked.
 """
+
 from __future__ import annotations
 
 import json
@@ -48,12 +49,15 @@ def test_no_pending_update_is_a_noop(install) -> None:
 
 def test_applies_staged_files(install) -> None:
     app, data = install
-    _stage(data, {
-        "main.py": "new main\n",
-        "sorter/__init__.py": '__version__ = "0.9.0"\n',
-        "sorter/updater.py": "brand new\n",
-        "requirements.txt": "requests\nnumpy\n",
-    })
+    _stage(
+        data,
+        {
+            "main.py": "new main\n",
+            "sorter/__init__.py": '__version__ = "0.9.0"\n',
+            "sorter/updater.py": "brand new\n",
+            "requirements.txt": "requests\nnumpy\n",
+        },
+    )
 
     assert apply_update.apply_pending() is True
     assert (app / "main.py").read_text(encoding="utf-8") == "new main\n"
@@ -90,14 +94,17 @@ def test_protected_paths_survive(install) -> None:
     (app / "data" / "casesorter.db").write_text("portable db", encoding="utf-8")
 
     # A hostile/mistaken archive that tries to overwrite all of them.
-    _stage(data, {
-        "main.py": "new\n",
-        "sorter/__init__.py": "new\n",
-        ".env": "STOLEN=1",
-        ".installed": "bogus",
-        "data/casesorter.db": "clobbered",
-        ".venv/lib/pyvenv.cfg": "clobbered",
-    })
+    _stage(
+        data,
+        {
+            "main.py": "new\n",
+            "sorter/__init__.py": "new\n",
+            ".env": "STOLEN=1",
+            ".installed": "bogus",
+            "data/casesorter.db": "clobbered",
+            ".venv/lib/pyvenv.cfg": "clobbered",
+        },
+    )
 
     assert apply_update.apply_pending() is True
     assert (app / ".env").read_text(encoding="utf-8") == "SECRET=1"
@@ -129,11 +136,14 @@ def test_records_what_was_applied(install) -> None:
 
 def test_rollback_restores_the_previous_version(install, monkeypatch) -> None:
     app, data = install
-    _stage(data, {
-        "main.py": "new main\n",
-        "sorter/__init__.py": "new init\n",
-        "sorter/updater.py": "new module\n",
-    })
+    _stage(
+        data,
+        {
+            "main.py": "new main\n",
+            "sorter/__init__.py": "new init\n",
+            "sorter/updater.py": "new module\n",
+        },
+    )
 
     real_copy = apply_update.shutil.copy2
     staged_root = data / "updates" / "pending"
@@ -161,9 +171,7 @@ def test_rollback_restores_the_previous_version(install, monkeypatch) -> None:
 def test_empty_staged_tree_is_discarded(install) -> None:
     app, data = install
     (data / "updates" / "pending").mkdir(parents=True)
-    (data / "updates" / "pending.json").write_text(
-        json.dumps({"version": "0.9.0"}), encoding="utf-8"
-    )
+    (data / "updates" / "pending.json").write_text(json.dumps({"version": "0.9.0"}), encoding="utf-8")
     assert apply_update.apply_pending() is False
     assert not (data / "updates" / "pending.json").exists()
 
@@ -181,6 +189,7 @@ def test_corrupt_metadata_is_discarded(install) -> None:
 
 def test_main_always_exits_zero(install, monkeypatch) -> None:
     """A broken updater must never stop the launcher."""
+
     def _boom(*a, **k):
         raise RuntimeError("kaboom")
 

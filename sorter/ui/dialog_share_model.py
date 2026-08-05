@@ -10,12 +10,13 @@ Collapses the legacy pick → upload-info → upload-status flow into one dialog
     PUT manifest), reporting progress, then stamp the returned community UID /
     version onto the local model.
 """
+
 from __future__ import annotations
 
 import shutil
 import tempfile
 import tkinter as tk
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any
@@ -25,7 +26,6 @@ from .. import paths
 from ..community_api import CartridgeInfo, CommunityApi
 from ..model_io import ExportMode, export_for_share
 from ..repository import CartridgeRepo, HeadstampRepo, ModelRepo
-
 
 # Display label <-> ExportMode. ManifestOnly is intentionally omitted — there
 # is nothing useful to share without either a model or images.
@@ -75,8 +75,7 @@ class ShareModelDialog(tk.Toplevel):
 
         row = 0
         ttk.Label(frm, text="Model:", anchor=tk.W).grid(row=row, column=0, sticky="w", pady=4)
-        self.model_combo = ttk.Combobox(frm, state="readonly", width=34,
-                                        values=[m.name for m in self._models])
+        self.model_combo = ttk.Combobox(frm, state="readonly", width=34, values=[m.name for m in self._models])
         self.model_combo.grid(row=row, column=1, sticky="ew", pady=4)
         self.model_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_model_selected())
         if self._models:
@@ -99,8 +98,7 @@ class ShareModelDialog(tk.Toplevel):
 
         row += 1
         ttk.Label(frm, text="Include:", anchor=tk.W).grid(row=row, column=0, sticky="w", pady=4)
-        self.export_combo = ttk.Combobox(frm, state="readonly", width=34,
-                                        values=list(_EXPORT_LABELS.keys()))
+        self.export_combo = ttk.Combobox(frm, state="readonly", width=34, values=list(_EXPORT_LABELS.keys()))
         self.export_combo.current(0)
         self.export_combo.grid(row=row, column=1, sticky="ew", pady=4)
 
@@ -109,7 +107,9 @@ class ShareModelDialog(tk.Toplevel):
         fb_box.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(8, 2))
         self.fb_enabled_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
-            fb_box, text="Enable feedback loop", variable=self.fb_enabled_var,
+            fb_box,
+            text="Enable feedback loop",
+            variable=self.fb_enabled_var,
             command=self._on_fb_toggle,
         ).pack(anchor=tk.W)
         floor_row = ttk.Frame(fb_box)
@@ -117,7 +117,12 @@ class ShareModelDialog(tk.Toplevel):
         ttk.Label(floor_row, text="Confidence floor", style="Muted.TLabel").pack(side=tk.LEFT)
         self.fb_floor_var = tk.IntVar(value=95)
         self.fb_floor_spin = ttk.Spinbox(
-            floor_row, from_=0, to=100, width=6, textvariable=self.fb_floor_var, state="disabled",
+            floor_row,
+            from_=0,
+            to=100,
+            width=6,
+            textvariable=self.fb_floor_var,
+            state="disabled",
         )
         self.fb_floor_spin.pack(side=tk.LEFT, padx=(6, 0))
         ttk.Label(floor_row, text="%", style="Muted.TLabel").pack(side=tk.LEFT, padx=(2, 0))
@@ -125,9 +130,12 @@ class ShareModelDialog(tk.Toplevel):
         frm.columnconfigure(1, weight=1)
 
         self.status_var = tk.StringVar(value="")
-        ttk.Label(frm, textvariable=self.status_var, style="Muted.TLabel",
-                  wraplength=360, justify=tk.LEFT).grid(
-            row=row + 1, column=0, columnspan=2, sticky="ew", pady=(6, 0),
+        ttk.Label(frm, textvariable=self.status_var, style="Muted.TLabel", wraplength=360, justify=tk.LEFT).grid(
+            row=row + 1,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(6, 0),
         )
 
         btn = ttk.Frame(self, padding=(12, 0, 12, 12))
@@ -217,8 +225,7 @@ class ShareModelDialog(tk.Toplevel):
         if wants_model and model_file is None:
             messagebox.showwarning(
                 "No trained model",
-                "This model has no trained file yet. Choose \"Images only\" or "
-                "train the model first.",
+                'This model has no trained file yet. Choose "Images only" or train the model first.',
                 parent=self,
             )
             return
@@ -259,14 +266,21 @@ class ShareModelDialog(tk.Toplevel):
                     self.bus.post("share/progress", f"Packaging {step}/{total} files…")
 
                 zip_path, manifest_path = export_for_share(
-                    zip_out, model, cart_name, hs_names,
-                    mode=mode, model_file=model_file, images_dir=images_dir,
-                    community_uid=uid, feedback_enabled=fb_enabled, feedback_floor=fb_floor,
+                    zip_out,
+                    model,
+                    cart_name,
+                    hs_names,
+                    mode=mode,
+                    model_file=model_file,
+                    images_dir=images_dir,
+                    community_uid=uid,
+                    feedback_enabled=fb_enabled,
+                    feedback_floor=fb_floor,
                     progress=_exp_prog,
                 )
                 model_info = {
                     "ModelName": name,
-                    "PublishDate": datetime.now(timezone.utc).isoformat(),
+                    "PublishDate": datetime.now(UTC).isoformat(),
                     "CartridgeId": cart_id,
                     "CartridgeName": cart_name,
                     "HeadstampCount": len(hs_names),
@@ -294,8 +308,10 @@ class ShareModelDialog(tk.Toplevel):
                         )
 
                 final_uid = api.share_model(
-                    zip_path=zip_path, manifest_path=manifest_path,
-                    model_info=model_info, progress=_up_prog,
+                    zip_path=zip_path,
+                    manifest_path=manifest_path,
+                    model_info=model_info,
+                    progress=_up_prog,
                 )
                 return final_uid or uid, version
             finally:

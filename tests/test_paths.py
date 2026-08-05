@@ -1,4 +1,5 @@
 """Tests for the data-root layout and the legacy-folder migration."""
+
 from __future__ import annotations
 
 import sys
@@ -34,9 +35,7 @@ def test_default_root_is_outside_the_app_folder(monkeypatch, tmp_path: Path) -> 
     assert (tmp_path / "app") not in root.parents
 
 
-def test_portable_marker_pins_data_into_the_app_folder(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_portable_marker_pins_data_into_the_app_folder(monkeypatch, tmp_path: Path) -> None:
     app = tmp_path / "app"
     app.mkdir()
     (app / paths.PORTABLE_MARKER).write_text("", encoding="utf-8")
@@ -123,9 +122,7 @@ def test_migration_is_idempotent(monkeypatch, tmp_path: Path) -> None:
     assert paths.migrate_legacy_data_dir() is None
 
 
-def test_migration_does_not_clobber_an_existing_root(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_migration_does_not_clobber_an_existing_root(monkeypatch, tmp_path: Path) -> None:
     app, dest = _fake_install(monkeypatch, tmp_path)
     (app / "data").mkdir()
     (app / "data" / "stale.txt").write_text("old", encoding="utf-8")
@@ -146,9 +143,7 @@ def test_migration_skipped_when_portable(monkeypatch, tmp_path: Path) -> None:
     assert not dest.exists()
 
 
-def test_migration_skipped_when_env_override_set(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_migration_skipped_when_env_override_set(monkeypatch, tmp_path: Path) -> None:
     app, dest = _fake_install(monkeypatch, tmp_path)
     (app / "data").mkdir()
     monkeypatch.setenv("CASESORTER_DATA_DIR", str(tmp_path / "elsewhere"))

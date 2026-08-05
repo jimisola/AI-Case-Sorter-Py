@@ -1,4 +1,5 @@
 """The Train tab is hidden for models the user doesn't own (needs Tk)."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -68,10 +69,7 @@ def _db(tmp_path: Path, monkeypatch) -> Database:
 
 def _activate(db: Database, *, model_type: str, uid: str | None = None) -> Model:
     cart = CartridgeRepo(db).create(f"c-{model_type}-{uid}")
-    m = ModelRepo(db).create(
-        Model(name="M", cartridge_id=cart.id, model_type=model_type,
-              community_model_uid=uid)
-    )
+    m = ModelRepo(db).create(Model(name="M", cartridge_id=cart.id, model_type=model_type, community_model_uid=uid))
     SettingsRepo(db).set_active_model_id(m.id)
     return m
 
@@ -129,7 +127,9 @@ class _FakeApp:
 
 
 def test_start_training_refuses_a_community_model(
-    root, tmp_path, monkeypatch,
+    root,
+    tmp_path,
+    monkeypatch,
 ) -> None:
     """Defense in depth: the tab is hidden, but if the active model changes
     while it's open, Start must still refuse rather than fork someone else's
@@ -145,7 +145,9 @@ def test_start_training_refuses_a_community_model(
         )
         spawned = []
         monkeypatch.setattr(
-            tab.training_manager, "spawn", lambda *a, **k: spawned.append(a),
+            tab.training_manager,
+            "spawn",
+            lambda *a, **k: spawned.append(a),
         )
         tab._start_training()
         assert spawned == []

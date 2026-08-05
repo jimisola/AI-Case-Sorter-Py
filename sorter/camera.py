@@ -7,17 +7,16 @@ Includes a metadata probe (list_cameras_with_metadata) that returns each
 detected device's friendly name (from /sys on Linux, pygrabber on Windows
 when available) and the resolutions the device accepts.
 """
+
 from __future__ import annotations
 
 import os
 import sys
 import threading
 import time
-from typing import Optional
 
 import cv2
 import numpy as np
-
 
 # Resolutions probed by `list_cameras_with_metadata`. Add more here if the
 # operator's camera advertises something not in the list.
@@ -62,7 +61,7 @@ def _linux_camera_names() -> dict[int, str]:
             continue
         name_path = os.path.join(sysroot, entry, "name")
         try:
-            with open(name_path, "r", encoding="utf-8") as f:
+            with open(name_path, encoding="utf-8") as f:
                 names[idx] = f.read().strip()
         except OSError:
             pass
@@ -117,6 +116,7 @@ def _windows_camera_resolutions(indices: list[int]) -> dict[int, list[tuple[int,
     # so we work regardless of caller thread.
     try:
         import comtypes  # type: ignore[import-not-found]
+
         comtypes.CoInitialize()
         com_inited = True
     except Exception:
@@ -161,6 +161,7 @@ def _windows_dshow_device_count() -> int | None:
         return None
     try:
         import comtypes  # type: ignore[import-not-found]
+
         comtypes.CoInitialize()
         com_inited = True
     except Exception:
@@ -267,9 +268,7 @@ def _probe_resolutions(cap: cv2.VideoCapture) -> list[tuple[int, int]]:
     return sorted(supported, key=lambda wh: wh[0] * wh[1])
 
 
-def list_cameras_with_metadata(
-    max_index: int = 10, probe_timeout_s: float = 2.5
-) -> list[dict]:
+def list_cameras_with_metadata(max_index: int = 10, probe_timeout_s: float = 2.5) -> list[dict]:
     """Enumerate cameras and return [{'index': int, 'name': str, 'resolutions': [(w,h), ...]}].
 
     Resolutions are sorted ascending by pixel count, so `resolutions[-1]` is the
@@ -318,11 +317,13 @@ def list_cameras_with_metadata(
         t.start()
         t.join(probe_timeout_s)
         if result["opened"]:
-            out.append({
-                "index": idx,
-                "name": names.get(idx, f"Camera {idx}"),
-                "resolutions": result["resolutions"],
-            })
+            out.append(
+                {
+                    "index": idx,
+                    "name": names.get(idx, f"Camera {idx}"),
+                    "resolutions": result["resolutions"],
+                }
+            )
     return out
 
 
@@ -331,11 +332,11 @@ class Camera:
         self.device_index = device_index
         self.width = width
         self.height = height
-        self._cap: Optional[cv2.VideoCapture] = None
-        self._latest_frame: Optional[np.ndarray] = None
+        self._cap: cv2.VideoCapture | None = None
+        self._latest_frame: np.ndarray | None = None
         self._frame_lock = threading.Lock()
         self._stop_event = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
 
     def open(self) -> bool:
         self._cap = cv2.VideoCapture(self.device_index, _preferred_backend())
@@ -383,13 +384,13 @@ class Camera:
                 self._latest_frame = frame
             time.sleep(0.01)
 
-    def latest_frame(self) -> Optional[np.ndarray]:
+    def latest_frame(self) -> np.ndarray | None:
         with self._frame_lock:
             if self._latest_frame is None:
                 return None
             return self._latest_frame.copy()
 
-    def capture_frame(self) -> Optional[np.ndarray]:
+    def capture_frame(self) -> np.ndarray | None:
         """Return the most recent frame. Opens & grabs once if no preview is running."""
         frame = self.latest_frame()
         if frame is not None:
@@ -416,4 +417,3 @@ class Camera:
             except Exception:
                 pass
             self._cap = None
-

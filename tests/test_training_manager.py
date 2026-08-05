@@ -3,6 +3,7 @@
 Uses a stub training script (not the real torch-backed one) so the tests are
 fast and require no GPU/torch install.
 """
+
 from __future__ import annotations
 
 import textwrap
@@ -24,11 +25,18 @@ def _collect(bus: EventBus, topic: str, sink: list) -> None:
     bus.subscribe(topic, lambda payload: sink.append(payload))
 
 
-def _run(tmp_path: Path, script_body: str, *, cfg_overrides: dict | None = None) -> tuple[TrainingManager, EventBus, dict[str, list]]:
+def _run(
+    tmp_path: Path, script_body: str, *, cfg_overrides: dict | None = None
+) -> tuple[TrainingManager, EventBus, dict[str, list]]:
     bus = EventBus()
     sinks: dict[str, list] = {
-        "start": [], "epoch": [], "done": [], "log": [],
-        "error": [], "failed": [], "cancelled": [],
+        "start": [],
+        "epoch": [],
+        "done": [],
+        "log": [],
+        "error": [],
+        "failed": [],
+        "cancelled": [],
     }
     for k in sinks:
         _collect(bus, f"training/{k}", sinks[k])
@@ -146,7 +154,6 @@ def test_cancel_emits_cancelled(tmp_path: Path) -> None:
 
 
 def test_cannot_spawn_two_concurrent_jobs(tmp_path: Path) -> None:
-    import time
     script_body = """
         import time
         time.sleep(5)

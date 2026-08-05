@@ -2,6 +2,7 @@
 
 All headless — the emulator + a monkeypatched classify stand in for hardware.
 """
+
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -68,6 +69,7 @@ def test_first_empty_slot_ignores_other_modes_config(tmp_path) -> None:
     """Auto-select must only consult the slot config for the active mode."""
     _ctrl, cfg, db = _make(tmp_path)
     from sorter.repository import HeadstampParentRepo, SettingsRepo
+
     mid = SettingsRepo(db).get_active_model_id()
 
     # A parent assigned to slot 1 (a *parent-mode* configuration) plus a
@@ -88,7 +90,7 @@ def test_first_empty_slot_ignores_other_modes_config(tmp_path) -> None:
 
 def test_first_empty_slot_package_uses_package_map_only(tmp_path) -> None:
     _ctrl, cfg, _ = _make(tmp_path)
-    cfg.set_headstamp_slot("CBC", 1)              # single-slot (non-package) assignment
+    cfg.set_headstamp_slot("CBC", 1)  # single-slot (non-package) assignment
     cfg.set_package_slot_headstamp(2, "FC", True)  # package-mode assignment
     # Package mode sees only the package map → slot 1 is free.
     assert cfg.first_empty_slot(package=True) == 1

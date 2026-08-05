@@ -5,6 +5,7 @@ actually needs it and never before — so an AI Config user is never prompted,
 and a local-model user is prompted *before* the machine feeds a case rather
 than after the run dies on it.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -123,7 +124,8 @@ def test_is_installed_requires_torchvision_too(monkeypatch) -> None:
     import importlib.util
 
     monkeypatch.setattr(
-        importlib.util, "find_spec",
+        importlib.util,
+        "find_spec",
         lambda name: object() if name == "torch" else None,
     )
     assert local_inference.is_installed() is False
@@ -151,7 +153,7 @@ class _FakeDialog:
     """Stands in for TorchInstallDialog — constructing the real one shells out
     to nvidia-smi and needs a display."""
 
-    instances: list["_FakeDialog"] = []
+    instances: list[_FakeDialog] = []
 
     def __init__(self, parent, *, on_success=None, on_cancel=None, reason=None):
         self.parent = parent
@@ -175,13 +177,19 @@ def test_gate_passes_through_when_torch_is_installed(monkeypatch, fake_dialog) -
 
 
 def test_gate_blocks_and_offers_install_when_torch_is_missing(
-    monkeypatch, fake_dialog,
+    monkeypatch,
+    fake_dialog,
 ) -> None:
     monkeypatch.setattr(torch_gate.local_inference, "is_installed", lambda: False)
     ran = []
-    assert torch_gate.ensure_torch(
-        None, lambda: ran.append("proceed"), reason="Sorting needs PyTorch",
-    ) is False
+    assert (
+        torch_gate.ensure_torch(
+            None,
+            lambda: ran.append("proceed"),
+            reason="Sorting needs PyTorch",
+        )
+        is False
+    )
     # Blocked: the caller's action must NOT have run yet.
     assert ran == []
     assert len(fake_dialog.instances) == 1
@@ -189,18 +197,20 @@ def test_gate_blocks_and_offers_install_when_torch_is_missing(
 
 
 def test_gate_runs_the_action_only_after_a_successful_install(
-    monkeypatch, fake_dialog,
+    monkeypatch,
+    fake_dialog,
 ) -> None:
     monkeypatch.setattr(torch_gate.local_inference, "is_installed", lambda: False)
     ran = []
     torch_gate.ensure_torch(None, lambda: ran.append("proceed"))
     assert ran == []
-    fake_dialog.instances[0].on_success()   # pip finished
+    fake_dialog.instances[0].on_success()  # pip finished
     assert ran == ["proceed"]
 
 
 def test_cancelling_the_install_does_not_run_the_action(
-    monkeypatch, fake_dialog,
+    monkeypatch,
+    fake_dialog,
 ) -> None:
     monkeypatch.setattr(torch_gate.local_inference, "is_installed", lambda: False)
     ran = []

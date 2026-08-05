@@ -5,6 +5,7 @@ the download → activate → Start path checked for it, so the run died on the
 first case with a `pip install .[ml]` message. Only the Train tab's
 "Start training" button ever offered the install.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -38,7 +39,7 @@ def root():
 
 
 class _FakeDialog:
-    instances: list["_FakeDialog"] = []
+    instances: list[_FakeDialog] = []
 
     def __init__(self, parent, *, on_success=None, on_cancel=None, reason=None):
         self.on_success = on_success
@@ -64,7 +65,9 @@ def no_torch(monkeypatch):
     """
     state = {"installed": False}
     monkeypatch.setattr(
-        torch_gate.local_inference, "is_installed", lambda: state["installed"],
+        torch_gate.local_inference,
+        "is_installed",
+        lambda: state["installed"],
     )
     return state
 
@@ -141,7 +144,11 @@ def _activate_local_model(db: Database, tmp_path: Path) -> Model:
 
 
 def test_start_offers_install_and_does_not_start_the_run(
-    root, tmp_path, monkeypatch, fake_dialog, no_torch,
+    root,
+    tmp_path,
+    monkeypatch,
+    fake_dialog,
+    no_torch,
 ) -> None:
     """The whole point: a downloaded model + Start must not feed a case."""
     db = _db(tmp_path, monkeypatch)
@@ -151,7 +158,7 @@ def test_start_offers_install_and_does_not_start_the_run(
     try:
         tab._toggle_run()
         assert len(fake_dialog.instances) == 1
-        assert app.run_controller.started == 0     # nothing fed
+        assert app.run_controller.started == 0  # nothing fed
         # Install completes → the run starts, no second click needed.
         no_torch["installed"] = True
         fake_dialog.instances[0].on_success()
@@ -161,7 +168,11 @@ def test_start_offers_install_and_does_not_start_the_run(
 
 
 def test_ai_config_mode_start_is_never_gated(
-    root, tmp_path, monkeypatch, fake_dialog, no_torch,
+    root,
+    tmp_path,
+    monkeypatch,
+    fake_dialog,
+    no_torch,
 ) -> None:
     """An AI Config user classifies over HTTP and must never see the prompt."""
     db = _db(tmp_path, monkeypatch)
@@ -177,7 +188,10 @@ def test_ai_config_mode_start_is_never_gated(
 
 
 def test_start_is_not_gated_when_torch_is_present(
-    root, tmp_path, monkeypatch, fake_dialog,
+    root,
+    tmp_path,
+    monkeypatch,
+    fake_dialog,
 ) -> None:
     monkeypatch.setattr(torch_gate.local_inference, "is_installed", lambda: True)
     db = _db(tmp_path, monkeypatch)
@@ -193,7 +207,11 @@ def test_start_is_not_gated_when_torch_is_present(
 
 
 def test_manual_feed_offers_install_and_does_not_cycle(
-    root, tmp_path, monkeypatch, fake_dialog, no_torch,
+    root,
+    tmp_path,
+    monkeypatch,
+    fake_dialog,
+    no_torch,
 ) -> None:
     db = _db(tmp_path, monkeypatch)
     _activate_local_model(db, tmp_path)
@@ -211,7 +229,11 @@ def test_manual_feed_offers_install_and_does_not_cycle(
 
 
 def test_stopping_a_run_is_never_gated(
-    root, tmp_path, monkeypatch, fake_dialog, no_torch,
+    root,
+    tmp_path,
+    monkeypatch,
+    fake_dialog,
+    no_torch,
 ) -> None:
     """Stop must always work — never trap a running machine behind a modal."""
     db = _db(tmp_path, monkeypatch)
@@ -227,7 +249,11 @@ def test_stopping_a_run_is_never_gated(
 
 
 def test_start_refuses_a_model_whose_checkpoint_is_missing(
-    root, tmp_path, monkeypatch, fake_dialog, no_torch,
+    root,
+    tmp_path,
+    monkeypatch,
+    fake_dialog,
+    no_torch,
 ) -> None:
     """The data-folder-rename case: refuse, don't quietly sort via HTTP.
 
@@ -236,7 +262,7 @@ def test_start_refuses_a_model_whose_checkpoint_is_missing(
     """
     db = _db(tmp_path, monkeypatch)
     m = _activate_local_model(db, tmp_path)
-    Path(m.model_path).unlink()          # data folder renamed / model deleted
+    Path(m.model_path).unlink()  # data folder renamed / model deleted
     app = _FakeApp(db)
     tab = RunTab(root, config=Config(db).load(), bus=EventBus(), app=app)
     try:
@@ -254,7 +280,11 @@ def test_start_refuses_a_model_whose_checkpoint_is_missing(
 
 
 def test_manual_feed_refuses_a_model_whose_checkpoint_is_missing(
-    root, tmp_path, monkeypatch, fake_dialog, no_torch,
+    root,
+    tmp_path,
+    monkeypatch,
+    fake_dialog,
+    no_torch,
 ) -> None:
     db = _db(tmp_path, monkeypatch)
     m = _activate_local_model(db, tmp_path)
@@ -263,7 +293,8 @@ def test_manual_feed_refuses_a_model_whose_checkpoint_is_missing(
     tab = RunTab(root, config=Config(db).load(), bus=EventBus(), app=app)
     try:
         monkeypatch.setattr(
-            "sorter.ui.tab_run.messagebox.showerror", lambda *a, **k: None,
+            "sorter.ui.tab_run.messagebox.showerror",
+            lambda *a, **k: None,
         )
         tab._manual_feed()
         assert app.run_controller.cycles == 0
@@ -272,7 +303,11 @@ def test_manual_feed_refuses_a_model_whose_checkpoint_is_missing(
 
 
 def test_ai_config_start_is_not_blocked_by_the_checkpoint_check(
-    root, tmp_path, monkeypatch, fake_dialog, no_torch,
+    root,
+    tmp_path,
+    monkeypatch,
+    fake_dialog,
+    no_torch,
 ) -> None:
     """AI Config mode has no checkpoint by definition — it must still run."""
     db = _db(tmp_path, monkeypatch)
@@ -293,7 +328,11 @@ def test_ai_config_start_is_not_blocked_by_the_checkpoint_check(
 
 
 def test_stop_still_works_with_a_missing_checkpoint(
-    root, tmp_path, monkeypatch, fake_dialog, no_torch,
+    root,
+    tmp_path,
+    monkeypatch,
+    fake_dialog,
+    no_torch,
 ) -> None:
     """Never trap a running machine behind a dialog it can't clear."""
     db = _db(tmp_path, monkeypatch)
@@ -305,7 +344,8 @@ def test_stop_still_works_with_a_missing_checkpoint(
     tab = RunTab(root, config=Config(db).load(), bus=EventBus(), app=app)
     try:
         monkeypatch.setattr(
-            "sorter.ui.tab_run.messagebox.showerror", lambda *a, **k: None,
+            "sorter.ui.tab_run.messagebox.showerror",
+            lambda *a, **k: None,
         )
         tab._set_running(True)
         tab._toggle_run()
@@ -318,7 +358,11 @@ def test_stop_still_works_with_a_missing_checkpoint(
 
 
 def test_train_feed_offers_install_but_still_feeds_when_declined(
-    root, tmp_path, monkeypatch, fake_dialog, no_torch,
+    root,
+    tmp_path,
+    monkeypatch,
+    fake_dialog,
+    no_torch,
 ) -> None:
     """Capturing images must survive a declined install.
 
@@ -331,19 +375,22 @@ def test_train_feed_offers_install_but_still_feeds_when_declined(
     tab = TrainTab(root, config=Config(db).load(), bus=EventBus(), app=app)
     try:
         fed = []
-        monkeypatch.setattr(app.broker, "force_sort_and_move",
-                            lambda slot: fed.append(slot) or True)
+        monkeypatch.setattr(app.broker, "force_sort_and_move", lambda slot: fed.append(slot) or True)
         tab._feed()
         assert len(fake_dialog.instances) == 1
-        assert fed == []                    # held while the modal is up
+        assert fed == []  # held while the modal is up
         fake_dialog.instances[0].on_cancel()  # "no thanks"
-        assert fed == [0]                   # …and the feed still happened
+        assert fed == [0]  # …and the feed still happened
     finally:
         tab.destroy()
 
 
 def test_train_feed_asks_only_once_per_session(
-    root, tmp_path, monkeypatch, fake_dialog, no_torch,
+    root,
+    tmp_path,
+    monkeypatch,
+    fake_dialog,
+    no_torch,
 ) -> None:
     db = _db(tmp_path, monkeypatch)
     _activate_local_model(db, tmp_path)
@@ -354,13 +401,17 @@ def test_train_feed_asks_only_once_per_session(
         fake_dialog.instances[0].on_cancel()
         tab._feed()
         tab._feed()
-        assert len(fake_dialog.instances) == 1   # not nagged on every case
+        assert len(fake_dialog.instances) == 1  # not nagged on every case
     finally:
         tab.destroy()
 
 
 def test_train_feed_preserves_the_sort_label_across_the_prompt(
-    root, tmp_path, monkeypatch, fake_dialog, no_torch,
+    root,
+    tmp_path,
+    monkeypatch,
+    fake_dialog,
+    no_torch,
 ) -> None:
     """The auto-feed chain passes a label; the prompt must not drop it."""
     db = _db(tmp_path, monkeypatch)
@@ -371,18 +422,21 @@ def test_train_feed_preserves_the_sort_label_across_the_prompt(
     tab = TrainTab(root, config=cfg, bus=EventBus(), app=app)
     try:
         fed = []
-        monkeypatch.setattr(app.broker, "force_sort_and_move",
-                            lambda slot: fed.append(slot) or True)
+        monkeypatch.setattr(app.broker, "force_sort_and_move", lambda slot: fed.append(slot) or True)
         tab._sort_while_training_var.set(True)
         tab._feed(sort_label="FC")
         fake_dialog.instances[0].on_cancel()
-        assert fed == [5]   # FC's slot, not the catch-all
+        assert fed == [5]  # FC's slot, not the catch-all
     finally:
         tab.destroy()
 
 
 def test_train_feed_never_prompts_for_a_model_with_no_checkpoint(
-    root, tmp_path, monkeypatch, fake_dialog, no_torch,
+    root,
+    tmp_path,
+    monkeypatch,
+    fake_dialog,
+    no_torch,
 ) -> None:
     """A brand-new model predicts nothing, so there's nothing to install for."""
     db = _db(tmp_path, monkeypatch)

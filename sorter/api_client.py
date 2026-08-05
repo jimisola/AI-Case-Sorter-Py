@@ -1,4 +1,5 @@
 """HTTP client for the OpenAI-compatible Case Sorter server."""
+
 from __future__ import annotations
 
 import base64
@@ -8,7 +9,6 @@ from typing import Any
 import cv2
 import numpy as np
 import requests
-
 
 # Module-level session — pools TCP/TLS connections per host so repeated
 # classify calls don't pay handshake cost (typically 100-500 ms each on HTTPS).

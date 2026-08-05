@@ -3,6 +3,7 @@
 The palette invariants run anywhere tkinter imports; the widget tests need a
 real display (xvfb in practice), matching the other UI tests.
 """
+
 from __future__ import annotations
 
 import gc
@@ -19,10 +20,10 @@ from tkinter import ttk  # noqa: E402
 from sorter.ui import theme  # noqa: E402
 from sorter.ui.theme import (  # noqa: E402
     DEFAULT_THEME,
-    SETTING_THEME,
     HALFTONE_INK,
     INK_OUTLINE,
     PALETTE,
+    SETTING_THEME,
     THEMES,
     apply_theme,
     current_theme,
@@ -103,8 +104,7 @@ def test_status_colors_track_their_buttons(name: str) -> None:
     palette = THEMES[name]
     for status, button in _ALIASES:
         assert palette[status] == palette[button], (
-            f"{name}: {status} must equal {button} so a re-themed widget "
-            "can't pick the wrong role"
+            f"{name}: {status} must equal {button} so a re-themed widget can't pick the wrong role"
         )
 
 
@@ -171,7 +171,10 @@ def test_retheme_walks_the_tree_and_translates_roles(root) -> None:
     set_palette("Dark")
     frame = tk.Frame(root, bg=PALETTE["bg_surface"])
     label = tk.Label(
-        frame, text="hi", bg=PALETTE["bg_card"], fg=PALETTE["text_muted"],
+        frame,
+        text="hi",
+        bg=PALETTE["bg_card"],
+        fg=PALETTE["text_muted"],
     )
     label.pack()
 
@@ -256,7 +259,7 @@ def test_dots_shrink_toward_the_fade_and_stop(painted_canvas) -> None:
         x1, _y1, x2, _y2 = canvas.coords(item)
         widths[round(x1)] = x2 - x1
 
-    assert max(widths) < 200            # nothing past the fade
+    assert max(widths) < 200  # nothing past the fade
     left, right = min(widths), max(widths)
     assert widths[left] > widths[right]  # the screen thins out rightwards
 
@@ -351,27 +354,45 @@ def _stub_window(root, db=None):
             self.page = tk.Canvas(root, height=120)
             self.page.pack(fill=tk.BOTH, expand=True)
             self._notebook_window = self.page.create_window(
-                0, 0, window=ttk.Frame(self.page), anchor=tk.NW,
+                0,
+                0,
+                window=ttk.Frame(self.page),
+                anchor=tk.NW,
             )
             self._page_size = (0, 0)
             self.theme_combo = ttk.Combobox(
-                self.header_canvas, textvariable=self.theme_var,
-                values=theme_names(), state="readonly", style="Header.TCombobox",
+                self.header_canvas,
+                textvariable=self.theme_var,
+                values=theme_names(),
+                state="readonly",
+                style="Header.TCombobox",
             )
             self._theme_window = self.header_canvas.create_window(
-                0, HEADER_HEIGHT // 2, anchor=tk.E, window=self.theme_combo,
+                0,
+                HEADER_HEIGHT // 2,
+                anchor=tk.E,
+                window=self.theme_combo,
             )
             self.theme_new_button = ttk.Button(self.header_canvas, text="+", width=2)
             self._theme_new_window = self.header_canvas.create_window(
-                0, HEADER_HEIGHT // 2, anchor=tk.E, window=self.theme_new_button,
+                0,
+                HEADER_HEIGHT // 2,
+                anchor=tk.E,
+                window=self.theme_new_button,
             )
             self._camera_connected = False
             self._serial_connected = True
             self.camera_dot = tk.Label(
-                root, text="●", bg=PALETTE["bg_window"], fg=PALETTE["error"],
+                root,
+                text="●",
+                bg=PALETTE["bg_window"],
+                fg=PALETTE["error"],
             )
             self.serial_dot = tk.Label(
-                root, text="●", bg=PALETTE["bg_window"], fg=PALETTE["success"],
+                root,
+                text="●",
+                bg=PALETTE["bg_window"],
+                fg=PALETTE["success"],
             )
 
         def set_status(self, message: str) -> None:
@@ -397,9 +418,7 @@ def test_selecting_a_theme_applies_it(root) -> None:
     assert current_theme() == "Midnight Blue"
     assert win.theme_name == "Midnight Blue"
     assert panel.cget("bg") == THEMES["Midnight Blue"]["bg_card"]
-    assert ttk.Style(root).lookup("TFrame", "background") == (
-        THEMES["Midnight Blue"]["bg_surface"]
-    )
+    assert ttk.Style(root).lookup("TFrame", "background") == (THEMES["Midnight Blue"]["bg_surface"])
 
 
 def test_status_dots_keep_their_meaning_across_a_switch(root) -> None:
@@ -407,8 +426,8 @@ def test_status_dots_keep_their_meaning_across_a_switch(root) -> None:
 
     win.set_theme("Light")
 
-    assert win.camera_dot.cget("fg") == THEMES["Light"]["error"]      # disconnected
-    assert win.serial_dot.cget("fg") == THEMES["Light"]["success"]    # connected
+    assert win.camera_dot.cget("fg") == THEMES["Light"]["error"]  # disconnected
+    assert win.serial_dot.cget("fg") == THEMES["Light"]["success"]  # connected
     assert win.camera_dot.cget("bg") == THEMES["Light"]["bg_window"]
 
 

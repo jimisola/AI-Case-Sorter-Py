@@ -1,4 +1,5 @@
 """Update dialog + MainWindow update wiring (needs a Tk display)."""
+
 from __future__ import annotations
 
 import io
@@ -57,8 +58,7 @@ class _FakeApp:
 
 
 def _info() -> UpdateInfo:
-    return UpdateInfo(version="9.9.9", tag="v9.9.9", url="https://x/app.zip",
-                      notes="- Faster sorting", size=2_500_000)
+    return UpdateInfo(version="9.9.9", tag="v9.9.9", url="https://x/app.zip", notes="- Faster sorting", size=2_500_000)
 
 
 def _archive() -> bytes:
@@ -94,7 +94,7 @@ class _StreamResp:
 
     def iter_content(self, chunk_size: int = 1):
         for i in range(0, len(self._payload), chunk_size):
-            yield self._payload[i:i + chunk_size]
+            yield self._payload[i : i + chunk_size]
 
     def __enter__(self):
         return self
@@ -127,8 +127,7 @@ def test_dialog_reports_being_up_to_date(root) -> None:
 
 
 def test_dialog_jumps_straight_to_restart_when_already_staged(root) -> None:
-    pending = PendingUpdate(version="9.9.9", tag="v9.9.9",
-                            path=Path("/tmp/x"), staged_at="now")
+    pending = PendingUpdate(version="9.9.9", tag="v9.9.9", path=Path("/tmp/x"), staged_at="now")
     dlg = UpdateDialog(root, info=None, app=_FakeApp(), pending=pending)
     assert dlg._title_var.get() == "Update ready to install"
     assert dlg._primary.cget("text") == "Restart Now"
@@ -154,8 +153,7 @@ def test_download_stages_and_switches_to_restart(root, monkeypatch) -> None:
     dlg = UpdateDialog(root, info=_info(), app=app)
 
     dlg._on_primary()
-    assert _pump_until(root, lambda: dlg._pending is not None), \
-        "download never completed"
+    assert _pump_until(root, lambda: dlg._pending is not None), "download never completed"
     assert dlg._pending.version == "9.9.9"
     assert dlg._primary.cget("text") == "Restart Now"
     # The app is told, so the status-bar button can flip to "Restart to update".
@@ -170,8 +168,7 @@ def test_download_failure_offers_a_retry(root, monkeypatch) -> None:
     dlg = UpdateDialog(root, info=_info(), app=_FakeApp())
 
     dlg._on_primary()
-    assert _pump_until(root, lambda: dlg._primary.cget("text") == "Try Again"), \
-        "failure was never surfaced"
+    assert _pump_until(root, lambda: dlg._primary.cget("text") == "Try Again"), "failure was never surfaced"
     assert str(dlg._primary.cget("state")) == "normal"
     assert "ZIP" in dlg._progress_var.get()
     assert updater.pending_update() is None
@@ -181,8 +178,7 @@ def test_download_failure_offers_a_retry(root, monkeypatch) -> None:
 def test_restart_without_a_launcher_does_not_close_the_app(root, monkeypatch) -> None:
     """A bare `python main.py` checkout has no start script to re-exec."""
     monkeypatch.setattr(updater, "launcher_path", lambda: None)
-    pending = PendingUpdate(version="9.9.9", tag="v9.9.9",
-                            path=Path("/tmp/x"), staged_at="now")
+    pending = PendingUpdate(version="9.9.9", tag="v9.9.9", path=Path("/tmp/x"), staged_at="now")
     app = _FakeApp()
     dlg = UpdateDialog(root, info=None, app=app, pending=pending)
 
@@ -200,7 +196,7 @@ def test_auto_check_setting_round_trips(root, tmp_path: Path) -> None:
     db.ensure_initialized()
     try:
         dlg = UpdateDialog(root, info=_info(), app=_FakeApp(db))
-        assert dlg._auto_var.get() is True     # default on
+        assert dlg._auto_var.get() is True  # default on
 
         dlg._auto_var.set(False)
         dlg._on_toggle_auto()
@@ -291,7 +287,7 @@ def test_startup_check_swallows_network_errors(root, monkeypatch) -> None:
     root.update()
 
     assert win.update_button.winfo_manager() == ""
-    assert win.status == ""      # a silent check never nags
+    assert win.status == ""  # a silent check never nags
 
 
 def test_explicit_check_reports_failure(root, monkeypatch) -> None:

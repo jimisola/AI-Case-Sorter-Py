@@ -3,11 +3,13 @@
 Mirrors the public surface of SerialBroker — every command logs and fires
 on_done after ~100ms.
 """
+
 from __future__ import annotations
 
 import threading
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 EMULATED_PORT = "Emulated"
 
@@ -108,9 +110,7 @@ class EmulatorBroker:
     def read_line(self) -> str:
         return ""
 
-    def _send_and_await(
-        self, command: str, handlers: list[Callable[[str], None]], timeout_s: float
-    ) -> bool:
+    def _send_and_await(self, command: str, handlers: list[Callable[[str], None]], timeout_s: float) -> bool:
         """Register the completion handler, THEN send.
 
         send_command schedules the response on a Timer, so registering after
@@ -154,6 +154,7 @@ class EmulatorBroker:
 
     def get_config(self, timeout_s: float = 3.0) -> dict[str, Any] | None:
         import json
+
         result: dict[str, Any] | None = None
         done = threading.Event()
 

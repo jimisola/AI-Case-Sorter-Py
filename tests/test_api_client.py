@@ -1,4 +1,5 @@
 """Unit tests for api_client — request shape, prompt templating, response parsing."""
+
 from __future__ import annotations
 
 import json
@@ -120,9 +121,7 @@ def test_classify_strips_quoted_label() -> None:
 def test_classify_omits_headstamp_placeholder_when_absent() -> None:
     fake_response = MagicMock()
     fake_response.status_code = 200
-    fake_response.json.return_value = {
-        "choices": [{"message": {"content": "WIN"}}]
-    }
+    fake_response.json.return_value = {"choices": [{"message": {"content": "WIN"}}]}
     cfg = _cfg()
     cfg["prompt"] = "No placeholder here"
     with patch("sorter.api_client._session.post", return_value=fake_response) as post:

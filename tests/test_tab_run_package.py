@@ -1,4 +1,5 @@
 """Run-tab package-mode + auto-select wiring (needs a Tk display)."""
+
 from __future__ import annotations
 
 import pytest
@@ -59,11 +60,11 @@ def _make(root, tmp_path, monkeypatch):
 def test_toggle_package_mode_shows_batch_and_reset(root, tmp_path, monkeypatch) -> None:
     tab, _app, cfg = _make(root, tmp_path, monkeypatch)
     try:
-        assert tab._batch_row.winfo_manager() == ""        # hidden off
+        assert tab._batch_row.winfo_manager() == ""  # hidden off
         tab._package_var.set(True)
         tab._on_toggle_package_mode()
         assert cfg.run_package_mode is True
-        assert tab._batch_row.winfo_manager() == "pack"     # batch size shown
+        assert tab._batch_row.winfo_manager() == "pack"  # batch size shown
         # Non-catch-all cards now expose the live reset button.
         non_catch = [c for c in tab._slot_cards if c.slot_number > 0][0]
         assert non_catch._reset_row.winfo_manager() == "pack"

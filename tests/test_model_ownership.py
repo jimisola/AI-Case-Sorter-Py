@@ -9,6 +9,7 @@ The subtle part is what ownership is *not* keyed on: `community_model_uid`.
 Sharing your own model stamps a UID onto your local copy, so a UID means
 "this model exists in the community", not "this model isn't yours".
 """
+
 from __future__ import annotations
 
 import json
@@ -28,8 +29,11 @@ def _seed_db(tmp_path: Path) -> Database:
 
 
 def _archive(
-    tmp_path: Path, name: str = "Shared9mm", uid: str = "uid-1",
-    model_type: str = "Standard", filename: str = "pub.zip",
+    tmp_path: Path,
+    name: str = "Shared9mm",
+    uid: str = "uid-1",
+    model_type: str = "Standard",
+    filename: str = "pub.zip",
 ) -> Path:
     """A share archive as a publisher would produce it — ModelType Standard,
     because that's what the model is on *their* machine."""
@@ -88,7 +92,9 @@ def test_ai_config_mode_is_not_trainable() -> None:
 def test_community_download_is_marked_not_owned(tmp_path: Path) -> None:
     db = _seed_db(tmp_path)
     _cart, model_id = import_model(
-        _archive(tmp_path), db=db, community_download=True,
+        _archive(tmp_path),
+        db=db,
+        community_download=True,
     )
     saved = ModelRepo(db).get(model_id)
     # The manifest said Standard; how it arrived is what counts.
@@ -109,12 +115,16 @@ def test_updating_a_download_keeps_it_not_owned(tmp_path: Path) -> None:
     """A newer version of an installed community model stays read-only."""
     db = _seed_db(tmp_path)
     _cart, model_id = import_model(
-        _archive(tmp_path), db=db, community_download=True,
+        _archive(tmp_path),
+        db=db,
+        community_download=True,
     )
     _cart2, updated_id = import_model(
-        _archive(tmp_path, filename="v2.zip"), db=db, community_download=True,
+        _archive(tmp_path, filename="v2.zip"),
+        db=db,
+        community_download=True,
     )
-    assert updated_id == model_id            # updated in place, not duplicated
+    assert updated_id == model_id  # updated in place, not duplicated
     assert not is_trainable(ModelRepo(db).get(model_id))
 
 
@@ -126,7 +136,9 @@ def test_a_plain_zip_cannot_launder_a_download_into_an_owned_model(
     installed `CommunityManaged`."""
     db = _seed_db(tmp_path)
     _cart, model_id = import_model(
-        _archive(tmp_path), db=db, community_download=True,
+        _archive(tmp_path),
+        db=db,
+        community_download=True,
     )
     import_model(_archive(tmp_path, filename="again.zip"), db=db)
     assert not is_trainable(ModelRepo(db).get(model_id))

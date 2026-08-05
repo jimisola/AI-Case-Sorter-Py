@@ -3,6 +3,7 @@
 Needs a Tk display (run under ``xvfb-run`` in headless CI). Skipped where the
 GUI stack isn't importable, like the other UI tests.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -23,9 +24,9 @@ from sorter.repository import (  # noqa: E402
     SettingsRepo,
 )
 from sorter.ui.dialog_model_editor import (  # noqa: E402
-    ModelEditorDialog,
     _FEEDBACK_MODE_BY_LABEL,
     _FEEDBACK_MODE_LABELS,
+    ModelEditorDialog,
     _is_community_model,
 )
 from sorter.ui.tab_run import RunTab  # noqa: E402
@@ -53,9 +54,13 @@ def db(tmp_path, monkeypatch):
 def _community_model(db, *, enabled=True, floor=92, mode="Instant") -> Model:
     cart = CartridgeRepo(db).get_or_create("9mm")
     m = Model(
-        name="Comm", cartridge_id=cart.id, community_model_uid="uid-1",
-        model_version=2, feedback_loop_enabled=enabled,
-        feedback_loop_confidence_floor=floor, feedback_loop_upload_mode=mode,
+        name="Comm",
+        cartridge_id=cart.id,
+        community_model_uid="uid-1",
+        model_version=2,
+        feedback_loop_enabled=enabled,
+        feedback_loop_confidence_floor=floor,
+        feedback_loop_upload_mode=mode,
     )
     return ModelRepo(db).create(m)
 
@@ -95,6 +100,7 @@ def test_is_community_model_helper() -> None:
 
 def test_feedback_mode_label_mapping_round_trips() -> None:
     from sorter.models import FEEDBACK_UPLOAD_MODES
+
     for value in FEEDBACK_UPLOAD_MODES:
         assert _FEEDBACK_MODE_BY_LABEL[_FEEDBACK_MODE_LABELS[value]] == value
 
@@ -136,9 +142,9 @@ def test_editor_save_opts_out_and_changes_mode_but_not_floor(root, db) -> None:
 
     assert saved_ids == [m.id]
     reloaded = ModelRepo(db).get(m.id)
-    assert reloaded.feedback_loop_enabled is False          # opted out
+    assert reloaded.feedback_loop_enabled is False  # opted out
     assert reloaded.feedback_loop_upload_mode == "OnRunComplete"
-    assert reloaded.feedback_loop_confidence_floor == 92    # floor untouched
+    assert reloaded.feedback_loop_confidence_floor == 92  # floor untouched
 
 
 def test_editor_toggle_disables_mode_combo(root, db) -> None:

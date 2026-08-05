@@ -1,4 +1,5 @@
 """Tests for the classify dispatcher."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,8 +10,7 @@ import pytest
 
 from sorter import classifier
 from sorter.db import Database
-from sorter.models import Model
-from sorter.repository import CartridgeRepo, ModelRepo, SettingsRepo
+from sorter.repository import ModelRepo, SettingsRepo
 
 
 def _seed_db(tmp_path: Path) -> Database:
@@ -102,7 +102,7 @@ def test_missing_model_file_raises_instead_of_using_http(tmp_path: Path) -> None
 def test_checkpoint_problem_is_quiet_when_nothing_is_wrong(tmp_path: Path) -> None:
     """No nagging in AI Config mode, nor for a model that can classify."""
     db = _seed_db(tmp_path)
-    assert classifier.checkpoint_problem(db) is None      # AI Config mode
+    assert classifier.checkpoint_problem(db) is None  # AI Config mode
     assert classifier.checkpoint_problem(None) is None
 
     active_id = _activate_seeded_model(db)

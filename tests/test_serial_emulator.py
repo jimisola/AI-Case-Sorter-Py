@@ -1,10 +1,8 @@
 """Tests for the in-process serial emulator (and the broker's await/timeout pattern)."""
+
 from __future__ import annotations
 
-import threading
 import time
-
-import pytest
 
 from sorter.serial_emulator import EmulatorBroker
 
