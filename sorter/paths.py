@@ -64,6 +64,22 @@ def legacy_data_dir() -> Path:
     return app_root() / "data"
 
 
+def find_uv() -> str | None:
+    """Locate the uv binary bootstrap.py uses to sync/run the app.
+
+    Checked in the same order bootstrap.py checks it: the project-local
+    install first (``.uv/bin/``, where bootstrap.py puts it -- and
+    deliberately does *not* add to PATH, see its module docstring), then
+    PATH. Used by anything that needs to invoke uv after launch -- e.g.
+    dialog_install_torch.py, since a uv-managed venv doesn't ship pip by
+    default and ``uv pip install --python <interpreter>`` is the equivalent.
+    """
+    local = app_root() / ".uv" / "bin" / ("uv.exe" if os.name == "nt" else "uv")
+    if local.exists():
+        return str(local)
+    return shutil.which("uv")
+
+
 def is_portable() -> bool:
     """True when the portable marker pins the data root inside the app folder."""
     return (app_root() / PORTABLE_MARKER).exists()
