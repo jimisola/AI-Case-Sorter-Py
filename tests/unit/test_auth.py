@@ -248,6 +248,16 @@ def test_cache_file_persisted_and_chmod(tmp_path: Path) -> None:
     mgr._cache.flush()
     assert cache_path.exists()
     import os
+    import sys
+
+    if sys.platform == "win32":
+        # os.chmod on Windows doesn't raise for the bits sorter/auth.py sets
+        # (matching its own try/except OSError comment), but it also doesn't
+        # apply POSIX permission semantics -- real access control there is
+        # NTFS ACLs, not st_mode. A new file's owner-only ACL is inherited
+        # regardless of what st_mode reports, so there's nothing meaningful
+        # to assert about st_mode on this platform.
+        return
 
     mode = os.stat(cache_path).st_mode & 0o777
     if mode != 0:
