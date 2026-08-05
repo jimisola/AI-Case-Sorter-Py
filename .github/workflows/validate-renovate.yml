@@ -11,6 +11,10 @@ on:
       - ".github/renovate.json5"
       - ".github/workflows/validate-renovate.yml"
 
+  # Manual runs: Renovate's config schema evolves server-side, so a config that
+  # validated last month can break with no commit here to trigger a re-check.
+  workflow_dispatch:
+
 permissions:
   contents: read
 

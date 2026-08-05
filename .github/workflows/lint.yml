@@ -7,6 +7,10 @@ on:
   # Callable so release.yml can gate a release on the same checks that
   # guard main, rather than reimplementing them.
   workflow_call:
+  # Manual runs: the release-config job pins git-cliff's version mapping, which
+  # can drift when that tool is upgraded rather than when this repo changes --
+  # so it needs to be runnable without a commit to hang it on.
+  workflow_dispatch:
 
 permissions:
   contents: read
