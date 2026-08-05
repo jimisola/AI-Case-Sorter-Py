@@ -35,9 +35,14 @@
     enabled: true,
   },
 
+  // Reads GitHub's Dependabot alerts, so this is inert unless settings.yml's
+  // `enable_vulnerability_alerts` is applied. Renovate defaults the block to
+  // `minimumReleaseAge: null`, so the soak times below never delay a CVE fix.
   vulnerabilityAlerts: {
     enabled: true,
     addLabels: ["security"],
+    // Puts a CVE fix in cliff.toml's Security group, not Miscellaneous.
+    semanticCommitType: "security",
   },
 
   osvVulnerabilityAlerts: true,

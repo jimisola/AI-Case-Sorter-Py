@@ -68,10 +68,12 @@ jobs:
       - name: Install yamllint
         run: pip install yamllint==1.38.0
 
+      # settings.yml and labeler.yml included: both fail silently when broken.
       - name: yamllint
         run: |
           yamllint -d "{extends: relaxed, rules: {line-length: {max: 200}}}" \
-            .github/workflows/ .github/actions/
+            .github/workflows/ .github/actions/ \
+            .github/settings.yml .github/labeler.yml
 
   # cliff.toml decides the released version, so a wrong answer here ships a
   # wrong release. The test skips without git-cliff, hence a job that installs it.
