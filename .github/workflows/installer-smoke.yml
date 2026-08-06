@@ -166,8 +166,10 @@ jobs:
           }
           Write-Host "Simulated '$env:MODE': no python, no py$(if ($env:MODE -eq 'pythonorg') { ', no winget' })."
 
-      # -NoLaunch keeps this scoped to install + extract; the full
-      # bootstrap.py/uv-sync path is launcher-smoke's job, not this one's.
+      # -NoLaunch keeps *this* step scoped to install + extract. The full
+      # bootstrap.py/uv-sync path is launcher-smoke's job; the one leg that
+      # repeats it below does so only to prove start.bat's interpreter probe
+      # survives a poisoned `python`, which launcher-smoke cannot stage.
       #
       # -Version pins the release under test when one is passed in. Without it
       # the script resolves /releases/latest, which is the wrong target twice
@@ -182,8 +184,14 @@ jobs:
           MODE: ${{ matrix.python-state }}
         run: |
           # 6>&1 folds the installer's Write-Host output (information stream)
-          # into the tee; a plain pipe would capture none of it.
+          # into the tee; a plain pipe would capture none of it. It also takes
+          # that output away from the console host, so Start-Transcript's own
+          # install-<stamp>.log is checked separately below rather than here.
           $out = Join-Path $env:RUNNER_TEMP 'installer-out.txt'
+          # Not reset by a script that succeeds by falling off the end of its
+          # try block, so it would otherwise carry whatever the last native
+          # call inside the installer left behind.
+          $LASTEXITCODE = 0
           if ($env:TAG) {
             Write-Host "Verifying release $env:TAG"
             .\installer\install-windows.ps1 -Repo $env:GITHUB_REPOSITORY -Version $env:TAG -NoLaunch 6>&1 |
@@ -196,19 +204,30 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
           # The exit code alone cannot show *which* provisioning path ran.
+          #
+          # Assert on the resolved interpreter, not on a banner: "Using winget"
+          # prints before winget runs, and Install-Python calls
+          # Update-PathFromRegistry first, which can hand the machine PATH's own
+          # Python back and let the leg pass with winget having done nothing.
+          # Match narrowly for the same reason -- a bare 'Found ' is satisfied
+          # by "No published release found", and a bare 'falling back' also
+          # matches the sdist fallback, which has nothing to do with Python.
+          $provisioned = 'Installed .*\\Programs\\Python\\Python313\\python\.exe'
           $text = Get-Content $out -Raw
           $bad = @()
           switch ($env:MODE) {
             'preinstalled' {
-              if ($text -notmatch 'Found ') { $bad += "expected 'Found ' (pre-existing Python)" }
+              if ($text -notmatch 'Found .*python\.exe') { $bad += "expected 'Found <path>\python.exe' (pre-existing Python)" }
             }
             'winget' {
               if ($text -notmatch 'Using winget: Python\.Python\.3\.13') { $bad += "expected 'Using winget: Python.Python.3.13'" }
-              if ($text -match 'falling back') { $bad += "unexpected 'falling back'" }
+              if ($text -match 'falling back to python\.org') { $bad += "unexpected fallback to python.org" }
+              if ($text -notmatch $provisioned) { $bad += "expected a freshly provisioned Python313 interpreter" }
             }
             'pythonorg' {
               if ($text -notmatch 'winget is not available; using python\.org\.') { $bad += "expected 'winget is not available; using python.org.'" }
               if ($text -notmatch 'Downloading https://www\.python\.org/ftp/') { $bad += "expected 'Downloading https://www.python.org/ftp/'" }
+              if ($text -notmatch $provisioned) { $bad += "expected a freshly provisioned Python313 interpreter" }
             }
           }
           if ($bad) {
@@ -218,6 +237,16 @@ jobs:
             exit 1
           }
           Write-Host "Provisioning path for '$env:MODE' confirmed."
+
+          # 6>&1 above keeps Write-Host out of the console host, so the
+          # transcript is thin -- but it must still exist and name this run.
+          $installLog = Get-ChildItem "$env:LOCALAPPDATA\CaseSorter\logs\install-*.log" -ErrorAction SilentlyContinue |
+                        Sort-Object LastWriteTime | Select-Object -Last 1
+          if (-not $installLog) {
+            Write-Error "No install-<stamp>.log under the data root -- Start-Transcript did not run."
+            exit 1
+          }
+          Write-Host "Install transcript: $($installLog.FullName) ($($installLog.Length) bytes)"
 
       # The real assertion: not "the script exited 0" but "a working install
       # landed with the version the sdist actually carries" -- proves the
@@ -267,7 +296,13 @@ jobs:
       # Install, then launch, where `python` is the Store alias stub that
       # exits 9009. A runner has no such alias, so `python` is stubbed; `py`
       # must be genuine, never simulated.
+      #
+      # One leg only: this step undoes the simulation (py.exe back, machine
+      # PATH folded in) before it runs, so all three legs would assert the
+      # same thing against the same interpreter -- three uv syncs for one
+      # leg's worth of signal.
       - name: Verify the launcher survives a poisoned `python`
+        if: matrix.python-state == 'preinstalled'
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
