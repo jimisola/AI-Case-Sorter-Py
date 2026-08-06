@@ -168,6 +168,32 @@ function Get-PythonCommand {
     return $null
 }
 
+function Update-PathFromRegistry {
+    <# Re-read PATH from the registry into this process.
+
+       A Python installer's PrependPath edits the *persistent* PATH. Windows
+       broadcasts that to new processes only -- this one, and every child it
+       spawns, keeps the environment it started with. So right after
+       installing Python the installer still cannot see it, and neither can
+       the start.bat it launches at the end.
+
+       That is the first-run failure in full: on a machine with no Python,
+       the installer installs one, reports success (Get-PythonCommand finds
+       it by absolute path, which needs no PATH at all), then hands off to a
+       console that inherits the stale environment where the only `python` is
+       the Microsoft Store stub -- and the only `py` is nothing at all,
+       because the launcher's directory was added by the same install. The
+       app dies with 9009 on a brand-new machine, which is exactly the
+       machine this installer exists for.
+
+       Called after every install path, not just python.org's: winget's
+       package runs the same python.org installer and edits PATH the same
+       way, so the branch that used to skip this was the one most people
+       take. #>
+    $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
+                [Environment]::GetEnvironmentVariable('Path', 'User')
+}
+
 function Install-Python {
     Write-Step "Installing Python (none suitable was found)"
 
@@ -195,6 +221,11 @@ function Install-Python {
         } catch {
             Write-Warn2 "winget failed: $($_.Exception.Message)"
         }
+        # Before the probe, not after: winget's install edits the persistent
+        # PATH, and without this the rest of the run -- including the
+        # start.bat launched at the end -- never sees the Python just
+        # installed. See Update-PathFromRegistry.
+        Update-PathFromRegistry
         $found = Get-PythonCommand
         if ($found) { return $found }
         Write-Warn2 "winget did not produce a usable Python; falling back to python.org."
@@ -234,8 +265,7 @@ function Install-Python {
 
     # PrependPath only affects *new* processes, so this shell still can't see
     # it - re-read the user PATH rather than trusting `where python`.
-    $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
-                [Environment]::GetEnvironmentVariable('Path', 'User')
+    Update-PathFromRegistry
 
     $found = Get-PythonCommand
     if (-not $found) {
