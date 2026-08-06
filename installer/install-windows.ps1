@@ -8,7 +8,7 @@
     calls bootstrap.py: that's what owns the virtualenv and dependency
     install now (via uv), not this script or start.bat itself.
 
-    Deliberately git-free. `git pull` over HTTPS and a release ZIP over HTTPS
+    Deliberately git-free. `git pull` over HTTPS and a release tarball (tar.gz) over HTTPS
     have the same trust anchor (TLS to github.com), and this repo is ~1 MB, so
     git's delta transfer buys nothing. Not installing a 60 MB dependency to
     deliver a 1 MB update is the whole point.
@@ -24,7 +24,18 @@
     Override the install location.
 
 .PARAMETER Version
-    Install a specific release tag (e.g. "v0.2.0") instead of the latest.
+    Install a specific release tag of the app (e.g. "1.0.0") instead of the
+    latest. Omit it unless you are pinning, downgrading, or testing a tag -
+    the default is whatever /releases/latest resolves to.
+
+    This is the *app's* release, not a version of this script: the installer
+    ships inside the release it installs and has no version of its own.
+
+    Tags carry no "v" prefix - .github/actions/check-version rejects that form
+    at tag time, so "v1.0.0" would 404 against the releases API. The example
+    names a real published tag on purpose; an invented one (this used to say
+    "v0.2.0", a release that has never existed) is a 404 for anyone who
+    copies it.
 
 .PARAMETER NoLaunch
     Install without starting the app afterwards.
@@ -59,10 +70,21 @@ $LASTEXITCODE = 0
 # everything after it. tests/unit/test_installer_scripts.py enforces this.
 
 $DefaultBranch = 'main'
-$PythonWinget = 'Python.Python.3.12'
-$PythonMinor  = 12
-# Keep in step with requires-python in pyproject.toml.
-$PythonMin    = [Version]'3.12'
+
+# The Python this script provisions exists only to run bootstrap.py, which
+# then uses uv to provision the interpreter the *app* actually runs on (pinned
+# by .python-version). So $PythonMin is the floor for that bootstrap role and
+# tracks requires-python in pyproject.toml -- while the version we go and
+# install when none is present tracks .python-version instead. Matching the
+# latter means uv finds a usable interpreter already on the machine and skips
+# downloading a second, near-identical one.
+$PythonMin      = [Version]'3.12'   # keep in step with pyproject.toml
+$PythonWinget   = 'Python.Python.3.13'
+# Explicit rather than derived from a minor number: python.org publishes no
+# "latest 3.13" URL, so the patch has to be named, and an unreachable one
+# fails at the download with a bare 404. Verified this exact file exists
+# before pinning it, and re-verify when bumping.
+$PythonFallback = '3.13.14'         # keep in step with .python-version
 
 function Write-Step  { param([string]$m) Write-Host "==> $m" -ForegroundColor Cyan }
 function Write-Note  { param([string]$m) Write-Host "    $m" -ForegroundColor DarkGray }
@@ -86,6 +108,27 @@ function Get-PythonCommand {
       Python without Tcl/Tk fails at launch with a confusing ImportError
       rather than here where we can do something about it.
     #>
+    # This function's whole job is running interpreters that are *expected*
+    # to fail -- a missing Python, one without tkinter, a Store stub. Windows
+    # PowerShell 5.1 turns any native command's stderr into an ErrorRecord,
+    # which under the script's $ErrorActionPreference = 'Stop' is terminating:
+    # `py -3` on a machine with no Python throws instead of returning
+    # non-zero. The catches already absorbed that, but the transcript filled
+    # with "TerminatingError(py.exe)" lines that read like a real failure in a
+    # log someone is reading precisely because something went wrong.
+    # Assigning here shadows the script-level value for this scope only, so it
+    # is restored automatically on return.
+    #
+    # SilentlyContinue, not Continue: Continue stops these being *terminating*
+    # but still writes the record, so a machine with no Python yet - the exact
+    # case this installer exists for - logged two red "py.exe : No installed
+    # Python found! ... NativeCommandError" blocks before reaching the code
+    # that installs one. In a log someone opens because something went wrong,
+    # a handled probe result that looks like a stack trace is worse than
+    # useless. The probes below decide on $LASTEXITCODE and Test-Path, never
+    # on the error stream, so nothing here depends on it being visible.
+    $ErrorActionPreference = 'SilentlyContinue'
+
     $candidates = @()
 
     # -CommandType Application so a function or alias named `python` can't
@@ -101,11 +144,13 @@ function Get-PythonCommand {
         } catch { }
     }
 
+    # Newest first, and nothing below $PythonMin: a 3.11 or 3.10 entry can
+    # only ever be probed and rejected, which costs an interpreter launch
+    # apiece to learn what the version number already said.
     $candidates += @(
+        "$env:LOCALAPPDATA\Programs\Python\Python314\python.exe",
         "$env:LOCALAPPDATA\Programs\Python\Python313\python.exe",
-        "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
-        "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
-        "$env:LOCALAPPDATA\Programs\Python\Python310\python.exe"
+        "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe"
     )
 
     foreach ($candidate in ($candidates | Where-Object { $_ } | Select-Object -Unique)) {
@@ -129,34 +174,62 @@ function Install-Python {
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         Write-Note "Using winget: $PythonWinget"
         try {
+            # Out-Host, not bare invocation: a function's return value in
+            # PowerShell is everything its statements wrote to the success
+            # stream, so winget's chatter would otherwise be *prepended to
+            # the path this function returns*. That really happened -- the
+            # step reported `Installed No package found matching input
+            # criteria. C:\...\python.exe`, a two-element array where a path
+            # was meant. Out-Host writes straight to the console (and so to
+            # the transcript) without ever entering the pipeline.
             & winget install --id $PythonWinget --exact --source winget `
                 --accept-package-agreements --accept-source-agreements `
-                --scope user --silent
+                --scope user --silent | Out-Host
+            # winget reports failure by exit code, not by throwing, so
+            # without this a bad package id or a declined agreement looked
+            # exactly like success and the only symptom was the vaguer
+            # "did not produce a usable Python" below.
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warn2 "winget exited $LASTEXITCODE."
+            }
         } catch {
             Write-Warn2 "winget failed: $($_.Exception.Message)"
         }
         $found = Get-PythonCommand
         if ($found) { return $found }
         Write-Warn2 "winget did not produce a usable Python; falling back to python.org."
+    } else {
+        Write-Note "winget is not available; using python.org."
     }
 
     # python.org fallback. Per-user, silent, and explicitly including Tcl/Tk.
     $arch = if ([Environment]::Is64BitOperatingSystem) { 'amd64' } else { 'win32' }
-    $pyVer = "3.$PythonMinor.8"
-    $url = "https://www.python.org/ftp/python/$pyVer/python-$pyVer-$arch.exe"
-    $exe = Join-Path $env:TEMP "python-$pyVer-$arch.exe"
+    $url = "https://www.python.org/ftp/python/$PythonFallback/python-$PythonFallback-$arch.exe"
+    $exe = Join-Path $env:TEMP "python-$PythonFallback-$arch.exe"
 
     Write-Note "Downloading $url"
-    Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing
+    try {
+        Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing
+    } catch {
+        throw "Could not download Python from $url : $($_.Exception.Message)"
+    }
 
-    Write-Note "Running the installer (per-user, silent)..."
+    Write-Note "Running the installer (per-user, silent). This takes a minute..."
     $proc = Start-Process -FilePath $exe -Wait -PassThru -ArgumentList @(
         '/quiet', 'InstallAllUsers=0', 'PrependPath=1',
         'Include_tcltk=1', 'Include_pip=1', 'Include_launcher=1'
     )
     Remove-Item $exe -Force -ErrorAction SilentlyContinue
     if ($proc.ExitCode -ne 0) {
-        throw "The Python installer exited with code $($proc.ExitCode)."
+        # 1602 is the user cancelling a UAC/consent prompt, and 1603 is the
+        # catch-all MSI failure that a same-version install already present
+        # can produce. Naming them beats a bare number the user has to search.
+        $hint = switch ($proc.ExitCode) {
+            1602 { " (the install was cancelled)" }
+            1603 { " (a fatal installer error - a repair or reboot may be needed)" }
+            default { "" }
+        }
+        throw "The Python installer exited with code $($proc.ExitCode)$hint."
     }
 
     # PrependPath only affects *new* processes, so this shell still can't see
@@ -252,7 +325,7 @@ function Get-ReleaseInfo {
        see the current release as "newer" and re-prompt. sorter/apply_update.py
        stamps a version after an in-app update, but nothing does so here.
 
-       -Version used to skip all of this and always fetch the raw source zip
+       -Version used to skip all of this and always fetch the tar.gz file (sdist)
        for the requested tag -- silently reintroducing the exact bug above
        for every pinned install. It now goes through the same lookup and
        asset-matching as the latest-release path. #>
@@ -279,7 +352,7 @@ function Get-ReleaseInfo {
         Write-Note  "Falling back to the current $DefaultBranch branch."
         return [pscustomobject]@{
             Tag = $DefaultBranch
-            Url = "https://github.com/$Repo/archive/refs/heads/$DefaultBranch.zip"
+            Url = "https://github.com/$Repo/archive/refs/heads/$DefaultBranch.tar.gz"
         }
     }
 
@@ -288,7 +361,7 @@ function Get-ReleaseInfo {
     if ($found) { return $found }
     Write-Warn2 "Release $tag has no matching sdist; falling back to the source archive."
     Write-Note  "The app will report its version as 0.0.0 until the first in-app update."
-    return [pscustomobject]@{ Tag = $tag; Url = "https://github.com/$Repo/archive/refs/tags/$tag.zip" }
+    return [pscustomobject]@{ Tag = $tag; Url = "https://github.com/$Repo/archive/refs/tags/$tag.tar.gz" }
 }
 
 function Install-App {
@@ -297,11 +370,16 @@ function Install-App {
     $work = Join-Path $env:TEMP "casesorter-install-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $work -Force | Out-Null
     try {
-        $isTar = $Url -like '*.tar.gz'
-        $zip = Join-Path $work $(if ($isTar) { 'app.tar.gz' } else { 'app.zip' })
+        # Every path into here is a .tar.gz now - the sdist, the tag source
+        # archive, and the branch fallback alike - so there is no archive-type
+        # branch left. The Expand-Archive arm that used to sit alongside the
+        # tar one went with it: it was unreachable, and Expand-Archive cannot
+        # read a .tar.gz anyway, so reaching it would only have produced a
+        # confusing failure instead of an obvious one.
+        $targz = Join-Path $work 'app.tar.gz'
         Write-Note "Downloading $Tag..."
         try {
-            Invoke-WebRequest -Uri $Url -OutFile $zip -UseBasicParsing
+            Invoke-WebRequest -Uri $Url -OutFile $targz -UseBasicParsing
         } catch {
             $status = $null
             if ($_.Exception.PSObject.Properties['Response'] -and $_.Exception.Response) {
@@ -329,12 +407,11 @@ whose tag matches what you asked for.
         Write-Note "Extracting..."
         $unpack = Join-Path $work 'unpacked'
         New-Item -ItemType Directory -Path $unpack -Force | Out-Null
-        if ($isTar) {
-            # bsdtar, shipped in Windows since 10 1803. Expand-Archive cannot
-            # read .tar.gz at all, so there is no PowerShell-native fallback.
-            $tarExe = Get-Command tar.exe -ErrorAction SilentlyContinue
-            if (-not $tarExe) {
-                throw @"
+        # bsdtar, shipped in Windows since 10 1803. Expand-Archive cannot
+        # read .tar.gz at all, so there is no PowerShell-native fallback.
+        $tarExe = Get-Command tar.exe -ErrorAction SilentlyContinue
+        if (-not $tarExe) {
+            throw @"
 This installer needs tar.exe, which ships with Windows 10 (1803) and later.
 
 Your Windows appears to be older. Install a newer Windows, or download and
@@ -342,28 +419,25 @@ extract the release archive by hand:
 
   $Url
 "@
-            }
-            # List and vet every entry before tar.exe writes a byte -- see
-            # Assert-SafeArchiveEntries for why tar's own behaviour is not
-            # something to lean on.
-            $listing = @(& tar.exe -tf $zip)
-            if ($LASTEXITCODE -ne 0) {
-                throw "Could not read the downloaded archive (tar exited $LASTEXITCODE)."
-            }
-            # @() above keeps a single-entry archive an array rather than a
-            # bare string; an empty listing means tar found nothing to
-            # extract, which is never a real sdist.
-            if ($listing.Count -eq 0) {
-                throw "The downloaded archive is empty."
-            }
-            Assert-SafeArchiveEntries -EntryNames $listing
+        }
+        # List and vet every entry before tar.exe writes a byte -- see
+        # Assert-SafeArchiveEntries for why tar's own behaviour is not
+        # something to lean on.
+        $listing = @(& tar.exe -tf $targz)
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not read the downloaded archive (tar exited $LASTEXITCODE)."
+        }
+        # @() above keeps a single-entry archive an array rather than a
+        # bare string; an empty listing means tar found nothing to
+        # extract, which is never a real sdist.
+        if ($listing.Count -eq 0) {
+            throw "The downloaded archive is empty."
+        }
+        Assert-SafeArchiveEntries -EntryNames $listing
 
-            & tar.exe -xzf $zip -C $unpack
-            if ($LASTEXITCODE -ne 0) {
-                throw "Could not extract the downloaded archive (tar exited $LASTEXITCODE)."
-            }
-        } else {
-            Expand-Archive -Path $zip -DestinationPath $unpack -Force
+        & tar.exe -xzf $targz -C $unpack
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not extract the downloaded archive (tar exited $LASTEXITCODE)."
         }
 
         # Both the sdist (<name>-<version>/) and GitHub's source archives
@@ -422,45 +496,133 @@ function New-Shortcuts {
 # loading the script to test one function runs a real install.
 if ($MyInvocation.InvocationName -eq '.') { return }
 
-Write-Host ""
-Write-Host "  AI Case Sorter - Windows installer" -ForegroundColor White
-Write-Host "  ----------------------------------" -ForegroundColor DarkGray
-Write-Host ""
-
-if (Test-Path (Join-Path $InstallDir 'main.py')) {
-    Write-Step "Updating the existing install at $InstallDir"
+# Log to the data root, not the install folder: this script overwrites the
+# install folder, and the in-app updater later replaces it wholesale, so a log
+# kept there is deleted by the next thing that goes wrong. Mirrors
+# sorter/paths.py's logs_dir(), which cannot be imported here - there may not
+# yet be a Python to import it with. Timestamped and never pruned; these are a
+# few KB each and the install is a rare event.
+$LogDir = if ($env:CASESORTER_DATA_DIR) {
+    Join-Path $env:CASESORTER_DATA_DIR 'logs'
 } else {
-    Write-Step "Installing to $InstallDir"
+    Join-Path $env:LOCALAPPDATA 'CaseSorter\logs'
+}
+$LogFile = $null
+try {
+    New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+    $LogFile = Join-Path $LogDir ("install-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date))
+    Start-Transcript -Path $LogFile -Force | Out-Null
+} catch {
+    # Transcription can be disabled by policy, and the data root can be
+    # unwritable. Neither is a reason to refuse to install.
+    $LogFile = $null
 }
 
-Write-Step "Checking for Python $PythonMin or newer (with Tcl/Tk)"
-$python = Get-PythonCommand
-if ($python) {
-    Write-Ok "Found $python"
-} else {
-    $python = Install-Python
-    Write-Ok "Installed $python"
-}
+try {
+    Write-Host ""
+    Write-Host "  AI Case Sorter - Windows installer" -ForegroundColor White
+    Write-Host "  ----------------------------------" -ForegroundColor DarkGray
+    Write-Host ""
 
-Write-Step "Fetching the app"
-$release = Get-ReleaseInfo
-Install-App -Url $release.Url -Tag $release.Tag -Dest $InstallDir
-Write-Ok "$($release.Tag) installed."
+    # Recorded before anything can fail, because these are the answers to the
+    # first questions asked about any install that went wrong, and by then the
+    # machine is not available to ask.
+    Write-Note "Windows      : $([Environment]::OSVersion.Version) ($(if ([Environment]::Is64BitOperatingSystem) { 'x64' } else { 'x86' }))"
+    Write-Note "PowerShell   : $($PSVersionTable.PSVersion)"
+    Write-Note "Repo         : $Repo$(if ($Version) { " (pinned to $Version)" })"
+    Write-Note "tar.exe      : $(if (Get-Command tar.exe -ErrorAction SilentlyContinue) { 'present' } else { 'MISSING' })"
+    Write-Note "winget       : $(if (Get-Command winget -ErrorAction SilentlyContinue) { 'present' } else { 'not installed' })"
+    if ($LogFile) { Write-Note "Log          : $LogFile" }
+    Write-Host ""
 
-Write-Step "Creating shortcuts"
-New-Shortcuts -Dest $InstallDir
+    if (Test-Path (Join-Path $InstallDir 'main.py')) {
+        Write-Step "Updating the existing install at $InstallDir"
+    } else {
+        Write-Step "Installing to $InstallDir"
+    }
 
-Write-Host ""
-Write-Ok "Done. The app is installed at:"
-Write-Host "      $InstallDir"
-Write-Ok "Your models and settings are kept separately at:"
-Write-Host "      $env:LOCALAPPDATA\CaseSorter"
-Write-Host ""
-Write-Note "First launch installs the Python dependencies and takes a few minutes."
-Write-Note "After that, updates are offered inside the app - no need to re-run this."
-Write-Host ""
+    Write-Step "Checking for Python $PythonMin or newer (with Tcl/Tk)"
+    $python = Get-PythonCommand
+    if ($python) {
+        Write-Ok "Found $python"
+    } else {
+        $python = Install-Python
+        Write-Ok "Installed $python"
+    }
 
-if (-not $NoLaunch) {
-    Write-Step "Starting the app"
-    Start-Process -FilePath (Join-Path $InstallDir 'start.bat') -WorkingDirectory $InstallDir
+    Write-Step "Fetching the app"
+    $release = Get-ReleaseInfo
+    Write-Note "Source: $($release.Url)"
+    Install-App -Url $release.Url -Tag $release.Tag -Dest $InstallDir
+    Write-Ok "$($release.Tag) installed."
+
+    Write-Step "Creating shortcuts"
+    New-Shortcuts -Dest $InstallDir
+
+    Write-Host ""
+    Write-Ok "Done. The app is installed at:"
+    Write-Host "      $InstallDir"
+    Write-Ok "Your models and settings are kept separately at:"
+    Write-Host "      $env:LOCALAPPDATA\CaseSorter"
+    Write-Host ""
+    Write-Note "First launch installs the Python dependencies and takes a few minutes."
+    Write-Note "After that, updates are offered inside the app - no need to re-run this."
+    Write-Host ""
+
+    if (-not $NoLaunch) {
+        Write-Step "Starting the app"
+        $starter = Join-Path $InstallDir 'start.bat'
+        if (-not (Test-Path $starter)) {
+            throw "The install completed but $starter is missing."
+        }
+        # Deliberately not -Wait: the app runs until the user closes it. That
+        # means everything from here on happens in a console this script never
+        # sees, which is why bootstrap.py keeps its own log - say where, so a
+        # launch that dies unwatched is still diagnosable.
+        Start-Process -FilePath $starter -WorkingDirectory $InstallDir
+
+        # Only promise the launch log if the tree just laid down actually
+        # writes one. This script and bootstrap.py ship in the same sdist, so
+        # a released pair is always in step -- but a newer installer against
+        # an older release is routine when testing (it is what -Repo and
+        # -Version exist for), and that combination pointed a user at a file
+        # nothing had written, whose only content was a stale run from an
+        # unrelated version. Silence beats a wrong instruction in the one
+        # message a stuck user is most likely to act on.
+        $installedBootstrap = Join-Path $InstallDir 'bootstrap.py'
+        $logsStartup = (Test-Path $installedBootstrap) -and
+                       (Select-String -Path $installedBootstrap -Pattern 'def open_log' -Quiet)
+        if ($logsStartup) {
+            Write-Note "The app logs its startup to $LogDir\launch.log"
+            Write-Note "If no window appears, that file says why."
+        } else {
+            Write-Note "A window should appear shortly - first launch takes a few minutes."
+        }
+    }
+} catch {
+    Write-Host ""
+    Write-Host "  Install failed." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host ""
+    # The stack trace is noise to an end user reading a wall of red, but it is
+    # the whole point of the log for whoever they send it to. It goes to the
+    # console because that is the only stream the transcript records.
+    if ($_.ScriptStackTrace) {
+        Write-Host "  Where:" -ForegroundColor DarkGray
+        foreach ($frame in $_.ScriptStackTrace -split "`n") {
+            Write-Host "    $($frame.TrimEnd())" -ForegroundColor DarkGray
+        }
+        Write-Host ""
+    }
+    if ($LogFile) {
+        Write-Host "  A full log of this attempt is at:" -ForegroundColor DarkGray
+        Write-Host "    $LogFile"
+        Write-Host ""
+    }
+    exit 1
+} finally {
+    # Guarded: Stop-Transcript throws if transcription never started, and that
+    # error would replace the real one on the way out of the catch above.
+    try { Stop-Transcript | Out-Null } catch { }
 }
