@@ -155,6 +155,17 @@ function Update-PathFromRegistry {
                 [Environment]::GetEnvironmentVariable('Path', 'User')
 }
 
+# Where both provisioning paths land a per-user install, e.g. Python313.
+function Get-JustInstalledPython {
+    $tag = 'Python' + (($PythonFallback -split '\.')[0, 1] -join '')
+    foreach ($root in @($env:LOCALAPPDATA, $env:ProgramFiles)) {
+        if (-not $root) { continue }
+        $exe = Join-Path $root "Programs\Python\$tag\python.exe"
+        if (Test-Path $exe) { return $exe }
+    }
+    return $null
+}
+
 function Install-Python {
     Write-Step "Installing Python (none suitable was found)"
 
@@ -176,7 +187,12 @@ function Install-Python {
         }
         # Before the probe: winget edits the persistent PATH only.
         Update-PathFromRegistry
-        $found = Get-PythonCommand
+        # The one we just installed wins over whatever else the restored PATH
+        # turned up -- otherwise a Python the process PATH could not see (another
+        # user's, or one added since login) silently takes its place, and the
+        # install we just paid for goes unused.
+        $found = Get-JustInstalledPython
+        if (-not $found) { $found = Get-PythonCommand }
         if ($found) { return $found }
         Write-Warn2 "winget did not produce a usable Python; falling back to python.org."
     } else {
@@ -217,7 +233,8 @@ function Install-Python {
     # it - re-read the user PATH rather than trusting `where python`.
     Update-PathFromRegistry
 
-    $found = Get-PythonCommand
+    $found = Get-JustInstalledPython
+    if (-not $found) { $found = Get-PythonCommand }
     if (-not $found) {
         throw "Python was installed but could not be located. Open a new terminal and re-run this script."
     }
