@@ -108,6 +108,26 @@ def test_prunes_modules_removed_upstream(install) -> None:
     assert not (app / "sorter" / "gone.py").exists()
 
 
+def test_stale_bytecode_is_pruned(install) -> None:
+    """A .pyc left behind can shadow the source that replaced it.
+
+    Python invalidates cached bytecode on the source's mtime and size. An
+    sdist normalises every mtime to one constant, so a same-size replacement
+    -- a version string going from '1.0.0' to '0.3.0', say -- passes both
+    checks and the old .pyc keeps winning. Observed for real: an app tree
+    with 0.3.0 sources reporting 1.0.0. Pruning covers this because the
+    archive ships no .pyc, so every cached file counts as stale.
+    """
+    app, data = install
+    cache = app / "sorter" / "__pycache__"
+    cache.mkdir(parents=True)
+    (cache / "__init__.cpython-313.pyc").write_bytes(b"stale bytecode")
+    _stage(data, {"main.py": "new\n", "sorter/__init__.py": "new\n"})
+
+    assert apply_update.apply_pending() is True
+    assert not (cache / "__init__.cpython-313.pyc").exists()
+
+
 def test_pruning_is_confined_to_the_package_dir(install) -> None:
     """A top-level file the archive omits is left alone, not deleted."""
     app, data = install
