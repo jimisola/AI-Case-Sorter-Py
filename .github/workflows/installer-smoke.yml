@@ -57,6 +57,12 @@ jobs:
   installer-smoke:
     name: verify Windows installer
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # One leg per way the installer can end up with a Python: already on
+        # the machine, provisioned via winget, or downloaded from python.org.
+        python-state: [preinstalled, winget, pythonorg]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -108,6 +114,58 @@ jobs:
             | jq -r '.resources.core | "  remaining: \(.remaining)/\(.limit)   resets: \(.reset | todate)"' \
             || echo "  (could not read rate_limit)"
 
+      # winget/pythonorg strip every Python the installer's probe would find:
+      # PATH surgery keeps WindowsApps (winget + the Store stub the probe
+      # skips), and py.exe is moved aside so `py -3` fails too. pythonorg
+      # additionally drops winget's own directory. The new PATH goes to
+      # GITHUB_ENV because GITHUB_PATH can only append, never remove.
+      - name: Simulate Python state (${{ matrix.python-state }})
+        shell: powershell
+        env:
+          MODE: ${{ matrix.python-state }}
+        run: |
+          if ($env:MODE -eq 'preinstalled') {
+            Write-Host "PATH left untouched; the installer should find the runner's own Python."
+            exit 0
+          }
+
+          $dirs = ($env:PATH -split ';') | Where-Object {
+            $_ -and ($_ -like '*\WindowsApps*' -or
+                     -not (Test-Path -LiteralPath "$_\python.exe" -ErrorAction SilentlyContinue))
+          }
+          if (Test-Path 'C:\Windows\py.exe') {
+            Move-Item 'C:\Windows\py.exe' 'C:\Windows\py.exe.moved' -Force
+          }
+          if ($env:MODE -eq 'pythonorg') {
+            $wingetSrc = (Get-Command winget -CommandType Application -ErrorAction SilentlyContinue |
+                          Select-Object -First 1).Source
+            if ($wingetSrc) {
+              $wingetDir = Split-Path $wingetSrc -Parent
+              $dirs = $dirs | Where-Object { $_ -ne $wingetDir }
+            }
+          }
+          $env:PATH = $dirs -join ';'
+          "PATH=$env:PATH" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+          # Prove the simulated state before trusting it.
+          $badPython = Get-Command python -CommandType Application -ErrorAction SilentlyContinue |
+                       Where-Object { $_.Source -notlike '*\WindowsApps\*' } |
+                       Select-Object -First 1
+          if ($badPython) {
+            Write-Host "python still resolves outside WindowsApps: $($badPython.Source)"
+            exit 1
+          }
+          if (Get-Command py -CommandType Application -ErrorAction SilentlyContinue) {
+            Write-Host "py still resolves; the launcher was not removed."
+            exit 1
+          }
+          if ($env:MODE -eq 'pythonorg' -and
+              (Get-Command winget -CommandType Application -ErrorAction SilentlyContinue)) {
+            Write-Host "winget still resolves in pythonorg mode."
+            exit 1
+          }
+          Write-Host "Simulated '$env:MODE': no python, no py$(if ($env:MODE -eq 'pythonorg') { ', no winget' })."
+
       # -NoLaunch keeps this scoped to install + extract; the full
       # bootstrap.py/uv-sync path is launcher-smoke's job, not this one's.
       #
@@ -121,14 +179,45 @@ jobs:
         shell: powershell
         env:
           TAG: ${{ inputs.tag }}
+          MODE: ${{ matrix.python-state }}
         run: |
+          # 6>&1 folds the installer's Write-Host output (information stream)
+          # into the tee; a plain pipe would capture none of it.
+          $out = Join-Path $env:RUNNER_TEMP 'installer-out.txt'
           if ($env:TAG) {
             Write-Host "Verifying release $env:TAG"
-            .\installer\install-windows.ps1 -Repo $env:GITHUB_REPOSITORY -Version $env:TAG -NoLaunch
+            .\installer\install-windows.ps1 -Repo $env:GITHUB_REPOSITORY -Version $env:TAG -NoLaunch 6>&1 |
+              Tee-Object -FilePath $out
           } else {
             Write-Host "Verifying whatever /releases/latest resolves to"
-            .\installer\install-windows.ps1 -Repo $env:GITHUB_REPOSITORY -NoLaunch
+            .\installer\install-windows.ps1 -Repo $env:GITHUB_REPOSITORY -NoLaunch 6>&1 |
+              Tee-Object -FilePath $out
           }
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+          # The exit code alone cannot show *which* provisioning path ran.
+          $text = Get-Content $out -Raw
+          $bad = @()
+          switch ($env:MODE) {
+            'preinstalled' {
+              if ($text -notmatch 'Found ') { $bad += "expected 'Found ' (pre-existing Python)" }
+            }
+            'winget' {
+              if ($text -notmatch 'Using winget: Python\.Python\.3\.13') { $bad += "expected 'Using winget: Python.Python.3.13'" }
+              if ($text -match 'falling back') { $bad += "unexpected 'falling back'" }
+            }
+            'pythonorg' {
+              if ($text -notmatch 'winget is not available; using python\.org\.') { $bad += "expected 'winget is not available; using python.org.'" }
+              if ($text -notmatch 'Downloading https://www\.python\.org/ftp/') { $bad += "expected 'Downloading https://www.python.org/ftp/'" }
+            }
+          }
+          if ($bad) {
+            Write-Host "----- installer output -----"
+            Write-Host $text
+            Write-Host "Installer took the wrong provisioning path for '$env:MODE': $($bad -join '; ')"
+            exit 1
+          }
+          Write-Host "Provisioning path for '$env:MODE' confirmed."
 
       # The real assertion: not "the script exited 0" but "a working install
       # landed with the version the sdist actually carries" -- proves the
@@ -183,6 +272,17 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $dest = "$env:LOCALAPPDATA\Programs\CaseSorter"
+
+          # Undo the simulation step's surgery: put py.exe back, and fold the
+          # persistent PATH in -- the Python the installer just provisioned is
+          # registered there, not in this step's inherited PATH.
+          if (Test-Path 'C:\Windows\py.exe.moved') {
+            Move-Item 'C:\Windows\py.exe.moved' 'C:\Windows\py.exe' -Force
+          }
+          $env:PATH = ($env:PATH,
+                       [Environment]::GetEnvironmentVariable('Path', 'Machine'),
+                       [Environment]::GetEnvironmentVariable('Path', 'User') |
+                       Where-Object { $_ }) -join ';'
 
           # A runner resolves `python` to both the toolcache and the alias, so
           # .Source alone returns an array.
