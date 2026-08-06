@@ -76,10 +76,8 @@ $DefaultBranch = 'main'
 # .python-version, letting uv reuse it instead of fetching a second.
 $PythonMin      = [Version]'3.12'   # keep in step with pyproject.toml
 $PythonWinget   = 'Python.Python.3.13'
-# Explicit rather than derived from a minor number: python.org publishes no
-# "latest 3.13" URL, so the patch has to be named, and an unreachable one
-# fails at the download with a bare 404. Verified this exact file exists
-# before pinning it, and re-verify when bumping.
+# Explicit patch: python.org publishes no "latest 3.13" URL. Check the file
+# exists when bumping - an unreachable one 404s at download.
 $PythonFallback = '3.13.14'         # keep in step with .python-version
 
 function Write-Step  { param([string]$m) Write-Host "==> $m" -ForegroundColor Cyan }
@@ -104,10 +102,8 @@ function Get-PythonCommand {
       Python without Tcl/Tk fails at launch with a confusing ImportError
       rather than here where we can do something about it.
     #>
-    # Probing means running interpreters expected to fail. PowerShell 5.1
-    # turns native stderr into an ErrorRecord, terminating under the script's
-    # 'Stop', so a machine with no Python filled the log with handled probe
-    # failures that read like crashes. Function-scoped, restored on return.
+    # Probes are expected to fail, and PowerShell 5.1 turns native stderr into
+    # a terminating ErrorRecord under 'Stop'. Function-scoped.
     $ErrorActionPreference = 'SilentlyContinue'
 
     $candidates = @()
@@ -171,20 +167,14 @@ function Install-Python {
             & winget install --id $PythonWinget --exact --source winget `
                 --accept-package-agreements --accept-source-agreements `
                 --scope user --silent | Out-Host
-            # winget reports failure by exit code, not by throwing, so
-            # without this a bad package id or a declined agreement looked
-            # exactly like success and the only symptom was the vaguer
-            # "did not produce a usable Python" below.
+            # winget reports failure by exit code, not by throwing.
             if ($LASTEXITCODE -ne 0) {
                 Write-Warn2 "winget exited $LASTEXITCODE."
             }
         } catch {
             Write-Warn2 "winget failed: $($_.Exception.Message)"
         }
-        # Before the probe, not after: winget's install edits the persistent
-        # PATH, and without this the rest of the run -- including the
-        # start.bat launched at the end -- never sees the Python just
-        # installed. See Update-PathFromRegistry.
+        # Before the probe: winget edits the persistent PATH only.
         Update-PathFromRegistry
         $found = Get-PythonCommand
         if ($found) { return $found }
@@ -334,10 +324,8 @@ function Get-ReleaseInfo {
             # install something other than what was requested with no warning.
             throw "Could not find release '$Version'. Check the tag exists: https://github.com/$Repo/releases"
         }
-        # Only a definitive 404 justifies the branch fallback. A 403 from the
-        # anonymous rate limit, a proxy or a DNS failure means "we could not
-        # ask", and the branch archive carries no _version.py, so the install
-        # would report 0.0.0 forever.
+        # Only a 404 justifies the branch fallback: anything else means "could
+        # not ask", and the branch archive has no _version.py.
         $status = $null
         if ($_.Exception.PSObject.Properties['Response'] -and $_.Exception.Response) {
             try { $status = [int]$_.Exception.Response.StatusCode } catch { }

@@ -64,12 +64,9 @@ UV_VERSION = "0.12.1"
 UV_INSTALL_DIR = ROOT / ".uv" / "bin"
 
 
-# ---------------------------------------------------------------------------
-# Launch log. This process is started detached, and on Windows the console
-# closes with it, so a traceback from main.py is gone before it can be read.
-# Best-effort: an unwritable data directory must never stop the app starting,
-# which is why this is a few lines rather than `logging`.
-# ---------------------------------------------------------------------------
+# Launch log. Started detached, and on Windows the console closes with the
+# process, so a traceback is gone before it can be read. Best-effort: an
+# unwritable data dir must never stop the app starting.
 
 _log_file = None  # type: ignore[var-annotated]  # open file, or None if unavailable
 _log_path = None  # type: ignore[var-annotated]
@@ -374,10 +371,8 @@ def main(argv: list[str] | None = None) -> int:
 
     log_path = open_log()
 
-    # Recorded unconditionally, before anything can fail. These four lines
-    # answer most of what you would otherwise have to ask a user to go and
-    # find out, and the launch that needs them is the one that dies too fast
-    # to ask anything about.
+    # Before anything can fail: the launch that needs these is the one that
+    # dies too fast to ask about.
     log(f"app folder: {ROOT}")
     log(f"bootstrap python: {sys.version.split()[0]} ({sys.executable})")
     log(f"platform: {sys.platform} / {os.name}")

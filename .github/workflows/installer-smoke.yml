@@ -175,11 +175,9 @@ jobs:
             Write-Host "Installed version matches the release under test: $installed"
           }
 
-      # Covers the seam between this job (-NoLaunch, never starts the app) and
-      # launcher-smoke (starts it where a real python is already on PATH):
-      # install, then launch, where `python` resolves to the Windows Store
-      # alias stub that exits 9009. A runner has no such alias, so `python` is
-      # stubbed; `py` is required to be genuine, never simulated.
+      # Install, then launch, where `python` is the Store alias stub that
+      # exits 9009. A runner has no such alias, so `python` is stubbed; `py`
+      # must be genuine, never simulated.
       - name: Verify the launcher survives a poisoned `python`
         shell: powershell
         run: |
