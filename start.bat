@@ -2,9 +2,8 @@
 setlocal
 set "ROOT=%~dp0"
 
-REM Probe by running an interpreter, not by looking for one: Windows answers
-REM `python` with an App Execution Alias stub that satisfies `where` and then
-REM exits 9009. `py -3` first, since a winget-provisioned Python puts only the
+REM Probe by running one, not by looking for it: the Store alias stub answers
+REM to `where` then exits 9009. `py -3` first - a winget install puts only the
 REM launcher on PATH.
 set "PY="
 py -3 -c "pass" >nul 2>&1 && set "PY=py -3"
