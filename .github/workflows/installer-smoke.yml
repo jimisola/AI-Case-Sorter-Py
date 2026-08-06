@@ -193,7 +193,19 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $dest = "$env:LOCALAPPDATA\Programs\CaseSorter"
-          $real = (Get-Command python -CommandType Application).Source
+
+          # -First 1 after filtering, not just .Source: a runner resolves
+          # `python` to both the hosted toolcache and the WindowsApps alias, so
+          # .Source returns an array -- which silently produced a two-path
+          # py.cmd and a nonsense Split-Path. The alias is excluded explicitly
+          # because it is the very thing being stubbed out below.
+          $real = (Get-Command python -CommandType Application -ErrorAction SilentlyContinue |
+                   Where-Object { $_.Source -notlike '*\WindowsApps\*' } |
+                   Select-Object -First 1).Source
+          if (-not $real) {
+            Write-Error "No real python on PATH to stand the launcher shim up against."
+            exit 1
+          }
           Write-Host "Real interpreter: $real"
 
           $shim = Join-Path $env:RUNNER_TEMP 'poisoned-path'
@@ -218,6 +230,18 @@ jobs:
             exit 1
           }
           Write-Host "Confirmed: bare ``python`` now exits 9009, as the Store stub does."
+
+          # The other half of the premise: the launcher stand-in has to work,
+          # or this asserts nothing about start.bat and everything about a
+          # broken shim -- which is exactly how the first version of this step
+          # failed.
+          cmd /c "py -3 -c ""pass""" 2>&1 | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "----- py.cmd -----"; Get-Content "$shim\py.cmd"
+            Write-Error "Setup failed: the py.cmd launcher stand-in does not run (exit $LASTEXITCODE)."
+            exit 1
+          }
+          Write-Host "Confirmed: ``py -3`` works, so start.bat has a route to take."
 
           $log = Join-Path $env:RUNNER_TEMP 'launch.log'
           $p = Start-Process -FilePath "$dest\start.bat" -WorkingDirectory $dest `
