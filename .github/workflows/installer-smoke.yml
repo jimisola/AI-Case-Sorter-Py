@@ -167,3 +167,76 @@ jobs:
             }
             Write-Host "Installed version matches the release under test: $installed"
           }
+
+      # The seam this job and launcher-smoke left uncovered between them, and
+      # the one a real bug shipped through: this job installed with -NoLaunch
+      # and never started the app, while launcher-smoke starts the app on a
+      # runner where a real python is already first on PATH. Nothing exercised
+      # "install, then launch, on a machine where `python` is not what you
+      # think it is".
+      #
+      # What broke: stock Windows answers `python` with an App Execution Alias
+      # stub -- zero bytes, no interpreter -- that satisfies `where python`
+      # and then exits 9009. A winget-provisioned Python is not enough to save
+      # it either, since winget installs Python.Python.3.13 without
+      # Python.Launcher, so `py` may not exist at all.
+      #
+      # Simulated rather than reproduced: a runner has no App Execution Alias,
+      # so the stub is a python.cmd that exits 9009 the same way, placed first
+      # on PATH with the real interpreter's directory removed. py.cmd stands
+      # in for the launcher, which is the route start.bat must take when the
+      # name `python` is poisoned. Both are behavioural stand-ins for a state
+      # this runner cannot be put into, and the assertion is the same either
+      # way: bootstrap.py has to be reached.
+      - name: Verify the launcher survives a poisoned `python`
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dest = "$env:LOCALAPPDATA\Programs\CaseSorter"
+          $real = (Get-Command python -CommandType Application).Source
+          Write-Host "Real interpreter: $real"
+
+          $shim = Join-Path $env:RUNNER_TEMP 'poisoned-path'
+          New-Item -ItemType Directory -Path $shim -Force | Out-Null
+          @"
+          @echo off
+          echo Python was not found; run without arguments to install from the Microsoft Store.
+          exit /b 9009
+          "@ | Set-Content "$shim\python.cmd" -Encoding ascii
+          $pyShim = "@echo off`r`n`"$real`" %*"
+          Set-Content -Path "$shim\py.cmd" -Value $pyShim -Encoding ascii
+
+          # Stub first, real interpreter's own directory removed: `python` now
+          # behaves exactly like the alias, and only the launcher route works.
+          $realDir = Split-Path $real -Parent
+          $kept = ($env:PATH -split ';') | Where-Object { $_ -and $_ -notlike "$realDir*" }
+          $env:PATH = (@($shim) + $kept) -join ';'
+
+          cmd /c "python -c ""pass""" 2>&1 | Out-Null
+          if ($LASTEXITCODE -ne 9009) {
+            Write-Error "Setup failed: bare python should have exited 9009, got $LASTEXITCODE."
+            exit 1
+          }
+          Write-Host "Confirmed: bare ``python`` now exits 9009, as the Store stub does."
+
+          $log = Join-Path $env:RUNNER_TEMP 'launch.log'
+          $p = Start-Process -FilePath "$dest\start.bat" -WorkingDirectory $dest `
+                 -PassThru -NoNewWindow -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+          # main.py never exits on its own, so wait for the handoff line rather
+          # than the process -- same approach as build.yml's launcher-smoke.
+          $deadline = (Get-Date).AddSeconds(420)
+          $ready = $false
+          while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 5
+            if ((Test-Path $log) -and (Select-String -Path $log -Pattern 'Starting the app' -Quiet)) { $ready = $true; break }
+            if ($p.HasExited) { break }
+          }
+          Write-Host "----- launcher output -----"
+          if (Test-Path $log)       { Get-Content $log }
+          if (Test-Path "$log.err") { Get-Content "$log.err" }
+          if (-not $p.HasExited)    { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+          if (-not $ready) {
+            Write-Error "start.bat never reached bootstrap.py with a poisoned ``python`` -- the Store-stub regression is back."
+            exit 1
+          }
+          Write-Host "start.bat reached the app despite a poisoned ``python``."
