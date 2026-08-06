@@ -35,16 +35,18 @@ def _fake_popen(returncode: int = 0, output: list[str] | None = None) -> MagicMo
     """Stand-in for the piped app process run_app() drives.
 
     stdout has to be iterable rather than None for the tee loop to be
-    exercised at all, which is the half of run_app worth testing.
+    exercised at all, which is the half of run_app worth testing, and
+    closable because run_app releases the pipe before it waits.
     """
     proc = MagicMock()
-    proc.stdout = iter(output or [])
+    proc.stdout = MagicMock()
+    proc.stdout.__iter__.return_value = iter(output or [])
     proc.wait.return_value = returncode
     return proc
 
 
 @pytest.fixture
-def bootstrap(monkeypatch, tmp_path):
+def bootstrap(monkeypatch):
     # Never let a test accidentally shell out to a real uv/sudo/network call.
     module = _load_bootstrap()
     monkeypatch.setattr(module.subprocess, "run", MagicMock())
@@ -198,6 +200,44 @@ def test_run_app_mirrors_output_into_the_log(bootstrap, monkeypatch, capsys) -> 
     assert "ImportError: boom" in capsys.readouterr().out
 
 
+def test_run_app_reaps_the_child_when_the_echo_dies(bootstrap, monkeypatch) -> None:
+    """The echo is best-effort; reaping the child is not.
+
+    Redirected stdout defaults to the locale encoding with errors='strict',
+    so a single non-ASCII line -- apply_update.py logs one on every in-app
+    update -- used to raise straight out of the loop, skip wait(), and leave
+    the app running with nothing attached to it. That is the silent-launch
+    failure this whole path exists to report, produced by the reporting code.
+    """
+    proc = _fake_popen(0, ["applying 1.0.0 → 1.1.0\n"])
+    monkeypatch.setattr(bootstrap.subprocess, "Popen", MagicMock(return_value=proc))
+    monkeypatch.setattr(
+        bootstrap,
+        "_record",
+        MagicMock(side_effect=UnicodeEncodeError("cp1252", "→", 0, 1, "boom")),
+    )
+
+    assert bootstrap.run_app("/fake/uv", []) == 0
+    proc.wait.assert_called_once()
+
+
+def test_main_makes_its_streams_tolerate_non_ascii(bootstrap, monkeypatch) -> None:
+    """Fixing the reaping alone would still lose the rest of the output."""
+    seen: list[dict] = []
+    for name in ("stdout", "stderr"):
+        stream = MagicMock()
+        stream.reconfigure = lambda **kw: seen.append(kw)
+        monkeypatch.setattr(bootstrap.sys, name, stream)
+    monkeypatch.setattr(bootstrap, "find_uv", lambda: "/fake/uv")
+    monkeypatch.setattr(bootstrap, "apply_pending_update", lambda: None)
+    monkeypatch.setattr(bootstrap, "ensure_linux_runtime_libs", lambda *a, **kw: None)
+    monkeypatch.setattr(bootstrap, "run_app", lambda *a, **kw: 0)
+
+    bootstrap.main([])
+
+    assert seen == [{"errors": "replace"}, {"errors": "replace"}]
+
+
 def test_run_app_unbuffers_the_child(bootstrap, monkeypatch) -> None:
     """The child's stdout is a pipe now, so it would be block-buffered by
     default -- output would arrive in lumps, out of order with the stderr
@@ -338,6 +378,16 @@ def test_start_bat_does_not_trust_a_bare_python_on_path() -> None:
     assert "exit /b %RC%" in code, (
         "start.bat must propagate the app's exit code; the version that ended in a bare `endlocal` "
         "swallowed the stub's 9009, so nothing upstream could detect the failure either"
+    )
+    for invocation in ("py -3 ", "python -c", "%PY% "):
+        assert f"call {invocation}" in code, (
+            f"start.bat must `call {invocation.strip()}`: cmd invoking a .bat/.cmd shim without `call` "
+            "transfers control and never returns, so a shimmed interpreter (pyenv-win, which also "
+            "ships no py.exe) would end start.bat mid-probe with no output at all"
+        )
+    assert "pause" not in code, (
+        "the Start Menu shortcut opens this console minimised, so `pause` waits out of sight "
+        "forever; the failure notice has to time out on its own"
     )
 
 

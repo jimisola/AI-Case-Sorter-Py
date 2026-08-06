@@ -347,11 +347,17 @@ def run_app(uv: str, forward_args: list[str]) -> int:
         errors="replace",
         bufsize=1,
     )
-    if proc.stdout is not None:
-        for line in proc.stdout:
-            line = line.rstrip("\r\n")
-            print(line, flush=True)
-            _record(line)
+    try:
+        if proc.stdout is not None:
+            for line in proc.stdout:
+                line = line.rstrip("\r\n")
+                print(line, flush=True)
+                _record(line)
+    except Exception:
+        pass  # echoing is best-effort; a dead pipe must not orphan the app
+    finally:
+        if proc.stdout is not None:
+            proc.stdout.close()
     return proc.wait()
 
 
@@ -368,6 +374,16 @@ def main(argv: list[str] | None = None) -> int:
             auto_install = True
         else:
             forward_args.append(arg)
+
+    # Redirected stdout defaults to the locale encoding with errors='strict',
+    # so one non-ASCII line from the app would kill the echo in run_app().
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(errors="replace")
+            except Exception:
+                pass
 
     log_path = open_log()
 
