@@ -168,6 +168,19 @@ def updates_dir() -> Path:
     return app_data_dir() / "updates"
 
 
+def logs_dir() -> Path:
+    """Where ``bootstrap.py`` records what happened on each launch.
+
+    Under the data root like everything else here, and deliberately not in
+    the app folder: the in-app updater replaces that wholesale (see
+    ``sorter/updater.py``), so a log kept there would be deleted by the very
+    update whose failure you are trying to read about. The Windows installer
+    writes its own logs beside these, computing the same path itself -- it
+    runs before there is a Python that could import this.
+    """
+    return app_data_dir() / "logs"
+
+
 def export_temp_dir() -> Path:
     """App-local scratch folder for model export/share ZIPs.
 

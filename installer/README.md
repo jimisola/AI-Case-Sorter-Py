@@ -32,8 +32,25 @@ a safe way to repair a broken install.
 %LOCALAPPDATA%\CaseSorter\            ← your data (never touched by updates)
     ├── config\casesorter.db
     ├── models\<id>\...
+    ├── logs\                         ← install + launch logs (see below)
     └── updates\                      ← staged update, pending restart
 ```
+
+## When something goes wrong
+
+Both halves of the process leave a log in `%LOCALAPPDATA%\CaseSorter\logs\`:
+
+| File | Written by | Covers |
+|---|---|---|
+| `install-<timestamp>.log` | `install-windows.ps1` | Finding/installing Python, downloading and extracting the release. One per run, kept. |
+| `launch.log` | `bootstrap.py` | Everything from `start.bat` onwards: uv, the dependency sync, and the app's own output including any traceback. Replaced each launch; the run before is kept as `launch.prev.log`. |
+
+They live under the data root rather than the app folder on purpose: the
+installer overwrites the app folder and the in-app updater replaces it
+wholesale, so a log kept there would be destroyed by the next thing that goes
+wrong. Attach these when reporting a problem — "no window appeared" is almost
+always answered by `launch.log`, because on Windows the console closes with
+the process and takes the traceback with it.
 
 Keeping data out of the app folder is what makes the in-app updater safe: it
 overwrites the app directory, and there is nothing of yours in it. An install
@@ -45,8 +62,9 @@ that predates this layout is migrated automatically on first run.
 # Install somewhere else
 powershell -ExecutionPolicy Bypass -File install-windows.ps1 -InstallDir D:\CaseSorter
 
-# Pin a specific release
-powershell -ExecutionPolicy Bypass -File install-windows.ps1 -Version v0.2.0
+# Pin a specific release (tags carry no `v` prefix - see the maintainer notes).
+# Rarely needed: the default is the latest release.
+powershell -ExecutionPolicy Bypass -File install-windows.ps1 -Version 1.0.0
 
 # Install without launching
 powershell -ExecutionPolicy Bypass -File install-windows.ps1 -NoLaunch
@@ -62,6 +80,51 @@ its data in `<app>\data` instead of `%LOCALAPPDATA%`, for USB-stick or
 self-contained use. The updater still works — it just won't be able to rely
 on your data being outside the app folder, so it leaves `data\` alone
 explicitly.
+
+## Testing the installer locally
+
+The installer has three Python-provisioning paths. CI exercises all three on
+every change to `installer/**` (the `installer-smoke` matrix:
+`preinstalled` / `winget` / `pythonorg`); this is how to run the same three by
+hand.
+
+For every case: run from a repo checkout, and **pass `-Repo` for your fork** —
+without it the default installs the upstream repo's latest release over your
+app folder. Each run writes a transcript to
+`%LOCALAPPDATA%\CaseSorter\logs\install-<timestamp>.log`; when the Python
+bundle actually runs, its own logs land in `%TEMP%\Python 3.13.14*.log`.
+
+**Case 1 — Python already installed.** Just run it:
+
+```powershell
+.\installer\install-windows.bat -Repo yourname/AI-Case-Sorter-Py
+```
+
+Expect `Found C:\...\python.exe`; no provisioning happens.
+
+**Case 2 — no Python, winget path.** Uninstall Python first (Settings > Apps —
+the python.org bundle registers a working Uninstall), then run the same
+command. Expect `Installing Python (none suitable was found)` then
+`Using winget: Python.Python.3.13`. Note winget's package does **not** include
+the `py` launcher — which is why `start.bat` probes `py -3` *and* `python`.
+
+**Case 3 — no Python, python.org fallback.** Same no-Python starting point,
+plus make winget unresolvable for just this shell — it lives in the
+WindowsApps directory, which nothing else in the installer needs (`tar.exe`
+is in System32):
+
+```powershell
+$env:PATH = (($env:PATH -split ';') | Where-Object { $_ -notlike '*\Microsoft\WindowsApps*' }) -join ';'
+.\installer\install-windows.bat -Repo yourname/AI-Case-Sorter-Py
+```
+
+Expect `winget is not available; using python.org.` then
+`Downloading https://www.python.org/ftp/...`. The PATH change dies with the
+window.
+
+One run at a time: an install and an uninstall interleaved on the same
+machine can strip a fresh install's registration mid-flight, leaving a
+Python that works but cannot be uninstalled from Settings.
 
 ## Notes for maintainers
 
