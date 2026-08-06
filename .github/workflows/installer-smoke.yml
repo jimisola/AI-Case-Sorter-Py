@@ -102,10 +102,7 @@ jobs:
             || echo "::warning::No release at $ENDPOINT -- the installer will fall back to the source archive and this job will fail."
 
           # The lookup above is authenticated; the installer's is not, and a
-          # runner's shared IP exhausts GitHub's 60/hour anonymous budget
-          # routinely. When that happens the installer cannot see the release
-          # this job just printed, and the failure surfaces steps later as a
-          # missing version file. Print the budget so that is legible.
+          # runner's shared IP routinely exhausts the 60/hour anonymous budget.
           echo "Anonymous rate limit available to the installer:"
           curl -fsSL https://api.github.com/rate_limit \
             | jq -r '.resources.core | "  remaining: \(.remaining)/\(.limit)   resets: \(.reset | todate)"' \
@@ -178,43 +175,19 @@ jobs:
             Write-Host "Installed version matches the release under test: $installed"
           }
 
-      # The seam this job and launcher-smoke left uncovered between them, and
-      # the one a real bug shipped through: this job installed with -NoLaunch
-      # and never started the app, while launcher-smoke starts the app on a
-      # runner where a real python is already first on PATH. Nothing exercised
-      # "install, then launch, on a machine where `python` is not what you
-      # think it is".
-      #
-      # What broke: stock Windows answers `python` with an App Execution Alias
-      # stub -- zero bytes, no interpreter -- that satisfies `where python`
-      # and then exits 9009. A winget-provisioned Python is not enough to save
-      # it either, since winget installs Python.Python.3.13 without
-      # Python.Launcher, so `py` may not exist at all.
-      #
-      # Half simulated, half real. A runner has no App Execution Alias, so the
-      # stub is a python.cmd that exits 9009 the same way, placed first on
-      # PATH with the real interpreter's own directory removed. The launcher
-      # is deliberately NOT simulated: the genuine py.exe is required, and the
-      # step skips if the runner has none. An earlier revision shimmed it with
-      # a py.cmd and proved only that cmd invoking a batch file without `call`
-      # transfers control and never returns -- start.bat's probe line ended
-      # the script silently, and the step reported the very regression it
-      # exists to catch. Simulating the thing under test is how a guard starts
-      # lying.
-      #
-      # The assertion either way: bootstrap.py has to be reached.
+      # Covers the seam between this job (-NoLaunch, never starts the app) and
+      # launcher-smoke (starts it where a real python is already on PATH):
+      # install, then launch, where `python` resolves to the Windows Store
+      # alias stub that exits 9009. A runner has no such alias, so `python` is
+      # stubbed; `py` is required to be genuine, never simulated.
       - name: Verify the launcher survives a poisoned `python`
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $dest = "$env:LOCALAPPDATA\Programs\CaseSorter"
 
-          # -First 1 after filtering, not just .Source: a runner resolves
-          # `python` to both the hosted toolcache and the WindowsApps alias, so
-          # .Source returns an array -- which silently fed a list to
-          # Split-Path and produced a nonsense directory to exclude. The alias
-          # is filtered out explicitly because it is the very thing being
-          # stubbed out below.
+          # A runner resolves `python` to both the toolcache and the alias, so
+          # .Source alone returns an array.
           $real = (Get-Command python -CommandType Application -ErrorAction SilentlyContinue |
                    Where-Object { $_.Source -notlike '*\WindowsApps\*' } |
                    Select-Object -First 1).Source
@@ -231,13 +204,9 @@ jobs:
           echo Python was not found; run without arguments to install from the Microsoft Store.
           exit /b 9009
           "@ | Set-Content "$shim\python.cmd" -Encoding ascii
-          # Only `python` is stubbed. `py` must be the genuine launcher, not a
-          # stand-in: a py.cmd is a batch file, and cmd invoking a batch file
-          # without `call` transfers control and never returns -- so
-          # start.bat's own probe line silently ended the script, with the
-          # redirect to nul hiding it. That is an artifact of the shim's file
-          # type; on a real machine `py` is py.exe and nothing transfers.
-          # Simulating the launcher was testing the simulation.
+          # Must be py.exe, not a shim: cmd invoking a batch file without
+          # `call` transfers control and never returns, which silently ends
+          # start.bat at its probe line.
           $pyReal = (Get-Command py -CommandType Application -ErrorAction SilentlyContinue |
                      Where-Object { $_.Source -notlike '*\WindowsApps\*' } |
                      Select-Object -First 1).Source
@@ -247,10 +216,8 @@ jobs:
           }
           Write-Host "Launcher: $pyReal"
 
-          # Stub first, real interpreter's own directory removed, the
-          # launcher's kept: `python` now behaves exactly like the alias, and
-          # only the launcher route works -- which is the state a
-          # winget-provisioned machine hands start.bat.
+          # Stub first, interpreter's own directory out, launcher's kept: the
+          # state a winget-provisioned machine hands start.bat.
           $realDir = Split-Path $real -Parent
           $pyDir   = Split-Path $pyReal -Parent
           $kept = ($env:PATH -split ';') |
@@ -264,10 +231,8 @@ jobs:
           }
           Write-Host "Confirmed: bare ``python`` now exits 9009, as the Store stub does."
 
-          # The other half of the premise: the launcher stand-in has to work,
-          # or this asserts nothing about start.bat and everything about a
-          # broken shim -- which is exactly how the first version of this step
-          # failed.
+          # Assert the other half of the premise, so a broken setup cannot
+          # masquerade as a broken start.bat.
           cmd /c "py -3 -c ""pass""" 2>&1 | Out-Null
           if ($LASTEXITCODE -ne 0) {
             Write-Host "::warning::``py -3`` does not work on this runner (exit $LASTEXITCODE), so start.bat has no route to take. Skipping."
@@ -276,19 +241,13 @@ jobs:
           Write-Host "Confirmed: ``py -3`` works, so start.bat has a route to take."
 
           $log = Join-Path $env:RUNNER_TEMP 'launch.log'
-          # Through cmd.exe, not the .bat directly: -NoNewWindow forces
-          # UseShellExecute=false, and CreateProcess cannot run a .bat as an
-          # image. The first attempt did exactly that and produced an empty
-          # log and an instant exit -- a failure indistinguishable from the
-          # regression this step exists to detect.
+          # Through cmd.exe: -NoNewWindow forces UseShellExecute=false, and
+          # CreateProcess cannot run a .bat as an image.
           $p = Start-Process -FilePath $env:ComSpec -ArgumentList '/c', "`"$dest\start.bat`"" `
                  -WorkingDirectory $dest -PassThru -NoNewWindow `
                  -RedirectStandardOutput $log -RedirectStandardError "$log.err"
 
-          # Two independent success signals. The redirected stdout is the
-          # direct one; bootstrap.py's own launch.log is the fallback, and
-          # checking both means a quirk of output capture cannot masquerade as
-          # the launcher failing.
+          # Two signals, so an output-capture quirk cannot look like a failure.
           $appLog = "$env:LOCALAPPDATA\CaseSorter\logs\launch.log"
           # main.py never exits on its own, so wait for the handoff line rather
           # than the process -- same approach as build.yml's launcher-smoke.
