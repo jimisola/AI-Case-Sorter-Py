@@ -191,13 +191,18 @@ jobs:
       # it either, since winget installs Python.Python.3.13 without
       # Python.Launcher, so `py` may not exist at all.
       #
-      # Simulated rather than reproduced: a runner has no App Execution Alias,
-      # so the stub is a python.cmd that exits 9009 the same way, placed first
-      # on PATH with the real interpreter's directory removed. py.cmd stands
-      # in for the launcher, which is the route start.bat must take when the
-      # name `python` is poisoned. Both are behavioural stand-ins for a state
-      # this runner cannot be put into, and the assertion is the same either
-      # way: bootstrap.py has to be reached.
+      # Half simulated, half real. A runner has no App Execution Alias, so the
+      # stub is a python.cmd that exits 9009 the same way, placed first on
+      # PATH with the real interpreter's own directory removed. The launcher
+      # is deliberately NOT simulated: the genuine py.exe is required, and the
+      # step skips if the runner has none. An earlier revision shimmed it with
+      # a py.cmd and proved only that cmd invoking a batch file without `call`
+      # transfers control and never returns -- start.bat's probe line ended
+      # the script silently, and the step reported the very regression it
+      # exists to catch. Simulating the thing under test is how a guard starts
+      # lying.
+      #
+      # The assertion either way: bootstrap.py has to be reached.
       - name: Verify the launcher survives a poisoned `python`
         shell: powershell
         run: |
@@ -206,9 +211,10 @@ jobs:
 
           # -First 1 after filtering, not just .Source: a runner resolves
           # `python` to both the hosted toolcache and the WindowsApps alias, so
-          # .Source returns an array -- which silently produced a two-path
-          # py.cmd and a nonsense Split-Path. The alias is excluded explicitly
-          # because it is the very thing being stubbed out below.
+          # .Source returns an array -- which silently fed a list to
+          # Split-Path and produced a nonsense directory to exclude. The alias
+          # is filtered out explicitly because it is the very thing being
+          # stubbed out below.
           $real = (Get-Command python -CommandType Application -ErrorAction SilentlyContinue |
                    Where-Object { $_.Source -notlike '*\WindowsApps\*' } |
                    Select-Object -First 1).Source
@@ -225,23 +231,30 @@ jobs:
           echo Python was not found; run without arguments to install from the Microsoft Store.
           exit /b 9009
           "@ | Set-Content "$shim\python.cmd" -Encoding ascii
-          # The stand-in has to *consume* the version selector the way the real
-          # launcher does. Forwarding %* verbatim turned `py -3 -c pass` into
-          # `python -3 -c pass`, which the interpreter rejects with "Unknown
-          # option: -3" -- the shim failing, not start.bat. %1..%9 after the
-          # shift keeps each argument's own quoting intact, which `%*` would
-          # also have done but only by passing the selector along with it.
-          $pyShim = @(
-            '@echo off',
-            'if "%~1"=="-3" shift',
-            "`"$real`" %1 %2 %3 %4 %5 %6 %7 %8 %9"
-          )
-          Set-Content -Path "$shim\py.cmd" -Value $pyShim -Encoding ascii
+          # Only `python` is stubbed. `py` must be the genuine launcher, not a
+          # stand-in: a py.cmd is a batch file, and cmd invoking a batch file
+          # without `call` transfers control and never returns -- so
+          # start.bat's own probe line silently ended the script, with the
+          # redirect to nul hiding it. That is an artifact of the shim's file
+          # type; on a real machine `py` is py.exe and nothing transfers.
+          # Simulating the launcher was testing the simulation.
+          $pyReal = (Get-Command py -CommandType Application -ErrorAction SilentlyContinue |
+                     Where-Object { $_.Source -notlike '*\WindowsApps\*' } |
+                     Select-Object -First 1).Source
+          if (-not $pyReal) {
+            Write-Host "::warning::No genuine py.exe on this runner, so the launcher route cannot be exercised faithfully. Skipping."
+            exit 0
+          }
+          Write-Host "Launcher: $pyReal"
 
-          # Stub first, real interpreter's own directory removed: `python` now
-          # behaves exactly like the alias, and only the launcher route works.
+          # Stub first, real interpreter's own directory removed, the
+          # launcher's kept: `python` now behaves exactly like the alias, and
+          # only the launcher route works -- which is the state a
+          # winget-provisioned machine hands start.bat.
           $realDir = Split-Path $real -Parent
-          $kept = ($env:PATH -split ';') | Where-Object { $_ -and $_ -notlike "$realDir*" }
+          $pyDir   = Split-Path $pyReal -Parent
+          $kept = ($env:PATH -split ';') |
+                  Where-Object { $_ -and ($_ -notlike "$realDir*" -or $_ -like "$pyDir*") }
           $env:PATH = (@($shim) + $kept) -join ';'
 
           cmd /c "python -c ""pass""" 2>&1 | Out-Null
@@ -257,9 +270,8 @@ jobs:
           # failed.
           cmd /c "py -3 -c ""pass""" 2>&1 | Out-Null
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "----- py.cmd -----"; Get-Content "$shim\py.cmd"
-            Write-Error "Setup failed: the py.cmd launcher stand-in does not run (exit $LASTEXITCODE)."
-            exit 1
+            Write-Host "::warning::``py -3`` does not work on this runner (exit $LASTEXITCODE), so start.bat has no route to take. Skipping."
+            exit 0
           }
           Write-Host "Confirmed: ``py -3`` works, so start.bat has a route to take."
 
@@ -299,7 +311,6 @@ jobs:
           if ($p.HasExited) { Write-Host "cmd exit code: $($p.ExitCode)" } else { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
 
           if (-not $ready) {
-            Write-Host "----- py.cmd -----";     Get-Content "$shim\py.cmd"
             Write-Host "----- start.bat -----";  Get-Content "$dest\start.bat"
             Write-Error "start.bat never reached bootstrap.py with a poisoned ``python`` -- the Store-stub regression is back."
             exit 1
