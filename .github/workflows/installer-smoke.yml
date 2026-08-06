@@ -264,22 +264,43 @@ jobs:
           Write-Host "Confirmed: ``py -3`` works, so start.bat has a route to take."
 
           $log = Join-Path $env:RUNNER_TEMP 'launch.log'
-          $p = Start-Process -FilePath "$dest\start.bat" -WorkingDirectory $dest `
-                 -PassThru -NoNewWindow -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+          # Through cmd.exe, not the .bat directly: -NoNewWindow forces
+          # UseShellExecute=false, and CreateProcess cannot run a .bat as an
+          # image. The first attempt did exactly that and produced an empty
+          # log and an instant exit -- a failure indistinguishable from the
+          # regression this step exists to detect.
+          $p = Start-Process -FilePath $env:ComSpec -ArgumentList '/c', "`"$dest\start.bat`"" `
+                 -WorkingDirectory $dest -PassThru -NoNewWindow `
+                 -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+
+          # Two independent success signals. The redirected stdout is the
+          # direct one; bootstrap.py's own launch.log is the fallback, and
+          # checking both means a quirk of output capture cannot masquerade as
+          # the launcher failing.
+          $appLog = "$env:LOCALAPPDATA\CaseSorter\logs\launch.log"
           # main.py never exits on its own, so wait for the handoff line rather
           # than the process -- same approach as build.yml's launcher-smoke.
           $deadline = (Get-Date).AddSeconds(420)
           $ready = $false
           while ((Get-Date) -lt $deadline) {
             Start-Sleep -Seconds 5
-            if ((Test-Path $log) -and (Select-String -Path $log -Pattern 'Starting the app' -Quiet)) { $ready = $true; break }
-            if ($p.HasExited) { break }
+            foreach ($f in @($log, $appLog)) {
+              if ((Test-Path $f) -and (Select-String -Path $f -Pattern 'Starting the app' -Quiet)) { $ready = $true }
+            }
+            if ($ready -or $p.HasExited) { break }
           }
-          Write-Host "----- launcher output -----"
-          if (Test-Path $log)       { Get-Content $log }
-          if (Test-Path "$log.err") { Get-Content "$log.err" }
-          if (-not $p.HasExited)    { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+
+          Write-Host "----- start.bat stdout -----"
+          if (Test-Path $log)       { Get-Content $log }    else { Write-Host "(no file)" }
+          Write-Host "----- start.bat stderr -----"
+          if (Test-Path "$log.err") { Get-Content "$log.err" } else { Write-Host "(no file)" }
+          Write-Host "----- bootstrap launch.log -----"
+          if (Test-Path $appLog)    { Get-Content $appLog } else { Write-Host "(no file)" }
+          if ($p.HasExited) { Write-Host "cmd exit code: $($p.ExitCode)" } else { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+
           if (-not $ready) {
+            Write-Host "----- py.cmd -----";     Get-Content "$shim\py.cmd"
+            Write-Host "----- start.bat -----";  Get-Content "$dest\start.bat"
             Write-Error "start.bat never reached bootstrap.py with a poisoned ``python`` -- the Store-stub regression is back."
             exit 1
           }
