@@ -101,6 +101,16 @@ jobs:
             --jq '"tag: \(.tag_name)   prerelease: \(.prerelease)", "assets:", (.assets[].name | "  - \(.)")' \
             || echo "::warning::No release at $ENDPOINT -- the installer will fall back to the source archive and this job will fail."
 
+          # The lookup above is authenticated; the installer's is not, and a
+          # runner's shared IP exhausts GitHub's 60/hour anonymous budget
+          # routinely. When that happens the installer cannot see the release
+          # this job just printed, and the failure surfaces steps later as a
+          # missing version file. Print the budget so that is legible.
+          echo "Anonymous rate limit available to the installer:"
+          curl -fsSL https://api.github.com/rate_limit \
+            | jq -r '.resources.core | "  remaining: \(.remaining)/\(.limit)   resets: \(.reset | todate)"' \
+            || echo "  (could not read rate_limit)"
+
       # -NoLaunch keeps this scoped to install + extract; the full
       # bootstrap.py/uv-sync path is launcher-smoke's job, not this one's.
       #

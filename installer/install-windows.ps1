@@ -374,11 +374,40 @@ function Get-ReleaseInfo {
             # install something other than what was requested with no warning.
             throw "Could not find release '$Version'. Check the tag exists: https://github.com/$Repo/releases"
         }
+        # Only a definitive 404 justifies the branch fallback. Everything else
+        # -- a 403 from GitHub's 60/hour anonymous rate limit, a proxy, a DNS
+        # failure -- means "we could not ask", not "there is nothing there",
+        # and silently installing the default branch instead produces a tree
+        # with no sorter/_version.py that reports 0.0.0 forever. This is not
+        # hypothetical: it is how the installer behaved on a CI runner, whose
+        # shared IP exhausts that anonymous limit routinely, and the only
+        # symptom was a later step complaining about a missing version file.
+        $status = $null
+        if ($_.Exception.PSObject.Properties['Response'] -and $_.Exception.Response) {
+            try { $status = [int]$_.Exception.Response.StatusCode } catch { }
+        }
+        if ($status -and $status -ne 404) {
+            throw @"
+Could not ask GitHub which release to install (HTTP $status).
+
+  $releaseUrl
+
+This is not "no releases yet" - the request itself failed. A 403 usually
+means GitHub's rate limit for anonymous requests (60/hour per IP); 5xx and
+timeouts mean GitHub or the network in between. Waiting and re-running is
+normally enough.
+
+Refusing to fall back to the $DefaultBranch branch, because that installs a
+tree with no version stamp and would report 0.0.0 forever.
+"@
+        }
+
         # A 404 here means either "no releases published yet" or "this repo is
         # not publicly readable" - the API gives an anonymous caller the same
         # answer for both. Say so, rather than reporting only the happy-path
         # guess and letting the download fail with a bare "Not Found".
         Write-Warn2 "No published release found (the repo may have none yet)."
+        Write-Note  "Reason: $($_.Exception.Message)"
         Write-Note  "Falling back to the current $DefaultBranch branch."
         return [pscustomobject]@{
             Tag = $DefaultBranch
