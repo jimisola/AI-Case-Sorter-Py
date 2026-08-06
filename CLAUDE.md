@@ -719,8 +719,11 @@ flowchart TD
   (`.github/workflows/installer-smoke.yml`), not `build.yml`'s blanket
   trigger: it needs a real published release to exercise its interesting
   path (sdist matching, `tar.exe` extraction), so it's path-filtered to
-  `installer/**` on PR/push plus `release: published` — the most realistic
-  moment, since that event's checkout resolves to the tagged commit. It runs
+  `installer/**` on PR/push plus a `workflow_call` that `release.yml` makes
+  against the release it just cut, gating promotion to `latest`. Not
+  `release: published` — that fires alongside the sdist upload it depends
+  on, and the release is still a prerelease at that point, so
+  `/releases/latest` would resolve to the previous one. It runs
   with `shell: powershell` (Windows PowerShell 5.1), not `pwsh`, deliberately
   — that's the interpreter a real double-click via `install-windows.bat`
   uses, and the one the script's own top-of-file comment calls out for its
