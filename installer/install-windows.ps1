@@ -33,9 +33,8 @@
 
     Tags carry no "v" prefix - .github/actions/check-version rejects that form
     at tag time, so "v1.0.0" would 404 against the releases API. The example
-    names a real published tag on purpose; an invented one (this used to say
-    "v0.2.0", a release that has never existed) is a 404 for anyone who
-    copies it.
+    names a real published tag on purpose: an invented one is a 404 for
+    anyone who copies it.
 
 .PARAMETER NoLaunch
     Install without starting the app afterwards.
@@ -133,8 +132,9 @@ function Get-PythonCommand {
     foreach ($candidate in ($candidates | Where-Object { $_ } | Select-Object -Unique)) {
         if (-not (Test-Path $candidate)) { continue }
         # Skip the Microsoft Store "app execution alias" stub. It exists on a
-        # stock Windows install with no Python behind it, and running it opens
-        # the Store instead of an interpreter.
+        # stock Windows install with no Python behind it: run with arguments it
+        # just exits 9009, and bare it opens the Store. Either way there is no
+        # interpreter here to find.
         if ($candidate -like '*\WindowsApps\*') { continue }
         try {
             $out = & $candidate -c "import sys, tkinter; print('%d.%d' % sys.version_info[:2])" 2>$null
@@ -305,10 +305,11 @@ function Get-ReleaseInfo {
        see the current release as "newer" and re-prompt. sorter/apply_update.py
        stamps a version after an in-app update, but nothing does so here.
 
-       -Version used to skip all of this and always fetch the tar.gz file (sdist)
-       for the requested tag -- silently reintroducing the exact bug above
-       for every pinned install. It now goes through the same lookup and
-       asset-matching as the latest-release path. #>
+       -Version used to skip all of this and always fetch the raw source
+       archive (/archive/refs/tags/<tag>.tar.gz) for the requested tag --
+       silently reintroducing the exact bug above for every pinned install.
+       It now goes through the same lookup and asset-matching as the
+       latest-release path. #>
     $releaseUrl = if ($Version) {
         "https://api.github.com/repos/$Repo/releases/tags/$Version"
     } else {
@@ -318,21 +319,19 @@ function Get-ReleaseInfo {
         $resp = Invoke-RestMethod -Uri $releaseUrl `
             -Headers @{ 'User-Agent' = 'CaseSorter-Installer' } -UseBasicParsing
     } catch {
-        if ($Version) {
-            # Distinct from "no releases yet" below: the caller asked for a
-            # specific tag, so silently falling back to $DefaultBranch would
-            # install something other than what was requested with no warning.
-            throw "Could not find release '$Version'. Check the tag exists: https://github.com/$Repo/releases"
-        }
-        # Only a 404 justifies the branch fallback: anything else means "could
-        # not ask", and the branch archive has no _version.py.
+        # Only a confirmed 404 means "no such release". Anything else -- and
+        # that includes no response at all, which is what DNS failures, resets
+        # and timeouts give you -- means "could not ask", which is a different
+        # answer and must not be reported as a missing tag or fall back to a
+        # branch archive that has no _version.py.
         $status = $null
         if ($_.Exception.PSObject.Properties['Response'] -and $_.Exception.Response) {
             try { $status = [int]$_.Exception.Response.StatusCode } catch { }
         }
-        if ($status -and $status -ne 404) {
+        if ($status -ne 404) {
+            $what = if ($status) { "HTTP $status" } else { "no response - network or DNS failure" }
             throw @"
-Could not ask GitHub which release to install (HTTP $status).
+Could not ask GitHub which release to install ($what).
 
   $releaseUrl
 
@@ -344,6 +343,13 @@ normally enough.
 Refusing to fall back to the $DefaultBranch branch, because that installs a
 tree with no version stamp and would report 0.0.0 forever.
 "@
+        }
+
+        if ($Version) {
+            # The caller asked for a specific tag, so falling back to
+            # $DefaultBranch would install something other than what was
+            # requested with no warning.
+            throw "Could not find release '$Version'. Check the tag exists: https://github.com/$Repo/releases"
         }
 
         # A 404 here means either "no releases published yet" or "this repo is
