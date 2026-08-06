@@ -64,6 +64,64 @@ UV_VERSION = "0.12.1"
 UV_INSTALL_DIR = ROOT / ".uv" / "bin"
 
 
+# ---------------------------------------------------------------------------
+# Launch log
+#
+# Everything this script and the app print is also written to a file, because
+# on Windows the console window closes with the process -- and this process is
+# started detached, by the installer and by the Start Menu shortcut. A
+# traceback from main.py therefore appears for a fraction of a second and is
+# then gone, which is indistinguishable from "the app never started" to the
+# person reporting it. Diagnosing that used to mean asking the user to re-run
+# from a terminal they don't have open.
+#
+# Best-effort by design: a read-only or unwritable data directory must never
+# be the reason the app won't start, which is also why this is a handful of
+# lines rather than `logging` (whose FileHandler raises at construction).
+# ---------------------------------------------------------------------------
+
+_log_file = None  # type: ignore[var-annotated]  # open file, or None if unavailable
+_log_path = None  # type: ignore[var-annotated]
+
+
+def open_log():
+    """Start a fresh launch log, keeping the previous one beside it.
+
+    Two files rather than one growing file or one per launch: when a launch
+    fails, the pair you want is always "this launch" and "the one before it",
+    and a fixed pair needs no rotation policy, no size accounting, and no
+    cleanup that could itself fail.
+    """
+    global _log_file, _log_path
+    try:
+        sys.path.insert(0, str(ROOT))
+        from sorter.paths import logs_dir
+
+        directory = logs_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        current = directory / "launch.log"
+        if current.exists():
+            # os.replace, not rename: on Windows rename onto an existing file
+            # raises, and the previous log is exactly what we mean to replace.
+            os.replace(str(current), str(directory / "launch.prev.log"))
+        _log_file = open(str(current), "w", encoding="utf-8", errors="replace")
+        _log_path = current
+    except Exception:
+        _log_file = None
+        _log_path = None
+    return _log_path
+
+
+def _record(line: str) -> None:
+    if _log_file is None:
+        return
+    try:
+        _log_file.write(line + "\n")
+        _log_file.flush()  # the process is routinely killed, never closed cleanly
+    except Exception:
+        pass
+
+
 # flush=True because stdout is block-buffered whenever it isn't a terminal,
 # and this process ends by being killed while still inside main.py's Tk loop
 # -- so an unflushed buffer is never written at all. That is not theoretical:
@@ -73,11 +131,15 @@ UV_INSTALL_DIR = ROOT / ".uv" / "bin"
 # a multi-minute first-launch sync: block-buffered progress messages arrive
 # in 4 KB lumps, which reads as a hang.
 def log(msg: str) -> None:
-    print(f"[bootstrap] {msg}", flush=True)
+    line = f"[bootstrap] {msg}"
+    print(line, flush=True)
+    _record(line)
 
 
 def warn(msg: str) -> None:
-    print(f"[bootstrap] {msg}", file=sys.stderr, flush=True)
+    line = f"[bootstrap] {msg}"
+    print(line, file=sys.stderr, flush=True)
+    _record(line)
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +337,53 @@ def apply_pending_update() -> None:
 # ---------------------------------------------------------------------------
 
 
+def run_app(uv: str, forward_args: list[str]) -> int:
+    """Launch the app, mirroring its output into the launch log.
+
+    Inherited stdio would leave nothing on disk, and this is the step whose
+    failures are least visible: the console window dies with the process, so
+    a traceback out of main.py is on screen for a moment and then
+    unrecoverable. Reading the pipe and echoing each line keeps the live
+    output a user watches *and* leaves the same text behind.
+
+    stderr is merged into stdout so the log reads in the order things
+    actually happened rather than in two interleaved halves; PYTHONUNBUFFERED
+    keeps that ordering honest, since the child's stdout is now a pipe and
+    would otherwise be block-buffered while stderr stayed unbuffered.
+
+    Only this child is piped. `uv sync` above keeps inherited stdio on
+    purpose -- it is the multi-minute step, and its progress bars redraw with
+    carriage returns that a line-oriented reader would turn into hundreds of
+    junk log lines.
+    """
+    env = dict(os.environ)
+    env["PYTHONUNBUFFERED"] = "1"
+
+    # --no-sync, not --frozen: `uv run` syncs implicitly by default even with
+    # --frozen (frozen only constrains *how* it syncs, not whether), which
+    # would silently redo the project build main() went out of its way to
+    # skip. --no-sync trusts that sync and skips its own.
+    proc = subprocess.Popen(
+        [uv, "run", "--no-sync", "python", "main.py"] + forward_args,
+        cwd=ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="replace",
+        bufsize=1,
+    )
+    if proc.stdout is not None:
+        for line in proc.stdout:
+            line = line.rstrip("\r\n")
+            print(line, flush=True)
+            _record(line)
+    return proc.wait()
+
+
+# ---------------------------------------------------------------------------
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
 
@@ -286,7 +395,20 @@ def main(argv: list[str] | None = None) -> int:
         else:
             forward_args.append(arg)
 
+    log_path = open_log()
+
+    # Recorded unconditionally, before anything can fail. These four lines
+    # answer most of what you would otherwise have to ask a user to go and
+    # find out, and the launch that needs them is the one that dies too fast
+    # to ask anything about.
+    log(f"app folder: {ROOT}")
+    log(f"bootstrap python: {sys.version.split()[0]} ({sys.executable})")
+    log(f"platform: {sys.platform} / {os.name}")
+    if log_path is not None:
+        log(f"logging this launch to {log_path}")
+
     uv = find_uv() or install_uv()
+    log(f"uv: {uv}")
 
     apply_pending_update()
 
@@ -320,11 +442,16 @@ def main(argv: list[str] | None = None) -> int:
         # Every other failure path in this file exits with something a
         # non-developer can act on; a raw traceback here would be the odd one
         # out, and this is the step most likely to fail on a flaky network.
-        raise SystemExit(
+        message = (
             f"[bootstrap] Dependency sync failed (uv exited {exc.returncode}).\n"
             "[bootstrap] Check your network connection and re-run. If it persists, "
             "delete the .venv folder and try again."
-        ) from exc
+        )
+        # Copied into the log explicitly: the interpreter prints SystemExit's
+        # message on the way out, so it never passes back through log() and
+        # would otherwise be the one failure the log doesn't record.
+        _record(message)
+        raise SystemExit(message) from exc
 
     ensure_linux_runtime_libs(uv, auto_install)
 
@@ -336,12 +463,12 @@ def main(argv: list[str] | None = None) -> int:
     # app never exits on its own.
     log("Starting the app ...")
 
-    # --no-sync, not --frozen: `uv run` syncs implicitly by default even with
-    # --frozen (frozen only constrains *how* it syncs, not whether), which
-    # would silently redo the project build this function just went out of
-    # its way to skip. --no-sync trusts the sync above and skips its own.
-    result = subprocess.run([uv, "run", "--no-sync", "python", "main.py", *forward_args], cwd=ROOT)
-    return result.returncode
+    code = run_app(uv, forward_args)
+    if code != 0:
+        warn(f"The app exited with code {code}.")
+        if _log_path is not None:
+            warn(f"Full log of this launch: {_log_path}")
+    return code
 
 
 if __name__ == "__main__":
