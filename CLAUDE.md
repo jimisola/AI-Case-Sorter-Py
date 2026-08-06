@@ -535,6 +535,9 @@ and must never be committed.
 │       ├── feedback_images/ # below-threshold feedback queue (folder == queue)
 │       ├── reports/         # evaluator HTML reports
 │       └── trainedmodel/    # <model_id>.pth checkpoint
+├── logs/                  # launcher + installer logs (§7)
+│   ├── launch.log           # this launch; previous kept as launch.prev.log
+│   └── install-<stamp>.log  # one per install-windows.ps1 run
 └── updates/               # staged app updates (§7)
     ├── pending/             # extracted tree awaiting the next launch
     ├── pending.json         # its metadata — a SIBLING, never inside pending/
@@ -627,7 +630,26 @@ flowchart TD
 - **`installer/`** — `install-windows.ps1` (+ `.bat` wrapper) provisions Python
   via winget or a silent python.org install, lays the app down in
   `%LOCALAPPDATA%\Programs\CaseSorter`, and hands off to `start.bat` (which just
-  calls `bootstrap.py`). Per-user, no admin. See `installer/README.md`.
+  calls `bootstrap.py`). Per-user, no admin. See `installer/README.md`. The
+  Python it provisions only ever runs `bootstrap.py` — uv provisions the
+  interpreter the app itself runs on — so `$PythonMin` tracks
+  `requires-python` while `$PythonWinget` / `$PythonFallback` track
+  `.python-version`, which lets uv reuse the already-present install instead
+  of downloading a near-identical second one.
+- **Logging, and why it spans three files.** The chain is
+  `install-windows.ps1` → `start.bat` → `bootstrap.py` → the app, and every
+  step after the first runs in a **detached console that closes with the
+  process** — so a traceback from `main.py` was visible for a fraction of a
+  second and then gone, reaching the user as "nothing happened". Both halves
+  now write to `<data root>/logs/` (§6): the installer via `Start-Transcript`,
+  and `bootstrap.py` via `open_log()` + `run_app()`, which **pipes the app's
+  stdout/stderr and echoes each line** so the output is both live and on disk.
+  Three rules to preserve: logs live under the data root, never the app folder
+  (the updater replaces that wholesale); logging is best-effort and must never
+  block a launch (an unwritable data dir loses the log, not the app); and
+  `start.bat` **pauses on a non-zero exit** so the window can't close over the
+  error. `uv sync` deliberately keeps inherited stdio — its progress bars
+  redraw with carriage returns that a line reader would turn into junk.
 
 ---
 

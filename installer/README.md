@@ -32,8 +32,25 @@ a safe way to repair a broken install.
 %LOCALAPPDATA%\CaseSorter\            ← your data (never touched by updates)
     ├── config\casesorter.db
     ├── models\<id>\...
+    ├── logs\                         ← install + launch logs (see below)
     └── updates\                      ← staged update, pending restart
 ```
+
+## When something goes wrong
+
+Both halves of the process leave a log in `%LOCALAPPDATA%\CaseSorter\logs\`:
+
+| File | Written by | Covers |
+|---|---|---|
+| `install-<timestamp>.log` | `install-windows.ps1` | Finding/installing Python, downloading and extracting the release. One per run, kept. |
+| `launch.log` | `bootstrap.py` | Everything from `start.bat` onwards: uv, the dependency sync, and the app's own output including any traceback. Replaced each launch; the run before is kept as `launch.prev.log`. |
+
+They live under the data root rather than the app folder on purpose: the
+installer overwrites the app folder and the in-app updater replaces it
+wholesale, so a log kept there would be destroyed by the next thing that goes
+wrong. Attach these when reporting a problem — "no window appeared" is almost
+always answered by `launch.log`, because on Windows the console closes with
+the process and takes the traceback with it.
 
 Keeping data out of the app folder is what makes the in-app updater safe: it
 overwrites the app directory, and there is nothing of yours in it. An install
@@ -45,8 +62,9 @@ that predates this layout is migrated automatically on first run.
 # Install somewhere else
 powershell -ExecutionPolicy Bypass -File install-windows.ps1 -InstallDir D:\CaseSorter
 
-# Pin a specific release
-powershell -ExecutionPolicy Bypass -File install-windows.ps1 -Version v0.2.0
+# Pin a specific release (tags carry no `v` prefix - see the maintainer notes).
+# Rarely needed: the default is the latest release.
+powershell -ExecutionPolicy Bypass -File install-windows.ps1 -Version 1.0.0
 
 # Install without launching
 powershell -ExecutionPolicy Bypass -File install-windows.ps1 -NoLaunch
