@@ -81,6 +81,51 @@ self-contained use. The updater still works — it just won't be able to rely
 on your data being outside the app folder, so it leaves `data\` alone
 explicitly.
 
+## Testing the installer locally
+
+The installer has three Python-provisioning paths. CI exercises all three on
+every change to `installer/**` (the `installer-smoke` matrix:
+`preinstalled` / `winget` / `pythonorg`); this is how to run the same three by
+hand.
+
+For every case: run from a repo checkout, and **pass `-Repo` for your fork** —
+without it the default installs the upstream repo's latest release over your
+app folder. Each run writes a transcript to
+`%LOCALAPPDATA%\CaseSorter\logs\install-<timestamp>.log`; when the Python
+bundle actually runs, its own logs land in `%TEMP%\Python 3.13.14*.log`.
+
+**Case 1 — Python already installed.** Just run it:
+
+```powershell
+.\installer\install-windows.bat -Repo yourname/AI-Case-Sorter-Py
+```
+
+Expect `Found C:\...\python.exe`; no provisioning happens.
+
+**Case 2 — no Python, winget path.** Uninstall Python first (Settings > Apps —
+the python.org bundle registers a working Uninstall), then run the same
+command. Expect `Installing Python (none suitable was found)` then
+`Using winget: Python.Python.3.13`. Note winget's package does **not** include
+the `py` launcher — which is why `start.bat` probes `py -3` *and* `python`.
+
+**Case 3 — no Python, python.org fallback.** Same no-Python starting point,
+plus make winget unresolvable for just this shell — it lives in the
+WindowsApps directory, which nothing else in the installer needs (`tar.exe`
+is in System32):
+
+```powershell
+$env:PATH = (($env:PATH -split ';') | Where-Object { $_ -notlike '*\Microsoft\WindowsApps*' }) -join ';'
+.\installer\install-windows.bat -Repo yourname/AI-Case-Sorter-Py
+```
+
+Expect `winget is not available; using python.org.` then
+`Downloading https://www.python.org/ftp/...`. The PATH change dies with the
+window.
+
+One run at a time: an install and an uninstall interleaved on the same
+machine can strip a fresh install's registration mid-flight, leaving a
+Python that works but cannot be uninstalled from Settings.
+
 ## Notes for maintainers
 
 - **The repository must be publicly readable.** Both the installer and the
