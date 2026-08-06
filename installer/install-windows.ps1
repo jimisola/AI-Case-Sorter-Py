@@ -71,13 +71,9 @@ $LASTEXITCODE = 0
 
 $DefaultBranch = 'main'
 
-# The Python this script provisions exists only to run bootstrap.py, which
-# then uses uv to provision the interpreter the *app* actually runs on (pinned
-# by .python-version). So $PythonMin is the floor for that bootstrap role and
-# tracks requires-python in pyproject.toml -- while the version we go and
-# install when none is present tracks .python-version instead. Matching the
-# latter means uv finds a usable interpreter already on the machine and skips
-# downloading a second, near-identical one.
+# This Python only runs bootstrap.py; uv provisions the app's own. So
+# $PythonMin tracks requires-python, while what we install tracks
+# .python-version, letting uv reuse it instead of fetching a second.
 $PythonMin      = [Version]'3.12'   # keep in step with pyproject.toml
 $PythonWinget   = 'Python.Python.3.13'
 # Explicit rather than derived from a minor number: python.org publishes no
@@ -108,25 +104,10 @@ function Get-PythonCommand {
       Python without Tcl/Tk fails at launch with a confusing ImportError
       rather than here where we can do something about it.
     #>
-    # This function's whole job is running interpreters that are *expected*
-    # to fail -- a missing Python, one without tkinter, a Store stub. Windows
-    # PowerShell 5.1 turns any native command's stderr into an ErrorRecord,
-    # which under the script's $ErrorActionPreference = 'Stop' is terminating:
-    # `py -3` on a machine with no Python throws instead of returning
-    # non-zero. The catches already absorbed that, but the transcript filled
-    # with "TerminatingError(py.exe)" lines that read like a real failure in a
-    # log someone is reading precisely because something went wrong.
-    # Assigning here shadows the script-level value for this scope only, so it
-    # is restored automatically on return.
-    #
-    # SilentlyContinue, not Continue: Continue stops these being *terminating*
-    # but still writes the record, so a machine with no Python yet - the exact
-    # case this installer exists for - logged two red "py.exe : No installed
-    # Python found! ... NativeCommandError" blocks before reaching the code
-    # that installs one. In a log someone opens because something went wrong,
-    # a handled probe result that looks like a stack trace is worse than
-    # useless. The probes below decide on $LASTEXITCODE and Test-Path, never
-    # on the error stream, so nothing here depends on it being visible.
+    # Probing means running interpreters expected to fail. PowerShell 5.1
+    # turns native stderr into an ErrorRecord, terminating under the script's
+    # 'Stop', so a machine with no Python filled the log with handled probe
+    # failures that read like crashes. Function-scoped, restored on return.
     $ErrorActionPreference = 'SilentlyContinue'
 
     $candidates = @()
@@ -169,27 +150,11 @@ function Get-PythonCommand {
 }
 
 function Update-PathFromRegistry {
-    <# Re-read PATH from the registry into this process.
-
-       A Python installer's PrependPath edits the *persistent* PATH. Windows
-       broadcasts that to new processes only -- this one, and every child it
-       spawns, keeps the environment it started with. So right after
-       installing Python the installer still cannot see it, and neither can
-       the start.bat it launches at the end.
-
-       That is the first-run failure in full: on a machine with no Python,
-       the installer installs one, reports success (Get-PythonCommand finds
-       it by absolute path, which needs no PATH at all), then hands off to a
-       console that inherits the stale environment where the only `python` is
-       the Microsoft Store stub -- and the only `py` is nothing at all,
-       because the launcher's directory was added by the same install. The
-       app dies with 9009 on a brand-new machine, which is exactly the
-       machine this installer exists for.
-
-       Called after every install path, not just python.org's: winget's
-       package runs the same python.org installer and edits PATH the same
-       way, so the branch that used to skip this was the one most people
-       take. #>
+    <# PrependPath edits the persistent PATH, which Windows broadcasts to new
+       processes only -- and Start-Process inherits this one's environment.
+       Without this the start.bat launched at the end cannot see the Python
+       just installed. Needed after every install path, not just
+       python.org's. #>
     $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
                 [Environment]::GetEnvironmentVariable('Path', 'User')
 }
@@ -200,14 +165,9 @@ function Install-Python {
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         Write-Note "Using winget: $PythonWinget"
         try {
-            # Out-Host, not bare invocation: a function's return value in
-            # PowerShell is everything its statements wrote to the success
-            # stream, so winget's chatter would otherwise be *prepended to
-            # the path this function returns*. That really happened -- the
-            # step reported `Installed No package found matching input
-            # criteria. C:\...\python.exe`, a two-element array where a path
-            # was meant. Out-Host writes straight to the console (and so to
-            # the transcript) without ever entering the pipeline.
+            # Out-Host: a function returns everything written to the success
+            # stream, so winget's output would otherwise be prepended to the
+            # path this returns.
             & winget install --id $PythonWinget --exact --source winget `
                 --accept-package-agreements --accept-source-agreements `
                 --scope user --silent | Out-Host
@@ -374,14 +334,10 @@ function Get-ReleaseInfo {
             # install something other than what was requested with no warning.
             throw "Could not find release '$Version'. Check the tag exists: https://github.com/$Repo/releases"
         }
-        # Only a definitive 404 justifies the branch fallback. Everything else
-        # -- a 403 from GitHub's 60/hour anonymous rate limit, a proxy, a DNS
-        # failure -- means "we could not ask", not "there is nothing there",
-        # and silently installing the default branch instead produces a tree
-        # with no sorter/_version.py that reports 0.0.0 forever. This is not
-        # hypothetical: it is how the installer behaved on a CI runner, whose
-        # shared IP exhausts that anonymous limit routinely, and the only
-        # symptom was a later step complaining about a missing version file.
+        # Only a definitive 404 justifies the branch fallback. A 403 from the
+        # anonymous rate limit, a proxy or a DNS failure means "we could not
+        # ask", and the branch archive carries no _version.py, so the install
+        # would report 0.0.0 forever.
         $status = $null
         if ($_.Exception.PSObject.Properties['Response'] -and $_.Exception.Response) {
             try { $status = [int]$_.Exception.Response.StatusCode } catch { }
@@ -429,12 +385,8 @@ function Install-App {
     $work = Join-Path $env:TEMP "casesorter-install-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $work -Force | Out-Null
     try {
-        # Every path into here is a .tar.gz now - the sdist, the tag source
-        # archive, and the branch fallback alike - so there is no archive-type
-        # branch left. The Expand-Archive arm that used to sit alongside the
-        # tar one went with it: it was unreachable, and Expand-Archive cannot
-        # read a .tar.gz anyway, so reaching it would only have produced a
-        # confusing failure instead of an obvious one.
+        # Every path into here is a .tar.gz now, so there is no archive-type
+        # branch left; Expand-Archive cannot read one anyway.
         $targz = Join-Path $work 'app.tar.gz'
         Write-Note "Downloading $Tag..."
         try {
@@ -555,12 +507,9 @@ function New-Shortcuts {
 # loading the script to test one function runs a real install.
 if ($MyInvocation.InvocationName -eq '.') { return }
 
-# Log to the data root, not the install folder: this script overwrites the
-# install folder, and the in-app updater later replaces it wholesale, so a log
-# kept there is deleted by the next thing that goes wrong. Mirrors
-# sorter/paths.py's logs_dir(), which cannot be imported here - there may not
-# yet be a Python to import it with. Timestamped and never pruned; these are a
-# few KB each and the install is a rare event.
+# Data root, not the install folder, which this script and the updater both
+# overwrite. Mirrors sorter/paths.py's logs_dir(), not importable here since
+# there may be no Python yet. Timestamped, never pruned; a few KB each.
 $LogDir = if ($env:CASESORTER_DATA_DIR) {
     Join-Path $env:CASESORTER_DATA_DIR 'logs'
 } else {
@@ -634,20 +583,12 @@ try {
         if (-not (Test-Path $starter)) {
             throw "The install completed but $starter is missing."
         }
-        # Deliberately not -Wait: the app runs until the user closes it. That
-        # means everything from here on happens in a console this script never
-        # sees, which is why bootstrap.py keeps its own log - say where, so a
-        # launch that dies unwatched is still diagnosable.
+        # Not -Wait: the app runs until the user closes it, in a console this
+        # script never sees - hence bootstrap.py's own log.
         Start-Process -FilePath $starter -WorkingDirectory $InstallDir
 
-        # Only promise the launch log if the tree just laid down actually
-        # writes one. This script and bootstrap.py ship in the same sdist, so
-        # a released pair is always in step -- but a newer installer against
-        # an older release is routine when testing (it is what -Repo and
-        # -Version exist for), and that combination pointed a user at a file
-        # nothing had written, whose only content was a stale run from an
-        # unrelated version. Silence beats a wrong instruction in the one
-        # message a stuck user is most likely to act on.
+        # Only promise the launch log if the installed tree writes one: a
+        # newer installer against an older release is routine when testing.
         $installedBootstrap = Join-Path $InstallDir 'bootstrap.py'
         $logsStartup = (Test-Path $installedBootstrap) -and
                        (Select-String -Path $installedBootstrap -Pattern 'def open_log' -Quiet)
@@ -664,9 +605,8 @@ try {
     Write-Host ""
     Write-Host "  $($_.Exception.Message)" -ForegroundColor Red
     Write-Host ""
-    # The stack trace is noise to an end user reading a wall of red, but it is
-    # the whole point of the log for whoever they send it to. It goes to the
-    # console because that is the only stream the transcript records.
+    # Noise to the user, but the point of the log for whoever they send it to;
+    # the console is the only stream the transcript records.
     if ($_.ScriptStackTrace) {
         Write-Host "  Where:" -ForegroundColor DarkGray
         foreach ($frame in $_.ScriptStackTrace -split "`n") {

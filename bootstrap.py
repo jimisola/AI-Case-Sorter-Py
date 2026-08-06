@@ -65,19 +65,10 @@ UV_INSTALL_DIR = ROOT / ".uv" / "bin"
 
 
 # ---------------------------------------------------------------------------
-# Launch log
-#
-# Everything this script and the app print is also written to a file, because
-# on Windows the console window closes with the process -- and this process is
-# started detached, by the installer and by the Start Menu shortcut. A
-# traceback from main.py therefore appears for a fraction of a second and is
-# then gone, which is indistinguishable from "the app never started" to the
-# person reporting it. Diagnosing that used to mean asking the user to re-run
-# from a terminal they don't have open.
-#
-# Best-effort by design: a read-only or unwritable data directory must never
-# be the reason the app won't start, which is also why this is a handful of
-# lines rather than `logging` (whose FileHandler raises at construction).
+# Launch log. This process is started detached, and on Windows the console
+# closes with it, so a traceback from main.py is gone before it can be read.
+# Best-effort: an unwritable data directory must never stop the app starting,
+# which is why this is a few lines rather than `logging`.
 # ---------------------------------------------------------------------------
 
 _log_file = None  # type: ignore[var-annotated]  # open file, or None if unavailable
@@ -87,10 +78,7 @@ _log_path = None  # type: ignore[var-annotated]
 def open_log():
     """Start a fresh launch log, keeping the previous one beside it.
 
-    Two files rather than one growing file or one per launch: when a launch
-    fails, the pair you want is always "this launch" and "the one before it",
-    and a fixed pair needs no rotation policy, no size accounting, and no
-    cleanup that could itself fail.
+    Two files, so no rotation policy or cleanup that could itself fail.
     """
     global _log_file, _log_path
     try:
@@ -340,21 +328,10 @@ def apply_pending_update() -> None:
 def run_app(uv: str, forward_args: list[str]) -> int:
     """Launch the app, mirroring its output into the launch log.
 
-    Inherited stdio would leave nothing on disk, and this is the step whose
-    failures are least visible: the console window dies with the process, so
-    a traceback out of main.py is on screen for a moment and then
-    unrecoverable. Reading the pipe and echoing each line keeps the live
-    output a user watches *and* leaves the same text behind.
-
-    stderr is merged into stdout so the log reads in the order things
-    actually happened rather than in two interleaved halves; PYTHONUNBUFFERED
-    keeps that ordering honest, since the child's stdout is now a pipe and
-    would otherwise be block-buffered while stderr stayed unbuffered.
-
-    Only this child is piped. `uv sync` above keeps inherited stdio on
-    purpose -- it is the multi-minute step, and its progress bars redraw with
-    carriage returns that a line-oriented reader would turn into hundreds of
-    junk log lines.
+    Reading the pipe and echoing each line keeps the output live *and* on
+    disk. stderr is merged so the log reads in order; PYTHONUNBUFFERED keeps
+    it honest now that stdout is a pipe. `uv sync` stays on inherited stdio --
+    its progress bars would become junk log lines.
     """
     env = dict(os.environ)
     env["PYTHONUNBUFFERED"] = "1"
