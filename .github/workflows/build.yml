@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Callable so release.yml can gate a release on the same checks that
+  # guard main, rather than reimplementing them.
+  workflow_call:
+  # Manual runs: re-running the matrix against main without pushing anything,
+  # e.g. to check a flake or a newly released Python.
+  workflow_dispatch:
 
 permissions:
   contents: read
