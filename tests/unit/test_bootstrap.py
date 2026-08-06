@@ -31,12 +31,32 @@ def _load_bootstrap():
     return module
 
 
+def _fake_popen(returncode: int = 0, output: list[str] | None = None) -> MagicMock:
+    """Stand-in for the piped app process run_app() drives.
+
+    stdout has to be iterable rather than None for the tee loop to be
+    exercised at all, which is the half of run_app worth testing, and
+    closable because run_app releases the pipe before it waits.
+    """
+    proc = MagicMock()
+    proc.stdout = MagicMock()
+    proc.stdout.__iter__.return_value = iter(output or [])
+    proc.wait.return_value = returncode
+    return proc
+
+
 @pytest.fixture
 def bootstrap(monkeypatch):
     # Never let a test accidentally shell out to a real uv/sudo/network call.
     module = _load_bootstrap()
     monkeypatch.setattr(module.subprocess, "run", MagicMock())
     monkeypatch.setattr(module.subprocess, "call", MagicMock(return_value=0))
+    # The app launch is a Popen now, not a run: run_app() reads its output
+    # line by line so the launch log captures a traceback that would
+    # otherwise die with the console window.
+    monkeypatch.setattr(module.subprocess, "Popen", MagicMock(return_value=_fake_popen()))
+    # Keep the launch log out of the developer's real data directory.
+    monkeypatch.setattr(module, "open_log", lambda: None)
     return module
 
 
@@ -71,14 +91,10 @@ def test_main_consumes_auto_flags_and_forwards_the_rest(bootstrap, monkeypatch) 
     monkeypatch.setattr(bootstrap, "find_uv", MagicMock(return_value="/fake/uv"))
     monkeypatch.setattr(bootstrap, "apply_pending_update", MagicMock())
     monkeypatch.setattr(bootstrap, "ensure_linux_runtime_libs", MagicMock())
-    fake_run = MagicMock(returncode=0)
-    monkeypatch.setattr(bootstrap.subprocess, "run", MagicMock(return_value=fake_run))
 
     bootstrap.main(["--auto", "--some-app-flag", "value"])
 
-    calls = bootstrap.subprocess.run.call_args_list
-    launch_call = calls[-1]
-    launched_argv = launch_call.args[0]
+    launched_argv = bootstrap.subprocess.Popen.call_args.args[0]
     assert launched_argv[:2] == ["/fake/uv", "run"]
     assert "--auto" not in launched_argv
     assert "--some-app-flag" in launched_argv
@@ -165,6 +181,112 @@ def test_sync_failure_exits_with_a_readable_message(bootstrap, monkeypatch) -> N
     assert "Dependency sync failed" in str(excinfo.value)
 
 
+def test_run_app_mirrors_output_into_the_log(bootstrap, monkeypatch, capsys) -> None:
+    """Why the launch is piped at all: on Windows the console window closes
+    with the process, so a traceback out of main.py is on screen for an
+    instant and then gone. It has to reach the log as well -- and still reach
+    the screen, or a user watching a first launch sees nothing at all."""
+    recorded: list[str] = []
+    monkeypatch.setattr(bootstrap, "_record", recorded.append)
+    monkeypatch.setattr(
+        bootstrap.subprocess,
+        "Popen",
+        MagicMock(return_value=_fake_popen(3, ["Traceback (most recent call last):\n", "  ImportError: boom\n"])),
+    )
+
+    assert bootstrap.run_app("/fake/uv", []) == 3
+    assert "Traceback (most recent call last):" in recorded
+    assert "  ImportError: boom" in recorded
+    assert "ImportError: boom" in capsys.readouterr().out
+
+
+def test_run_app_reaps_the_child_when_the_echo_dies(bootstrap, monkeypatch) -> None:
+    """The echo is best-effort; reaping the child is not.
+
+    Redirected stdout defaults to the locale encoding with errors='strict',
+    so a single non-ASCII line -- apply_update.py logs one on every in-app
+    update -- used to raise straight out of the loop, skip wait(), and leave
+    the app running with nothing attached to it. That is the silent-launch
+    failure this whole path exists to report, produced by the reporting code.
+    """
+    proc = _fake_popen(0, ["applying 1.0.0 → 1.1.0\n"])
+    monkeypatch.setattr(bootstrap.subprocess, "Popen", MagicMock(return_value=proc))
+    monkeypatch.setattr(
+        bootstrap,
+        "_record",
+        MagicMock(side_effect=UnicodeEncodeError("cp1252", "→", 0, 1, "boom")),
+    )
+
+    assert bootstrap.run_app("/fake/uv", []) == 0
+    proc.wait.assert_called_once()
+
+
+def test_main_makes_its_streams_tolerate_non_ascii(bootstrap, monkeypatch) -> None:
+    """Fixing the reaping alone would still lose the rest of the output."""
+    seen: list[dict] = []
+    for name in ("stdout", "stderr"):
+        stream = MagicMock()
+        stream.reconfigure = lambda **kw: seen.append(kw)
+        monkeypatch.setattr(bootstrap.sys, name, stream)
+    monkeypatch.setattr(bootstrap, "find_uv", lambda: "/fake/uv")
+    monkeypatch.setattr(bootstrap, "apply_pending_update", lambda: None)
+    monkeypatch.setattr(bootstrap, "ensure_linux_runtime_libs", lambda *a, **kw: None)
+    monkeypatch.setattr(bootstrap, "run_app", lambda *a, **kw: 0)
+
+    bootstrap.main([])
+
+    assert seen == [{"errors": "replace"}, {"errors": "replace"}]
+
+
+def test_run_app_unbuffers_the_child(bootstrap, monkeypatch) -> None:
+    """The child's stdout is a pipe now, so it would be block-buffered by
+    default -- output would arrive in lumps, out of order with the stderr
+    merged into it, and be lost entirely if the process is killed."""
+    monkeypatch.setattr(bootstrap.subprocess, "Popen", MagicMock(return_value=_fake_popen()))
+
+    bootstrap.run_app("/fake/uv", [])
+
+    kwargs = bootstrap.subprocess.Popen.call_args.kwargs
+    assert kwargs["env"]["PYTHONUNBUFFERED"] == "1"
+    assert kwargs["stderr"] == bootstrap.subprocess.STDOUT
+
+
+def test_open_log_keeps_the_previous_launch(monkeypatch, tmp_path) -> None:
+    """A failing launch is usually reported after the user has already tried
+    again, so the log of the run that broke has to survive one more start."""
+    module = _load_bootstrap()
+    from sorter import paths
+
+    logs = tmp_path / "logs"
+    monkeypatch.setattr(paths, "logs_dir", lambda: logs)
+
+    assert module.open_log() == logs / "launch.log"
+    module.log("first launch")
+    module._log_file.close()
+
+    module.open_log()
+    module.log("second launch")
+    module._log_file.close()
+
+    assert "first launch" in (logs / "launch.prev.log").read_text(encoding="utf-8")
+    assert "second launch" in (logs / "launch.log").read_text(encoding="utf-8")
+
+
+def test_open_log_failure_never_blocks_the_launch(monkeypatch, tmp_path) -> None:
+    """An unwritable data directory is a reason to lose the log, never a
+    reason to refuse to start the app."""
+    module = _load_bootstrap()
+    from sorter import paths
+
+    def unwritable():
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(paths, "logs_dir", unwritable)
+
+    assert module.open_log() is None
+    module.log("still prints")  # must not raise
+
+
 def test_runtime_lib_probe_retries_for_each_known_library(bootstrap, monkeypatch) -> None:
     """The cv2 import reports only the first missing library, so a box short
     of both libGL and glib needs a second pass -- otherwise bootstrap installs
@@ -219,12 +341,81 @@ def test_python_version_pin_exists() -> None:
     assert (ROOT / ".python-version").is_file()
 
 
+def test_start_bat_does_not_trust_a_bare_python_on_path() -> None:
+    """A presence check on `python` is not enough on Windows, and the machine
+    this installer *creates* is the one it fails on.
+
+    Stock Windows ships an App Execution Alias at
+    ``%LOCALAPPDATA%\\Microsoft\\WindowsApps\\python.exe`` -- a zero-byte
+    reparse point with no Python behind it. ``where python`` finds it, so a
+    presence check passes; running it prints "Python was not found..." and
+    exits 9009. A winget-provisioned Python puts only its Launcher directory
+    on PATH, never Python's own, so on a freshly installed machine the stub
+    is the *only* thing that answers to `python`.
+
+    That combination shipped: the installer reported success, start.bat hit
+    the stub, and the console closed on the error before it could be read.
+    Verified by A/B-ing both shims under a PATH of System32 + the stub + the
+    Launcher: the old one printed the stub's message and never reached
+    bootstrap.py; this one ran it.
+
+    So the guard is: probe by *executing* an interpreter (the only thing that
+    distinguishes the stub), and try the `py` launcher, which is what is
+    actually on PATH after a winget install.
+    """
+    text = (ROOT / "start.bat").read_text(encoding="utf-8")
+    code = "\n".join(line for line in text.splitlines() if not line.strip().lower().startswith(("rem ", "@rem ")))
+
+    assert "py -3" in code, "start.bat must try the py launcher; a winget install leaves only it on PATH"
+    assert '-c "pass"' in code, (
+        "start.bat must probe by running an interpreter -- executing it is the only way to tell a "
+        "real Python from the Microsoft Store alias stub, which satisfies `where python` and then "
+        "exits 9009"
+    )
+    assert "where python" not in code, (
+        "`where python` is satisfied by the Store alias stub, which is exactly the failure this probe replaced"
+    )
+    assert "exit /b %RC%" in code, (
+        "start.bat must propagate the app's exit code; the version that ended in a bare `endlocal` "
+        "swallowed the stub's 9009, so nothing upstream could detect the failure either"
+    )
+    for invocation in ("py -3 ", "python -c", "%PY% "):
+        assert f"call {invocation}" in code, (
+            f"start.bat must `call {invocation.strip()}`: cmd invoking a .bat/.cmd shim without `call` "
+            "transfers control and never returns, so a shimmed interpreter (pyenv-win, which also "
+            "ships no py.exe) would end start.bat mid-probe with no output at all"
+        )
+    assert "pause" not in code, (
+        "the Start Menu shortcut opens this console minimised, so `pause` waits out of sight "
+        "forever; the failure notice has to time out on its own"
+    )
+
+
 @pytest.mark.parametrize("shim", ["start.sh", "start.bat"])
 def test_shims_are_thin_and_delegate_to_bootstrap(shim: str) -> None:
+    """The invariant is *what* the shim does, not how many lines it takes.
+
+    A shim may do only the two things bootstrap.py cannot do for itself:
+    find an interpreter to run it with, and report a failure to whoever is
+    watching. Provisioning -- venv creation, dependency install, uv -- is
+    bootstrap.py's job, and duplicating it per-platform is the mess this
+    file exists to prevent. The old check was a line count, which flagged
+    the interpreter probe start.bat needs to survive the Windows Store stub
+    while it would happily have passed a compact `pip install` one-liner.
+    """
     text = (ROOT / shim).read_text(encoding="utf-8")
     assert "bootstrap.py" in text
+
+    body = "\n".join(
+        line for line in text.splitlines() if line.strip() and not line.strip().startswith(("#", "REM ", "rem "))
+    ).lower()
+    for forbidden in ("uv sync", "uv run", "pip install", "venv", "requirements"):
+        assert forbidden not in body, (
+            f"{shim} contains '{forbidden}' -- provisioning belongs in bootstrap.py, not duplicated per-platform again."
+        )
+
     non_blank_lines = [line for line in text.splitlines() if line.strip()]
-    assert len(non_blank_lines) < 25, (
-        f"{shim} has grown past a thin shim ({len(non_blank_lines)} non-blank lines) "
-        "-- bootstrap logic belongs in bootstrap.py, not duplicated per-platform again."
+    assert len(non_blank_lines) < 45, (
+        f"{shim} has grown to {len(non_blank_lines)} non-blank lines; it should be doing "
+        "nothing but locating an interpreter and reporting failure."
     )
