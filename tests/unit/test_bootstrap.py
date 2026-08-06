@@ -324,9 +324,7 @@ def test_start_bat_does_not_trust_a_bare_python_on_path() -> None:
     actually on PATH after a winget install.
     """
     text = (ROOT / "start.bat").read_text(encoding="utf-8")
-    code = "\n".join(
-        line for line in text.splitlines() if not line.strip().lower().startswith(("rem ", "@rem "))
-    )
+    code = "\n".join(line for line in text.splitlines() if not line.strip().lower().startswith(("rem ", "@rem ")))
 
     assert "py -3" in code, "start.bat must try the py launcher; a winget install leaves only it on PATH"
     assert '-c "pass"' in code, (
@@ -335,8 +333,7 @@ def test_start_bat_does_not_trust_a_bare_python_on_path() -> None:
         "exits 9009"
     )
     assert "where python" not in code, (
-        "`where python` is satisfied by the Store alias stub, which is exactly the failure this "
-        "probe replaced"
+        "`where python` is satisfied by the Store alias stub, which is exactly the failure this probe replaced"
     )
     assert "exit /b %RC%" in code, (
         "start.bat must propagate the app's exit code; the version that ended in a bare `endlocal` "
@@ -360,14 +357,11 @@ def test_shims_are_thin_and_delegate_to_bootstrap(shim: str) -> None:
     assert "bootstrap.py" in text
 
     body = "\n".join(
-        line
-        for line in text.splitlines()
-        if line.strip() and not line.strip().startswith(("#", "REM ", "rem "))
+        line for line in text.splitlines() if line.strip() and not line.strip().startswith(("#", "REM ", "rem "))
     ).lower()
     for forbidden in ("uv sync", "uv run", "pip install", "venv", "requirements"):
         assert forbidden not in body, (
-            f"{shim} contains '{forbidden}' -- provisioning belongs in bootstrap.py, "
-            "not duplicated per-platform again."
+            f"{shim} contains '{forbidden}' -- provisioning belongs in bootstrap.py, not duplicated per-platform again."
         )
 
     non_blank_lines = [line for line in text.splitlines() if line.strip()]
