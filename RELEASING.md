@@ -28,15 +28,41 @@
      catches "meant 0.3.0, typed 0.2.0" before it becomes a tag.
    - `dry-run`: **defaults to on.** Shows the resolved version and generated notes in the job
      summary without pushing a tag or creating anything. Uncheck it to actually release.
-4. The workflow tags the chosen ref, generates changelog notes from commits since the last tag
-   via [git-cliff](https://git-cliff.org/) (`cliff.toml`), and opens a **draft** GitHub
-   Release with those notes. Nothing is published automatically -- review the draft and click
-   **Publish release** yourself.
-5. Publishing the release triggers `check-release.yml`, which validates the tag format and
-   target branch. (Publishing a release also triggers whatever's wired to `release: published`
-   in the future -- e.g. attaching build artifacts and, if enabled, publishing to PyPI.
-   Artifact attachment is live; PyPI publishing ships disabled, gated on the repo variable
-   `PYPI_PUBLISH_ENABLED`, which is unset by default.)
+4. The workflow resolves the version and generates changelog notes from commits since the last
+   tag via [git-cliff](https://git-cliff.org/) (`cliff.toml`), then puts both in the job
+   summary. **A dry run stops here** -- nothing else has happened.
+5. Lint and the full test matrix run, so what you approve next is already green.
+6. **The run pauses for approval.** The job that tags is bound to the `stable` environment, so
+   it sits pending until a required reviewer approves it on the run page. There is no draft to
+   publish by hand -- this is the confirmation step.
+7. On approval it tags the ref, builds, checks the artifacts (built version matches the tag;
+   the sdist is named and stamped as the updater expects), pushes the tag, and creates the
+   GitHub Release **as a prerelease with its artifacts already attached**.
+8. The Windows installer is run for real against that exact tag, and the resulting install has
+   to carry that exact version.
+9. Only then is the prerelease promoted to the latest release -- one flag flip, assets already
+   in place.
+10. Finally TestPyPI, then PyPI. Both are gated on the repo variable `PYPI_PUBLISH_ENABLED`,
+    unset by default, and each waits on its environment's reviewer.
+
+### Why a prerelease rather than a draft
+
+The release has to be verifiable before anyone can reach it, and those two pull in opposite
+directions. A draft is invisible to the verification too: `/releases/tags/<tag>` returns 404 to
+the unauthenticated fetch the installer makes, so there would be nothing to install.
+
+A prerelease is readable by exact tag, but `/releases/latest` excludes it -- and that is the
+endpoint both `sorter/updater.py` and `install-windows.ps1` use. So the release is fully
+testable while staying invisible to every real client until step 9.
+
+If verification fails the release stays a prerelease: nobody was served it, and PyPI never ran.
+The tag and prerelease are left in place for a human to delete or supersede -- fixing forward
+with a patch version is usually cleaner than deleting a pushed tag.
+
+This also closes a window that used to exist: artifacts were attached *after* publication, so
+for a short time (26 seconds, measured on 1.0.0) `/releases/latest` returned a release with no
+matching sdist, and clients silently fell back to the source archive and installed something
+reporting `0.0.0+unknown`.
 
 ## Versioning
 

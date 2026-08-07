@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 
 from sorter.db import Database
@@ -13,6 +12,8 @@ from sorter.repository import (
     HeadstampRepo,
     ModelRepo,
 )
+
+from ._legacy_db import columns, write_legacy_db
 
 
 def _new_db(tmp_path: Path) -> Database:
@@ -97,41 +98,26 @@ def test_deleting_model_cascades_parents(tmp_path: Path) -> None:
 
 
 def test_migration_adds_parent_id_to_v1_db(tmp_path: Path) -> None:
-    """A pre-existing v1 headstamps table (no parent_id) is upgraded in place."""
+    """A pre-existing v1 headstamps table (no parent_id) is upgraded in place.
+
+    The schema-level assertions about this migration live in
+    `test_db.py`; what this one adds is that the parent *relationship* works
+    end-to-end through the repos afterwards.
+    """
     db_path = tmp_path / "legacy.db"
-    # Hand-build a v1-shaped DB: headstamps without parent_id, no parents table.
-    conn = sqlite3.connect(db_path)
-    conn.executescript(
-        """
-        CREATE TABLE cartridges(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE);
-        CREATE TABLE models(
-            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
-            cartridge_id INTEGER NOT NULL, model_mode TEXT NOT NULL DEFAULT 'convnext_tiny'
-        );
-        CREATE TABLE headstamps(
-            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
-            model_id INTEGER NOT NULL, slot INTEGER NOT NULL DEFAULT 0,
-            UNIQUE(model_id, name)
-        );
-        INSERT INTO cartridges(id, name) VALUES (1, '9mm');
-        INSERT INTO models(id, name, cartridge_id, model_mode) VALUES (1, 'old', 1, 'convnext_tiny');
-        INSERT INTO headstamps(name, model_id, slot) VALUES ('WIN', 1, 0);
-        PRAGMA user_version = 1;
-        """
-    )
-    conn.commit()
-    conn.close()
+    write_legacy_db(db_path, user_version=1, with_parents_table=False)
 
     # Opening through Database should add the column and the parents table.
     db = Database(db_path)
     db.ensure_initialized()
 
-    cols = {r[1] for r in db.conn.execute("PRAGMA table_info(headstamps)").fetchall()}
-    assert "parent_id" in cols
+    assert "parent_id" in columns(db.conn, "headstamps")
 
     # The new table exists and the parent relationship works end-to-end.
     p = HeadstampParentRepo(db).add(1, "WIN-GROUP")
     win = next(h for h in HeadstampRepo(db).list_for_model(1) if h.name == "WIN")
     assert win.parent_id is None
     HeadstampRepo(db).set_parent(win.id, p.id)
-    assert HeadstampRepo(db).list_for_model(1)[0].parent_id == p.id
+    reread = {h.name: h for h in HeadstampRepo(db).list_for_model(1)}
+    assert reread["WIN"].parent_id == p.id
+    assert reread["FC"].parent_id is None, "only the linked headstamp is touched"
