@@ -480,6 +480,18 @@ extract the release archive by hand:
         # entirely, so nothing here can touch it.
         Write-Note "Installing to $Dest"
         Copy-Item -Path (Join-Path $src '*') -Destination $Dest -Recurse -Force
+
+        # Drop cached bytecode from the tree we just overwrote. Python
+        # invalidates a .pyc on source mtime+size, and an sdist normalises
+        # every mtime to the same constant -- so a same-size replacement (any
+        # version string, say '1.0.0' -> '0.3.0') passes both checks and the
+        # stale .pyc wins. The app then runs the previous release's code.
+        # .venv/.uv are skipped: their caches belong to packages this did not
+        # touch. sorter/apply_update.py gets this for free, since its stale
+        # sweep already removes .pyc the new tree does not ship.
+        Get-ChildItem -LiteralPath $Dest -Directory -Filter '__pycache__' -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notlike '*\.venv\*' -and $_.FullName -notlike '*\.uv\*' } |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     } finally {
         Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
     }
