@@ -104,13 +104,24 @@ try {
     }
 
     Write-Host "== neither a usable python nor a launcher =="
-    $out = & cmd /c "set ""PATH=$stub;$sys"" && ""$runner"" <nul 2>&1"
-    Assert-Reached 'refuses rather than hanging or silently passing' ($out -join "`n") $false
-    if (($out -join "`n") -notmatch 'No usable Python') {
-        Write-Host "  FAIL  expected the 'No usable Python' message" -ForegroundColor Red
-        $failures++
+    # System32 only, and never the launcher's own directory: on a GitHub
+    # runner py.exe sits in C:\Windows itself, so including %SystemRoot% here
+    # leaves the launcher reachable and the case proves nothing. Assert the
+    # premise before trusting the result.
+    $bare = @("$env:SystemRoot\System32") | Where-Object { $_ -ne $pyDir }
+    $barePath = (@($stub) + $bare) -join ';'
+    & cmd /c "set ""PATH=$barePath"" && where py >nul 2>&1"
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  SKIP  cannot hide the launcher from this PATH"
     } else {
-        Write-Host "  PASS  says why it gave up"
+        $out = & cmd /c "set ""PATH=$barePath"" && ""$runner"" <nul 2>&1"
+        Assert-Reached 'refuses rather than hanging or silently passing' ($out -join "`n") $false
+        if (($out -join "`n") -notmatch 'No usable Python') {
+            Write-Host "  FAIL  expected the 'No usable Python' message" -ForegroundColor Red
+            $failures++
+        } else {
+            Write-Host "  PASS  says why it gave up"
+        }
     }
 } finally {
     Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
