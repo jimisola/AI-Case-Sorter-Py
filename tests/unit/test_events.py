@@ -81,6 +81,9 @@ def test_drain_returns_the_count_dispatched() -> None:
 
 
 def test_drain_on_an_empty_bus_returns_zero() -> None:
+    # Distinct from the trailing `drain() == 0` in the two tests above: this is
+    # a bus that has never been posted to, so it covers the very first call the
+    # Tk timer makes at startup, before anything has been published.
     assert EventBus().drain() == 0
 
 
@@ -144,12 +147,12 @@ def test_unsubscribe_removes_only_the_named_handler() -> None:
 def test_unsubscribe_of_an_unknown_topic_or_handler_is_harmless() -> None:
     bus = EventBus()
     bus.unsubscribe("never/subscribed", print)
-    handler: list[object] = []
-    bus.subscribe("t", handler.append)
+    seen: list[object] = []
+    bus.subscribe("t", seen.append)
     bus.unsubscribe("t", print)  # registered handler untouched
     bus.post("t", 1)
     bus.drain()
-    assert handler == [1]
+    assert seen == [1]
 
 
 def test_a_raising_handler_is_swallowed_and_the_drain_continues() -> None:
@@ -199,13 +202,13 @@ def test_subscribing_during_a_drain_does_not_disturb_the_dispatch() -> None:
 
 def test_posts_from_worker_threads_are_all_delivered() -> None:
     bus = EventBus()
-    seen: list[int] = []
+    seen: list[object] = []
 
-    def record(payload: object) -> None:
-        assert isinstance(payload, int)
-        seen.append(payload)
-
-    bus.subscribe("t", record)
+    # NB: collect unconditionally and check the payloads *after* the drain. An
+    # `assert` inside the handler would be inert — drain() catches every
+    # handler exception (the behavior characterized above), so it could only
+    # ever surface indirectly as a missing element.
+    bus.subscribe("t", seen.append)
 
     def worker(base: int) -> None:
         for i in range(20):
@@ -218,4 +221,6 @@ def test_posts_from_worker_threads_are_all_delivered() -> None:
         t.join()
 
     assert bus.drain(max_items=1000) == 60
-    assert sorted(seen) == sorted(list(range(20)) + list(range(100, 120)) + list(range(200, 220)))
+    assert all(isinstance(x, int) for x in seen), "payloads round-trip unchanged"
+    numbers = [x for x in seen if isinstance(x, int)]
+    assert sorted(numbers) == sorted(list(range(20)) + list(range(100, 120)) + list(range(200, 220)))

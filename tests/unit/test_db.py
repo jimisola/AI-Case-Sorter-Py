@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from pathlib import Path
 
 import pytest
 
 from sorter.db import DEFAULT_CARTRIDGE_NAME, DEFAULT_MODEL_MODE, SCHEMA_VERSION, Database
+
+from ._legacy_db import LEGACY_MODEL_COLUMNS, columns, write_legacy_db
 
 
 def test_fresh_db_seeds_default_cartridge_and_model(tmp_path: Path) -> None:
@@ -100,105 +101,21 @@ def _user_version(db: Database) -> int:
     return db.conn.execute("PRAGMA user_version").fetchone()[0]
 
 
-def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
-    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
-
-
-def _write_legacy_db(path: Path, *, user_version: int, with_parents_table: bool) -> None:
-    """Lay down a pre-SCHEMA_VERSION database by hand.
-
-    Only the tables the column migrations touch are given their *old* shape:
-    `headstamps` without `parent_id`, and (optionally) `headstamp_parents`
-    without `slot`. Everything else is close enough to current that the
-    idempotent DDL leaves it alone.
-    """
-    conn = sqlite3.connect(path, isolation_level=None)
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.executescript(
-        """
-        CREATE TABLE cartridges (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL UNIQUE
-        );
-        CREATE TABLE models (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL,
-          cartridge_id INTEGER NOT NULL REFERENCES cartridges(id) ON DELETE RESTRICT,
-          model_mode TEXT NOT NULL
-            CHECK(model_mode IN ('convnext_tiny','convnext_small','convnext_base','convnext_large')),
-          model_type TEXT NOT NULL DEFAULT 'Standard'
-            CHECK(model_type IN ('Standard','ReadOnly','CommunityManaged')),
-          community_model_uid TEXT,
-          model_version INTEGER NOT NULL DEFAULT 1,
-          enable_image_processing INTEGER NOT NULL DEFAULT 1,
-          image_processing_json TEXT,
-          training_config_json TEXT,
-          ai_model_config_json TEXT,
-          use_primer_mask INTEGER NOT NULL DEFAULT 0,
-          hide_primer INTEGER NOT NULL DEFAULT 1,
-          primer_mask_size INTEGER NOT NULL DEFAULT 135,
-          last_training_date TEXT,
-          last_training_duration INTEGER NOT NULL DEFAULT 0,
-          trained_image_count INTEGER NOT NULL DEFAULT 0,
-          training_confusion_table TEXT,
-          feedback_loop_enabled INTEGER NOT NULL DEFAULT 0,
-          feedback_loop_confidence_floor INTEGER NOT NULL DEFAULT 95,
-          feedback_loop_upload_mode TEXT NOT NULL DEFAULT 'Manual',
-          model_path TEXT,
-          created_at TEXT NOT NULL DEFAULT (datetime('now')),
-          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-        -- Old shape: no parent_id column.
-        CREATE TABLE headstamps (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL,
-          model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE,
-          slot INTEGER NOT NULL DEFAULT 0,
-          UNIQUE(model_id, name)
-        );
-        CREATE TABLE settings (
-          key TEXT PRIMARY KEY,
-          value TEXT NOT NULL
-        );
-        """
-    )
-    if with_parents_table:
-        # Old shape: parents existed but carried no slot of their own.
-        conn.execute(
-            "CREATE TABLE headstamp_parents ("
-            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
-            "  name TEXT NOT NULL,"
-            "  model_id INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE,"
-            "  UNIQUE(model_id, name))"
-        )
-
-    cart_id = conn.execute("INSERT INTO cartridges(name) VALUES ('9mm')").lastrowid
-    model_id = conn.execute(
-        "INSERT INTO models(name, cartridge_id, model_mode) VALUES ('Legacy', ?, 'convnext_small')",
-        (cart_id,),
-    ).lastrowid
-    conn.execute("INSERT INTO headstamps(name, model_id, slot) VALUES ('WIN', ?, 3)", (model_id,))
-    conn.execute("INSERT INTO headstamps(name, model_id, slot) VALUES ('FC', ?, 5)", (model_id,))
-    if with_parents_table:
-        conn.execute("INSERT INTO headstamp_parents(name, model_id) VALUES ('Winchester', ?)", (model_id,))
-    conn.execute("INSERT INTO settings(key, value) VALUES ('api', ?)", (json.dumps({"model": "legacy"}),))
-    conn.execute(f"PRAGMA user_version = {user_version}")
-    conn.close()
-
-
 def test_migration_from_v1_adds_columns_and_keeps_rows(tmp_path: Path) -> None:
     db_path = tmp_path / "legacy.db"
-    _write_legacy_db(db_path, user_version=1, with_parents_table=False)
+    write_legacy_db(db_path, user_version=1, with_parents_table=False)
 
     db = Database(db_path)
     db.ensure_initialized()
 
     assert _user_version(db) == SCHEMA_VERSION
 
-    # The column migration added parent_id; the DDL created the tables that
-    # did not exist yet.
-    assert "parent_id" in _columns(db.conn, "headstamps")
-    assert {"slot", "model_id", "name"} <= _columns(db.conn, "headstamp_parents")
+    # The column migration added parent_id to the existing headstamps table.
+    assert "parent_id" in columns(db.conn, "headstamps")
+    # headstamp_parents and slot_templates did not exist at all, so these come
+    # from the idempotent CREATE TABLE IF NOT EXISTS pass, NOT from a column
+    # migration — _apply_column_migrations skips a table it has to create.
+    assert {"slot", "model_id", "name"} <= columns(db.conn, "headstamp_parents")
     assert db.conn.execute("SELECT COUNT(*) FROM slot_templates").fetchone()[0] == 0
 
     # Pre-existing data survives untouched, with a sane default for the new column.
@@ -217,15 +134,38 @@ def test_migration_from_v1_adds_columns_and_keeps_rows(tmp_path: Path) -> None:
     assert settings["api"]["model"] == "legacy"
 
 
+def test_an_existing_models_table_is_not_migrated_at_all(tmp_path: Path) -> None:
+    """Characterization: `models` has no column migration, so it stays legacy.
+
+    `_apply_column_migrations` only ever touches `headstamps.parent_id` and
+    `headstamp_parents.slot`, and the schema DDL is CREATE TABLE IF NOT EXISTS,
+    so a `models` table that predates `model_type` / `community_model_uid` /
+    the feedback-loop columns keeps its old shape forever. Every repository
+    read of those columns then raises OperationalError on such a database.
+
+    See issue #44, which proposes making the migration a real ordered ladder.
+    Flipping this assertion is the point of that fix.
+    """
+    db_path = tmp_path / "legacy.db"
+    write_legacy_db(db_path, user_version=1, with_parents_table=False)
+
+    db = Database(db_path)
+    db.ensure_initialized()
+
+    assert columns(db.conn, "models") == LEGACY_MODEL_COLUMNS
+    for missing in ("model_type", "community_model_uid", "feedback_loop_enabled"):
+        assert missing not in columns(db.conn, "models")
+
+
 def test_migration_adds_slot_to_an_existing_headstamp_parents_table(tmp_path: Path) -> None:
     db_path = tmp_path / "legacy.db"
-    _write_legacy_db(db_path, user_version=3, with_parents_table=True)
+    write_legacy_db(db_path, user_version=3, with_parents_table=True)
 
     db = Database(db_path)
     db.ensure_initialized()
 
     assert _user_version(db) == SCHEMA_VERSION
-    assert "slot" in _columns(db.conn, "headstamp_parents")
+    assert "slot" in columns(db.conn, "headstamp_parents")
 
     parents = db.dump_table("headstamp_parents")
     assert len(parents) == 1
@@ -235,20 +175,24 @@ def test_migration_adds_slot_to_an_existing_headstamp_parents_table(tmp_path: Pa
 
 def test_migration_is_idempotent_on_an_already_migrated_db(tmp_path: Path) -> None:
     db_path = tmp_path / "legacy.db"
-    _write_legacy_db(db_path, user_version=1, with_parents_table=True)
+    write_legacy_db(db_path, user_version=1, with_parents_table=True)
 
     db = Database(db_path)
     db.ensure_initialized()
     first = {
         table: db.dump_table(table) for table in ("cartridges", "models", "headstamps", "headstamp_parents", "settings")
     }
-    columns = {table: _columns(db.conn, table) for table in first}
+    cols = {table: columns(db.conn, table) for table in first}
 
-    db.ensure_initialized()
+    # A second *process* is the realistic repeat, not a second call on the same
+    # object: a fresh Database re-runs connect()'s WAL setup against a file that
+    # is already in WAL mode, which the same-object path never exercises.
+    reopened = Database(db_path)
+    reopened.ensure_initialized()
 
-    assert _user_version(db) == SCHEMA_VERSION
-    assert {table: db.dump_table(table) for table in first} == first
-    assert {table: _columns(db.conn, table) for table in first} == columns
+    assert _user_version(reopened) == SCHEMA_VERSION
+    assert {table: reopened.dump_table(table) for table in first} == first
+    assert {table: columns(reopened.conn, table) for table in first} == cols
 
 
 def test_ensure_initialized_does_not_downgrade_user_version(tmp_path: Path) -> None:

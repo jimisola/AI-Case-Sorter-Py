@@ -13,6 +13,8 @@ from sorter.repository import (
     SettingsRepo,
 )
 
+from ._legacy_db import columns, write_legacy_db
+
 
 def _new_db(tmp_path: Path) -> Database:
     db = Database(tmp_path / "test.db")
@@ -149,33 +151,17 @@ def test_routing_ignores_parents_when_disabled(tmp_path: Path) -> None:
 
 
 def test_parent_slot_column_migrates_on_v2_db(tmp_path: Path) -> None:
-    """A v2 headstamp_parents table (no slot column) gains it on open."""
-    import sqlite3
+    """A v2 headstamp_parents table (no slot column) gains it on open.
 
+    The schema-level assertions (column present, existing rows backfilled to
+    0) live in `test_db.py`; what this one adds is that the slot is writable
+    through the repo afterwards.
+    """
     db_path = tmp_path / "v2.db"
-    conn = sqlite3.connect(db_path)
-    conn.executescript(
-        """
-        CREATE TABLE cartridges(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE);
-        CREATE TABLE models(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
-            cartridge_id INTEGER NOT NULL, model_mode TEXT NOT NULL DEFAULT 'convnext_tiny');
-        CREATE TABLE headstamp_parents(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
-            model_id INTEGER NOT NULL, UNIQUE(model_id, name));
-        CREATE TABLE headstamps(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
-            model_id INTEGER NOT NULL, slot INTEGER NOT NULL DEFAULT 0,
-            parent_id INTEGER, UNIQUE(model_id, name));
-        INSERT INTO cartridges(id, name) VALUES (1, '9mm');
-        INSERT INTO models(id, name, cartridge_id) VALUES (1, 'm', 1);
-        INSERT INTO headstamp_parents(id, name, model_id) VALUES (1, 'Brass', 1);
-        PRAGMA user_version = 2;
-        """
-    )
-    conn.commit()
-    conn.close()
+    write_legacy_db(db_path, user_version=2, with_parents_table=True, with_parent_id=True)
 
     db = Database(db_path)
     db.ensure_initialized()
-    cols = {r[1] for r in db.conn.execute("PRAGMA table_info(headstamp_parents)").fetchall()}
-    assert "slot" in cols
+    assert "slot" in columns(db.conn, "headstamp_parents")
     HeadstampParentRepo(db).update_slot(1, 4)
     assert HeadstampParentRepo(db).get(1).slot == 4
