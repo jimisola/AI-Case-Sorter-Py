@@ -360,7 +360,6 @@ class TrainTab(ttk.Frame):
         # Feeding the model the wrong resolution silently degrades
         # predictions, so pass the trained size through to local_inference.
         train_image_size = int(active.training_config.image_size) if active and active.training_config else None
-        api_cfg = dict(self.config.api)
 
         def _work():
             import time
