@@ -7,10 +7,8 @@ name: Verify Installer
 # repo with none yet it would only ever hit the "no release, fall back to
 # the source zip" branch. So this gets its own trigger rather than
 # build.yml's blanket one: path-filtered on PR/push (fast feedback exactly
-# when the script itself changes, near-zero cost otherwise), plus
-# release:published -- the single most realistic moment, since the default
-# checkout for that event resolves to the tagged commit, testing the
-# installer as it existed at release time against the release just cut.
+# when the script itself changes, near-zero cost otherwise), plus a
+# workflow_call so release.yml can run it against the release it just cut.
 #
 # The workflow file is in its own path filter: without that, a PR editing
 # only this file never runs the job it changes.
@@ -24,8 +22,33 @@ on:
     paths:
       - "installer/**"
       - ".github/workflows/installer-smoke.yml"
-  release:
-    types: [published]
+
+  # Called by release.yml, rather than triggering on release:published.
+  #
+  # Two reasons it cannot be a release trigger. The sdist this exercises is
+  # attached by the release job, and release:published fires alongside that
+  # upload -- the race lands on the "no matching asset, fall back to the source
+  # archive" branch and fails on the missing _version.py, which is exactly what
+  # happened on the 1.0.0 rename. And the release under test is a *prerelease*
+  # at this point, which /releases/latest deliberately excludes, so the default
+  # installer path would verify the previous release and pass while proving
+  # nothing about this one.
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to verify. Omit to test whatever /releases/latest resolves to."
+        required: false
+        type: string
+
+  # Manual runs, with the same optional pin. Useful when /releases/latest is not
+  # the release you want to check -- including the case where it predates a
+  # package rename and so carries an sdist the current installer cannot match.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to verify. Omit to test whatever /releases/latest resolves to."
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -57,11 +80,48 @@ jobs:
       # calls out by name for its BOM/codepage decoding quirks -- pwsh would
       # not exercise that at all.
       #
+      # Cheap up-front diagnosis. When this job fails it is usually not the
+      # installer being broken but the release it resolved to not carrying an
+      # sdist under the name the installer matches -- after a package rename
+      # every release cut before it is in exactly that state, and the symptom
+      # is an unhelpful "sorter\_version.py is missing" three steps later.
+      - name: Show the release under test
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [ -n "$TAG" ]; then
+            ENDPOINT="releases/tags/$TAG"
+          else
+            ENDPOINT="releases/latest"
+          fi
+          echo "Resolving $ENDPOINT"
+          gh api "repos/${GITHUB_REPOSITORY}/${ENDPOINT}" \
+            --jq '"tag: \(.tag_name)   prerelease: \(.prerelease)", "assets:", (.assets[].name | "  - \(.)")' \
+            || echo "::warning::No release at $ENDPOINT -- the installer will fall back to the source archive and this job will fail."
+
       # -NoLaunch keeps this scoped to install + extract; the full
       # bootstrap.py/uv-sync path is launcher-smoke's job, not this one's.
+      #
+      # -Version pins the release under test when one is passed in. Without it
+      # the script resolves /releases/latest, which is the wrong target twice
+      # over during a release: the new release is still a prerelease and so
+      # excluded from `latest`, and any concurrent release would decide what
+      # gets tested. On the path/PR triggers no tag is passed and `latest` is
+      # the right answer.
       - name: Run the installer for real
         shell: powershell
-        run: .\installer\install-windows.ps1 -Repo $env:GITHUB_REPOSITORY -NoLaunch
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ($env:TAG) {
+            Write-Host "Verifying release $env:TAG"
+            .\installer\install-windows.ps1 -Repo $env:GITHUB_REPOSITORY -Version $env:TAG -NoLaunch
+          } else {
+            Write-Host "Verifying whatever /releases/latest resolves to"
+            .\installer\install-windows.ps1 -Repo $env:GITHUB_REPOSITORY -NoLaunch
+          }
 
       # The real assertion: not "the script exited 0" but "a working install
       # landed with the version the sdist actually carries" -- proves the
@@ -73,6 +133,8 @@ jobs:
       # The rejection half is the earlier step's job.
       - name: Verify the install
         shell: powershell
+        env:
+          TAG: ${{ inputs.tag }}
         run: |
           $dest = "$env:LOCALAPPDATA\Programs\CaseSorter"
           if (-not (Test-Path "$dest\main.py")) {
@@ -87,7 +149,21 @@ jobs:
           $content = Get-Content $versionFile -Raw
           Write-Host "----- sorter/_version.py -----"
           Write-Host $content
-          if ($content -notmatch "__version__\s*=.*'[0-9]") {
+          if ($content -notmatch "__version__\s*=.*'([0-9][^']*)'") {
             Write-Error "sorter/_version.py does not carry a real version."
             exit 1
+          }
+          $installed = $Matches[1]
+
+          # When a tag was passed, "a real version" is not enough -- it has to
+          # be *this* release. Anything else means the installer matched some
+          # other release's asset, which is precisely the silent degradation
+          # this job exists to catch.
+          if ($env:TAG) {
+            $expected = $env:TAG -replace '^v', ''
+            if ($installed -ne $expected) {
+              Write-Error "Installed version '$installed' is not the release under test ('$expected')."
+              exit 1
+            }
+            Write-Host "Installed version matches the release under test: $installed"
           }
