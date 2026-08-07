@@ -373,6 +373,15 @@ jobs:
           }
           Write-Host "Confirmed: ``py -3`` works, so start.bat has a route to take."
 
+          # Probe the checked-out start.bat, not the one the release shipped.
+          # The installed tree supplies a real bootstrap.py and app to launch
+          # into, but the shim under test has to be this commit's -- otherwise
+          # the check can only pass once a release already carries the fix,
+          # and reports a regression on the very PR that removes it.
+          Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'start.bat') `
+                    -Destination (Join-Path $dest 'start.bat') -Force
+          Write-Host "Testing this commit's start.bat against the installed app."
+
           $log = Join-Path $env:RUNNER_TEMP 'launch.log'
           # Through cmd.exe: -NoNewWindow forces UseShellExecute=false, and
           # CreateProcess cannot run a .bat as an image.
