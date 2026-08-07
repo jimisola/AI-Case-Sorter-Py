@@ -203,11 +203,17 @@ def test_word_merely_containing_ok_fires_on_ok(broker: SerialBroker, sink: _Sink
     assert sink.response == []
 
 
-@pytest.mark.parametrize("line", ["abandoned", "sensor calibration done at 12:00"])
+@pytest.mark.parametrize("line", ["abandoned", "sensor calibration done at 12:00", "undone"])
 def test_line_merely_containing_done_fires_on_done(broker: SerialBroker, sink: _Sink, line: str) -> None:
     # Characterization: "done" is checked first and unanchored, so a diagnostic
     # line that merely mentions it satisfies a pending feed/sort wait. See
     # issue #34.
+    #
+    # "undone" is the case worth keeping of these: it is the semantic
+    # *inversion* — a board reporting that an operation was reversed reads as
+    # one that completed. The "ok" branch has a dedicated test for its
+    # equivalent ("error: broken sensor"); this is the "done" branch's, and
+    # "done" is the one a pending feed_one()/sort_and_move() waits on.
     _feed(broker, line + "\n")
     assert sink.done == [line]
     assert sink.response == []
