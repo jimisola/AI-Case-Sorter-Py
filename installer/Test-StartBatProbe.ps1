@@ -133,3 +133,7 @@ if ($failures) {
     exit 1
 }
 Write-Host "all checks passed"
+# Explicit: the shell GitHub wraps this in propagates $LASTEXITCODE, which
+# still holds whatever the last `cmd /c` probe returned -- a passing run
+# reported failure without it.
+exit 0
