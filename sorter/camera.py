@@ -214,13 +214,13 @@ def enumerate_devices(max_index: int = 10, probe_timeout_s: float = 1.5) -> list
     for idx in _candidate_indices(max_index):
         result: list[bool] = [False]
 
-        def _probe(i: int = idx) -> None:
+        def _probe(i: int = idx, res: list[bool] = result) -> None:
             cap = cv2.VideoCapture(i, backend)
             try:
                 if cap.isOpened():
                     ok, _ = cap.read()
                     if ok:
-                        result[0] = True
+                        res[0] = True
             finally:
                 cap.release()
 
@@ -291,7 +291,7 @@ def list_cameras_with_metadata(max_index: int = 10, probe_timeout_s: float = 2.5
     for idx in candidates:
         result: dict = {"opened": False, "resolutions": [], "name": ""}
 
-        def _probe(i: int = idx) -> None:
+        def _probe(i: int = idx, res: dict = result) -> None:
             cap = cv2.VideoCapture(i, backend)
             try:
                 if not cap.isOpened():
@@ -308,8 +308,8 @@ def list_cameras_with_metadata(max_index: int = 10, probe_timeout_s: float = 2.5
                 ok, _ = cap.read()
                 if not ok:
                     return
-                result["opened"] = True
-                result["resolutions"] = resolutions
+                res["opened"] = True
+                res["resolutions"] = resolutions
             finally:
                 cap.release()
 

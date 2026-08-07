@@ -86,24 +86,35 @@ select = [
 ignore = [
     "E501",  # line length is enforced by the formatter, not the linter
 ]
-# Pre-existing findings as of the tool-adoption PR: real, but not a formatting
-# concern, and fixing them changes behavior (closures, exception chaining, loop
-# variables), so they're deferred to a follow-up review pass.
+# Findings are pinned per-file below rather than switched off repo-wide: scoped
+# like this the rest of the tree keeps the check, so a *new* occurrence still
+# fails CI instead of landing silently. The batch the tool-adoption PR deferred
+# (B904, B007, F841) has since been fixed and removed from the table; what is
+# left is kept on purpose, each with its reason.
 #
 # Pinned per-file rather than disabled repo-wide, which is what they were
-# first written as. B023 (closure doesn't bind the loop variable) and F841 are
-# bug classes, not style: switched off globally they'd also silence every
+# first written as. B023 (closure doesn't bind the loop variable) -- since
+# cleared, which is this table working as intended -- and F841 are bug
+# classes, not style: switched off globally they'd also silence every
 # *new* occurrence anywhere in the tree, which is the opposite of "deferred" --
 # it's "permanently invisible". Scoped like this the deferral stays honest, the
 # rest of the codebase keeps the check, and the list shrinks visibly as the
 # follow-up lands. Ruff errors on a per-file-ignore whose file no longer trips
 # the rule only under --extend-select preview settings, so re-check with
 # `ruff check --select ...` when clearing one out.
+# Ruff never flags a per-file-ignore whose file no longer trips the rule, so a
+# stale entry here is invisible -- no mode of the linter reports one. When
+# clearing one out, re-check with
+# `ruff check --isolated --target-version py312 --select ...`: --isolated
+# bypasses this table, and --target-version puts back the one setting it
+# discards that matters here. Without it, version-gated rules (UP042) report a
+# false pass and the entry looks stale when it is still live.
 
 [tool.ruff.lint.per-file-ignores]
 # Must run on whatever ancient interpreter the user's system provides, since
 # its job is to provision a newer one. pyupgrade rewrites would silently
-# break it on exactly the systems it exists to serve.
+# break it on exactly the systems it exists to serve. Preventive, not deferred:
+# the file is clean today, and this entry is what keeps it that way.
 "bootstrap.py" = ["UP"]
 # Contains an embedded HTML/JS template as a verbatim port of the legacy
 # WinForms app's report (see CLAUDE.md). Whitespace inside that string is
@@ -111,15 +122,13 @@ ignore = [
 "sorter/eval_report.py" = ["W291", "W293"]
 
 # --- deferred pre-existing findings (see the note above [tool.ruff.lint]) ---
-"sorter/camera.py" = ["B023"]                     # backend-probe closures
 "sorter/community_api.py" = ["B904"]              # raise without `from` in except
 "sorter/evaluator.py" = ["B007"]                  # unused loop control variable
 "sorter/local_inference.py" = ["F841"]            # unused local
+# --- kept on purpose (see the note above [tool.ruff.lint]) ---
+"sorter/camera.py" = ["B023"]                     # backend-probe closures
 "sorter/model_io.py" = ["UP042"]                  # str+Enum -> StrEnum changes behavior subtly
-"sorter/ui/dialog_training_config.py" = ["B007"]  # unused loop control variable
-"sorter/ui/tab_train.py" = ["F841"]               # unused local
-"tests/unit/test_db.py" = ["B017"]                     # assert-raises-Exception, deliberate here
-"tests/unit/test_repository.py" = ["F841"]             # unused fixture local
+"tests/unit/test_db.py" = ["B017"]                # assert-raises-Exception, deliberate here
 
 [tool.ruff.lint.isort]
 known-first-party = ["sorter"]
