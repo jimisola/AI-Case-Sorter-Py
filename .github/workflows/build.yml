@@ -87,6 +87,16 @@ jobs:
         with:
           python-version: "3.14"
 
+      # Lives here rather than in installer-smoke.yml: it tests this commit's
+      # start.bat, so it must run whenever start.bat changes, and that workflow
+      # is path-filtered to installer/**. It also needs no release, which is
+      # what let the installer-smoke version of this check only pass once a
+      # release already carried the fix.
+      - name: start.bat interpreter probe (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: .\installer\Test-StartBatProbe.ps1
+
       # xvfb only -- deliberately NOT libgl1/glib. Pre-installing those would
       # test a runner that already has them, not bootstrap.py's own
       # detect-and-offer-to-install logic. xvfb just gives Tk a display to
