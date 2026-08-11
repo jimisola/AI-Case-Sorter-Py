@@ -16,7 +16,7 @@
 
     Plain PowerShell rather than Pester: the Windows runners ship an ancient
     Pester 3.x whose syntax differs sharply from 5.x, and this needs no
-    fixtures or mocking. Run:  pwsh -File installer/Test-ArchiveEntryValidation.ps1
+    fixtures or mocking. Run:  pwsh -File installer/tests/Test-ArchiveEntryValidation.ps1
 #>
 
 Set-StrictMode -Version Latest
@@ -24,7 +24,7 @@ $ErrorActionPreference = 'Stop'
 
 # Dot-source the installer for its functions only; the guard on its main
 # block keeps it from trying to install anything.
-. (Join-Path $PSScriptRoot 'install-windows.ps1')
+. (Join-Path (Split-Path $PSScriptRoot -Parent) 'install-windows.ps1')
 
 $script:Failures = 0
 $script:Passes = 0

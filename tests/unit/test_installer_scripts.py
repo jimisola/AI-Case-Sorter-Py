@@ -2,7 +2,7 @@
 
 These can't be executed here (no Windows), so the suite enforces the two
 properties that silently broke them once already. What the scripts actually
-*do* is covered where it can be: installer/Test-ArchiveEntryValidation.ps1
+*do* is covered where it can be: installer/tests/Test-ArchiveEntryValidation.ps1
 runs the real entry validation under Windows PowerShell in the Verify
 Installer workflow.
 
@@ -22,9 +22,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 INSTALLER = ROOT / "installer"
-# Test-ArchiveEntryValidation.ps1 is held to the same rules: it is executed by
-# the same Windows PowerShell 5.1 that the encoding rule below exists for.
-SCRIPTS = ("install-windows.ps1", "install-windows.bat", "Test-ArchiveEntryValidation.ps1")
+# Paths relative to installer/. tests/Test-ArchiveEntryValidation.ps1 is held to
+# the same rules: it is executed by the same Windows PowerShell 5.1 that the
+# encoding rule below exists for.
+SCRIPTS = ("install-windows.ps1", "install-windows.bat", "tests/Test-ArchiveEntryValidation.ps1")
 
 
 @pytest.mark.parametrize("name", SCRIPTS)
