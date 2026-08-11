@@ -74,7 +74,7 @@ jobs:
       # never that it rejects bad ones -- that half is only tested here.
       - name: Archive-entry validation
         shell: powershell
-        run: .\installer\Test-ArchiveEntryValidation.ps1
+        run: .\installer\tests\Test-ArchiveEntryValidation.ps1
 
       # -Repo $env:GITHUB_REPOSITORY, not the script's own hardcoded default:
       # makes this self-adapting to wherever it runs -- the fork's own real
