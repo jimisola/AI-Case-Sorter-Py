@@ -99,13 +99,26 @@ jobs:
       # Captured before the release job creates the new tag -- a lookup run
       # after that would find the just-created tag instead.
       #
-      # Stable tags only, mirroring cliff.toml's tag_pattern: git-cliff ignores
-      # release candidates, so a `git describe` that reported the last rc would
-      # make the summary's commit list start somewhere the release notes don't.
+      # This labels the boundary the notes were generated from, and the summary
+      # is only worth reading if the two agree -- the reviewer's check is
+      # "anything in the commit list but missing from the notes was dropped for
+      # a reason", which means nothing if the two spans differ. So it selects
+      # tags exactly as git-cliff does, and both differences from `git describe`
+      # are deliberate:
+      #
+      # The grep mirrors cliff.toml's tag_pattern, so a release candidate is not
+      # reported as the previous release -- git-cliff does not treat it as one.
+      #
+      # No `--merged`, because git-cliff does not require the tag to be an
+      # ancestor of HEAD. Verified against 2.13.1: with 0.4.0 on a diverged
+      # branch, `git describe` and `--merged` both find nothing while
+      # --bumped-version still computes 0.5.0 from it. Filtering by reachability
+      # would print "(none yet)" and dump 40 unrelated commits beside notes that
+      # actually start at 0.4.0.
       - name: Record previous tag
         id: previous
         run: |
-          PREV="$(git tag --list --merged HEAD --sort=-version:refname | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -1)"
+          PREV="$(git tag --list --sort=-version:refname | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -1)"
           echo "tag=$PREV" >> "$GITHUB_OUTPUT"
 
       - name: Resolve version
