@@ -7,7 +7,7 @@ means non-developers never install a 60 MB dependency to receive a 1 MB
 update.
 
 The downloaded archive is the project's own **sdist** (`ai_case_sorter-
-<tag>.tar.gz`) — the same file `uv build`/`publish.yml` already produce and
+<tag>.tar.gz`) — the same file `uv build`/`release.yml` already produce and
 attach to every release, not a separately built artifact. hatch-vcs's build
 hook stamps `src/sorter/_version.py` into every build target, so the sdist
 already carries the correct version with nothing extra to keep in sync.
@@ -131,17 +131,72 @@ class PendingUpdate:
 # ----- version comparison -----------------------------------------------------
 
 
-def _parse_version(text: str) -> tuple[tuple[int, ...], int]:
-    """Parse ``v1.2.3`` / ``1.2.3-rc1`` into a sortable key.
+# PEP 440's release segment, in the spellings a tag can actually carry. The
+# separators are optional because PEP 440 accepts `1.2.0rc1`, `1.2.0-rc1` and
+# `1.2.0.rc.1` as the same version -- releases here use the first (canonical)
+# form, since hatchling names the sdist from the normalized version.
+_RELEASE_SEGMENTS_RE = re.compile(
+    r"^(?P<core>[0-9]+(?:\.[0-9]+)*)"
+    r"(?:[-_.]?(?P<pre>a|b|c|rc|alpha|beta|pre|preview)[-_.]?(?P<pre_n>[0-9]*))?"
+    r"(?:[-_.]?(?:post|rev|r)[-_.]?(?P<post_n>[0-9]*))?"
+    r"(?:[-_.]?dev[-_.]?(?P<dev_n>[0-9]*))?"
+    r"(?P<local>\+.*)?$",
+    re.IGNORECASE,
+)
 
-    Returns ``(numbers, rank)`` where rank is 0 for a pre-release and 1 for a
-    final release, so ``1.2.0-rc1 < 1.2.0``. Non-numeric junk is ignored
-    rather than raising — a malformed upstream tag should read as "not newer",
-    never as a crash on startup.
+# Ordered worst-to-best. `c` is PEP 440's alias for `rc`; `pre`/`preview` alias
+# `rc` too. Only the ordering matters, not the values.
+_RANK_DEV = 0
+_RANK_PRE = {"a": 1, "alpha": 1, "b": 2, "beta": 2, "c": 3, "rc": 3, "pre": 3, "preview": 3}
+_RANK_FINAL = 4
+_RANK_POST = 5
+
+
+def _parse_version(text: str) -> tuple[tuple[int, ...], int, int]:
+    """Parse ``v1.2.3`` / ``1.2.3rc1`` into a sortable key.
+
+    Returns ``(numbers, rank, segment)``:
+
+    * ``rank`` orders the PEP 440 release segments — ``dev < a < b < rc <
+      final < post`` — so ``1.2.0rc1 < 1.2.0``.
+    * ``segment`` is that segment's own number, so ``rc2 > rc1`` and
+      ``rc10 > rc9`` (numeric, not lexicographic).
+
+    Sniffing for a ``-`` was not enough: releases are tagged in PEP 440's
+    canonical form (``1.2.0rc1``, no separator, because hatchling names the
+    sdist from the normalized version), which that read as a plain ``1.2.0``.
+    An rc install was then told it was up to date forever.
+
+    A local version (``0.0.0+unknown``, what an install with no
+    ``sorter/_version.py`` reports) ranks as ``dev``. PEP 440 sorts a local
+    version *above* its release, but for an updater "this is a build, not a
+    release" is the useful reading: it keeps offering the real release rather
+    than going quiet.
+
+    Non-numeric junk is ignored rather than raising — a malformed upstream
+    tag should read as "not newer", never as a crash on startup.
     """
     s = (text or "").strip().lstrip("vV")
-    pre = 0 if any(c in s for c in "-+") else 1
-    core = s.split("-", 1)[0].split("+", 1)[0]
+    match = _RELEASE_SEGMENTS_RE.match(s)
+
+    if match is None:
+        # Not PEP 440 at all. Salvage a leading dotted number if there is one,
+        # so `1.2.3-nightly` still compares by its numbers, and rank the
+        # unrecognized tail lowest: "I can't read this" should never present
+        # as newer than the release it names.
+        core, rank, segment = s.split("-", 1)[0].split("+", 1)[0], _RANK_DEV, 0
+    else:
+        core = match.group("core")
+        # Ordered as PEP 440 applies them: dev beats everything to its left,
+        # and a local version means "a build of", not "a release of".
+        if match.group("dev_n") is not None or match.group("local"):
+            rank, segment = _RANK_DEV, _segment_number(match.group("dev_n"))
+        elif match.group("pre"):
+            rank, segment = _RANK_PRE[match.group("pre").lower()], _segment_number(match.group("pre_n"))
+        elif match.group("post_n") is not None:
+            rank, segment = _RANK_POST, _segment_number(match.group("post_n"))
+        else:
+            rank, segment = _RANK_FINAL, 0
 
     nums: list[int] = []
     for part in core.split("."):
@@ -153,20 +208,25 @@ def _parse_version(text: str) -> tuple[tuple[int, ...], int]:
         if not digits:
             break
         nums.append(int(digits))
-    return tuple(nums), pre
+    return tuple(nums), rank, segment
+
+
+def _segment_number(digits: str | None) -> int:
+    """PEP 440 lets the number be omitted (``1.2.0rc`` == ``1.2.0rc0``)."""
+    return int(digits) if digits else 0
 
 
 def is_newer(candidate: str, current: str) -> bool:
     """True when ``candidate`` is a strictly newer version than ``current``."""
-    cand_nums, cand_pre = _parse_version(candidate)
-    cur_nums, cur_pre = _parse_version(current)
+    cand_nums, cand_rank, cand_seg = _parse_version(candidate)
+    cur_nums, cur_rank, cur_seg = _parse_version(current)
     if not cand_nums:
         return False
     # Zero-pad so 1.2 and 1.2.0 compare equal.
     width = max(len(cand_nums), len(cur_nums))
     cand_padded = cand_nums + (0,) * (width - len(cand_nums))
     cur_padded = cur_nums + (0,) * (width - len(cur_nums))
-    return (cand_padded, cand_pre) > (cur_padded, cur_pre)
+    return (cand_padded, cand_rank, cand_seg) > (cur_padded, cur_rank, cur_seg)
 
 
 def current_version() -> str:
@@ -207,9 +267,9 @@ _TAG_RE = re.compile(r"v?[0-9A-Za-z][0-9A-Za-z._-]{0,63}")
 
 
 def _strip_tag_prefix(tag: str) -> str:
-    """Drop one leading lowercase ``v``, exactly as the publish workflow does.
+    """Drop one leading lowercase ``v``, exactly as the release workflow does.
 
-    This has to mirror ``${TAG#v}`` in publish.yml character for character,
+    This has to mirror ``${TAG#v}`` in release.yml character for character,
     because the result is used to build the asset name that ``_pick_asset``
     matches exactly — any disagreement means the client silently misses the
     real asset and falls back to the source archive.
@@ -233,10 +293,10 @@ def _expected_asset_name(tag: str) -> str:
 
     Hatchling writes the underscore form of "ai-case-sorter" per PEP 625
     (not PEP 503 -- that normalizes *to* hyphens, and governs index URLs
-    rather than sdist filenames). This is the file publish.yml already
+    rather than sdist filenames). This is the file release.yml already
     attaches; there is no separate app-archive asset to build.
 
-    The version half is only equal to the tag because publish.yml asserts
+    The version half is only equal to the tag because release.yml asserts
     it: hatchling emits the PEP 440 *normalized* version, so a tag like
     ``1.2.3-rc1`` would be built as ``1.2.3rc1`` and never match this. That
     assertion failing the release is the intended outcome -- without it the
