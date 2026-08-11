@@ -121,7 +121,7 @@ def test_partial_line_is_held_until_the_terminator_arrives(broker: SerialBroker,
     assert sink.waiting == ["waiting"]
 
 
-def test_reader_loop_stamps_a_newline_onto_a_partial_read(broker: SerialBroker, sink: _Sink) -> None:
+def test_reader_loop_stamps_a_newline_onto_a_partial_read(broker: SerialBroker, sink: _Sink, monkeypatch) -> None:
     """Characterization: a timed-out mid-line read is dispatched, not buffered.
 
     `_reader_loop` appends `line + "\\n"` whenever pyserial's `readline()`
@@ -132,7 +132,7 @@ def test_reader_loop_stamps_a_newline_onto_a_partial_read(broker: SerialBroker, 
     a line split mid-word is how a fragment could be misrouted. See issue #34.
     """
     fake = _PartialReadSerial(["waiti"], broker._stop_event)
-    broker._sp = fake  # type: ignore[assignment]
+    monkeypatch.setattr(broker, "_sp", fake)
 
     broker._reader_loop()
 
@@ -238,7 +238,7 @@ def test_a_diagnostic_line_does_not_satisfy_a_pending_feed_one(
     completed. A real `done` line afterwards must still satisfy it. See #34.
     """
     fake = _WritableSerial()
-    broker._sp = fake  # type: ignore[assignment]
+    monkeypatch.setattr(broker, "_sp", fake)
     # Keep the "wait must expire" half fast; the timeout's value is not under test.
     monkeypatch.setattr(serial_broker, "FEED_TIMEOUT_S", 0.3)
 
