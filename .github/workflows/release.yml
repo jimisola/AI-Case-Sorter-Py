@@ -357,9 +357,15 @@ jobs:
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          BUILT="$(grep -oP "(?<=^__version__ = version = ')[^']+" sorter/_version.py)"
+          # Path kept in lock-step with `version-file` in pyproject.toml's
+          # [tool.hatch.build.hooks.vcs]; the package moved under src/ and this
+          # line did not follow it, so every release since would have failed
+          # here. `head -1` keeps the pipeline's exit status at 0 when the file
+          # is missing, so `set -e` cannot abort before the comparison below
+          # reports something a reader can act on.
+          BUILT="$(grep -hoP "(?<=^__version__ = version = ')[^']+" src/sorter/_version.py 2>/dev/null | head -1)"
           if [ "$BUILT" != "$VERSION" ]; then
-            echo "::error::Built version '$BUILT' does not match '$VERSION' -- refusing to release."
+            echo "::error::Built version '${BUILT:-<src/sorter/_version.py not found>}' does not match '$VERSION' -- refusing to release."
             exit 1
           fi
 
