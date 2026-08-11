@@ -40,8 +40,44 @@ def _isolated_data_root(monkeypatch, tmp_path: Path):
         ("0.2.0-rc1", "0.1.0", True),  # prerelease still newer than 0.1.0
         ("0.2.0-rc1", "0.2.0", False),  # ...but older than its own release
         ("0.2.0", "0.2.0-rc1", True),
+        # --- PEP 440 canonical form: what releases are actually tagged ---
+        # The separator-free spelling is the one that ships (hatchling names
+        # the sdist from the normalized version, and release.yml asserts the
+        # two match), so these are the rows that matter in practice. They all
+        # used to be wrong: without a "-" the whole prerelease segment was
+        # invisible and 0.5.0rc1 compared equal to 0.5.0.
+        ("0.5.0", "0.5.0rc1", True),  # an rc install must be offered the release
+        ("0.5.0rc1", "0.5.0", False),
+        ("0.5.0rc2", "0.5.0rc1", True),
+        ("0.5.0rc10", "0.5.0rc9", True),  # numeric, not lexicographic
+        ("0.5.0rc1", "0.4.0", True),
+        ("0.5.0b1", "0.5.0rc1", False),  # a < b < rc
+        ("0.5.0rc1", "0.5.0b1", True),
+        ("0.5.0a1", "0.5.0b1", False),
+        # Every spelling PEP 440 normalizes to 0.5.0rc1 ranks identically, so
+        # a hand-made tag can't sort differently from the canonical one.
+        ("0.5.0-rc1", "0.5.0rc1", False),
+        ("0.5.0.rc.1", "0.5.0rc1", False),
+        ("0.5.0c1", "0.5.0rc1", False),
+        # A .devN build of the *next* version is still older than this one --
+        # it isn't a release at all.
+        ("0.5.0", "0.5.1.dev3+gabc", False),
+        ("0.5.1", "0.5.1.dev3+gabc", True),
+        # 0.0.0+unknown is what an install with no sorter/_version.py reports
+        # (see tests/integration/test_sdist_contents.py). It has to read as
+        # older than any real release or the app stops offering updates.
+        ("0.1.0", "0.0.0+unknown", True),
+        ("1.2.0.post1", "1.2.0", True),  # a post-release is newer
         ("garbage", "0.1.0", False),  # malformed tag reads as "not newer"
         ("", "0.1.0", False),
+        # Not PEP 440 at all, despite the numbers. Never offered, whatever it
+        # sits next to -- an unreadable tag is a misconfigured release, and
+        # the safe reading of one is "don't push this at the user".
+        ("1.2.3-nightly", "1.2.3", False),
+        ("1.2.3-nightly", "1.2.2", False),
+        # ...but an unreadable *current* is the opposite: anything real beats
+        # an install whose version we can't make sense of.
+        ("1.2.3", "garbage", True),
     ],
 )
 def test_is_newer(candidate: str, current: str, expected: bool) -> None:
@@ -108,7 +144,7 @@ def test_tag_prefix_stripping_matches_the_sdist_filename(tag: str, expected: str
 
     Note what this does *not* prove: hatchling names the file from the PEP
     440 *normalized* version, and _strip_tag_prefix is not a normalizer --
-    see test_expected_asset_name_does_not_normalize below. publish.yml's
+    see test_expected_asset_name_does_not_normalize below. release.yml's
     "Assert the sdist is named and stamped as the updater expects" step is
     what actually holds the two sides together.
 

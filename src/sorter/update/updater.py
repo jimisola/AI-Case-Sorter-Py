@@ -7,7 +7,7 @@ means non-developers never install a 60 MB dependency to receive a 1 MB
 update.
 
 The downloaded archive is the project's own **sdist** (`ai_case_sorter-
-<tag>.tar.gz`) — the same file `uv build`/`publish.yml` already produce and
+<tag>.tar.gz`) — the same file `uv build`/`release.yml` already produce and
 attach to every release, not a separately built artifact. hatch-vcs's build
 hook stamps `src/sorter/_version.py` into every build target, so the sdist
 already carries the correct version with nothing extra to keep in sync.
@@ -47,6 +47,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import requests
+from packaging.version import InvalidVersion, Version
 
 from .. import __version__, paths
 
@@ -131,42 +132,51 @@ class PendingUpdate:
 # ----- version comparison -----------------------------------------------------
 
 
-def _parse_version(text: str) -> tuple[tuple[int, ...], int]:
-    """Parse ``v1.2.3`` / ``1.2.3-rc1`` into a sortable key.
+def _parse_version(text: str) -> Version | None:
+    """Parse ``v1.2.3`` / ``1.2.3rc1`` for comparison, or ``None`` if it isn't
+    a version at all.
 
-    Returns ``(numbers, rank)`` where rank is 0 for a pre-release and 1 for a
-    final release, so ``1.2.0-rc1 < 1.2.0``. Non-numeric junk is ignored
-    rather than raising — a malformed upstream tag should read as "not newer",
-    never as a crash on startup.
+    PEP 440 is a specification with a reference implementation, so this defers
+    to it rather than reimplementing the grammar: ``packaging`` normalizes
+    every accepted spelling (``1.2.0rc1``, ``1.2.0-rc1``, ``1.2.0.rc.1``,
+    ``1.2.0c1``) to the same version and orders ``dev < a < b < rc < final <
+    post`` on its own.
+
+    Two adjustments on top of it:
+
+    * A leading ``v`` is stripped. Tags carry one in plenty of projects, and
+      ``Version`` rejects it.
+    * A **local version** is demoted to a dev release of the same version.
+      PEP 440 sorts ``1.0+local`` *above* ``1.0``, but an updater wants the
+      opposite reading: ``0.0.0+unknown`` is what an install with no
+      ``sorter/_version.py`` reports, and it has to look older than any real
+      release or the app stops offering updates.
+
+    Returning ``None`` rather than raising is the point of the wrapper — an
+    upstream tag that isn't a version should read as "not newer", never as a
+    crash on startup.
     """
-    s = (text or "").strip().lstrip("vV")
-    pre = 0 if any(c in s for c in "-+") else 1
-    core = s.split("-", 1)[0].split("+", 1)[0]
-
-    nums: list[int] = []
-    for part in core.split("."):
-        digits = ""
-        for ch in part:
-            if not ch.isdigit():
-                break
-            digits += ch
-        if not digits:
-            break
-        nums.append(int(digits))
-    return tuple(nums), pre
+    try:
+        version = Version((text or "").strip().lstrip("vV"))
+    except InvalidVersion:
+        return None
+    if version.local is not None and not version.is_devrelease:
+        return Version(f"{version.public}.dev0")
+    return version
 
 
 def is_newer(candidate: str, current: str) -> bool:
-    """True when ``candidate`` is a strictly newer version than ``current``."""
-    cand_nums, cand_pre = _parse_version(candidate)
-    cur_nums, cur_pre = _parse_version(current)
-    if not cand_nums:
+    """True when ``candidate`` is a strictly newer version than ``current``.
+
+    An unreadable ``candidate`` is never newer: whatever it is, it is not
+    something to offer the user. An unreadable ``current`` is the opposite —
+    anything parseable beats it.
+    """
+    cand = _parse_version(candidate)
+    if cand is None:
         return False
-    # Zero-pad so 1.2 and 1.2.0 compare equal.
-    width = max(len(cand_nums), len(cur_nums))
-    cand_padded = cand_nums + (0,) * (width - len(cand_nums))
-    cur_padded = cur_nums + (0,) * (width - len(cur_nums))
-    return (cand_padded, cand_pre) > (cur_padded, cur_pre)
+    cur = _parse_version(current)
+    return cur is None or cand > cur
 
 
 def current_version() -> str:
@@ -207,9 +217,9 @@ _TAG_RE = re.compile(r"v?[0-9A-Za-z][0-9A-Za-z._-]{0,63}")
 
 
 def _strip_tag_prefix(tag: str) -> str:
-    """Drop one leading lowercase ``v``, exactly as the publish workflow does.
+    """Drop one leading lowercase ``v``, exactly as the release workflow does.
 
-    This has to mirror ``${TAG#v}`` in publish.yml character for character,
+    This has to mirror ``${TAG#v}`` in release.yml character for character,
     because the result is used to build the asset name that ``_pick_asset``
     matches exactly — any disagreement means the client silently misses the
     real asset and falls back to the source archive.
@@ -233,10 +243,10 @@ def _expected_asset_name(tag: str) -> str:
 
     Hatchling writes the underscore form of "ai-case-sorter" per PEP 625
     (not PEP 503 -- that normalizes *to* hyphens, and governs index URLs
-    rather than sdist filenames). This is the file publish.yml already
+    rather than sdist filenames). This is the file release.yml already
     attaches; there is no separate app-archive asset to build.
 
-    The version half is only equal to the tag because publish.yml asserts
+    The version half is only equal to the tag because release.yml asserts
     it: hatchling emits the PEP 440 *normalized* version, so a tag like
     ``1.2.3-rc1`` would be built as ``1.2.3rc1`` and never match this. That
     assertion failing the release is the intended outcome -- without it the
