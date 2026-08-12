@@ -126,7 +126,12 @@ Status: implemented on this branch. Design goals: prove the risky parts
 - PySide6 is an optional extra (`[qt]`, mirroring how torch is `[ml]`), so
   end users and CI don't pull the wheels at all — verified: bootstrap's
   `--no-dev` sync never installs the extra. Dev setup:
-  `uv sync --no-install-project --extra qt`.
+  `uv sync --no-install-project --extra qt` — **add `--extra ml` in the same
+  command if you use local models**: a sync installs exactly the extras named,
+  so syncing `qt` alone removes an installed torch (and a `.python-version`
+  bump recreates `.venv` outright, observed going 3.13→3.14 on Windows). Not
+  data loss — the in-app gate reinstalls torch on the next local-model run —
+  but a ~2 GB redownload waiting to happen.
 - Both UIs reuse the non-UI layers unchanged: `EventBus` (Qt drains it with a
   50 ms `QTimer` instead of `root.after` — same threading contract), `Camera`,
   `SerialBroker`/`EmulatorBroker`, `Config`/`SettingsRepo`.
@@ -469,4 +474,5 @@ dock, menu bar) with placeholders where real tab logic would go.
 | 2026-08-12 | Clean-slate layout proposed (activity sidebar + Sort dashboard + unified Settings + docks + menu bar — see "Proposed layout"); spike 2 implements its shell. |
 | 2026-08-12 | Spike 3 (showcase) implemented: Sort dashboard sorts for real — slot cards with live counts, RunController wired, recent feed, Settings→Serial with the Emulated port. 54 headless tests. |
 | 2026-08-12 | Cost estimate re-baselined from spike 3's measurement: ~8–12 h session time to parity (was 15–25 h; the "dense chunks are slower" assumption measured false). |
+| 2026-08-12 | **Windows validated**: the showcase build runs on a real Windows machine from a plain `uv sync --extra qt` — sidebar, dashboard and all; only runtime noise is OpenCV's DSHOW "no camera" warning. Requirement 2 now confirmed empirically on Linux + Windows. |
 | 2026-08-12 | Spike 2 built and verified (28 offscreen tests, full unit suite green, ruff/ty clean). New gotchas: `QAction.menu()` deletes the menu it returns; dock title-bar buttons aren't themable without icons. Sidebar glyphs stay emoji until real `QIcon`s exist. |
