@@ -1,0 +1,206 @@
+"""Settings -> Camera page: device/resolution pick, live-preview swap.
+
+Behavior reference: ``sorter/ui/tab_camera.py``. Layout is Qt-native (one
+page, no tab chrome); the two-phase probe survives — a fast, non-blocking
+name-only listing at build time (``camera_names``, matches what the Tk tab
+calls its "quick" population) and a full ``list_cameras_with_metadata`` probe
+only when the user clicks Detect, since that call opens every device and can
+block seconds. Unlike the Tk tab this page never probes or swaps the live
+camera on its own; the user drives both via buttons — see the module's
+docstring note in the increment report for why.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
+    QComboBox,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ..hardware.camera import Camera, camera_names, list_cameras_with_metadata
+
+
+def _format_camera_choice(cam: dict[str, Any]) -> str:
+    name = cam.get("name") or f"Camera {cam['index']}"
+    return f"({cam['index']}) {name}"
+
+
+def _format_resolution(wh: tuple[int, int]) -> str:
+    return f"{wh[0]} x {wh[1]}"
+
+
+class CameraSection(QWidget):
+    """Device + resolution pick, live preview swap. State lives on ``self``."""
+
+    def __init__(self, win: Any) -> None:
+        super().__init__()
+        self._win = win
+        self._detected: list[dict[str, Any]] = []
+
+        column = QVBoxLayout(self)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(8)
+
+        form = QFormLayout()
+        self.device_combo = QComboBox(self)
+        self.device_combo.setMaximumWidth(320)
+        self.resolution_combo = QComboBox(self)
+        self.resolution_combo.setMaximumWidth(200)
+        form.addRow("Camera", self.device_combo)
+        form.addRow("Resolution", self.resolution_combo)
+        column.addLayout(form)
+
+        buttons = QHBoxLayout()
+        self.detect_button = QPushButton("Detect / Refresh", self)
+        self.detect_button.clicked.connect(self.detect_devices)
+        self.apply_button = QPushButton("Apply", self)
+        self.apply_button.setObjectName("action")
+        self.apply_button.clicked.connect(self.apply_camera)
+        buttons.addWidget(self.detect_button)
+        buttons.addWidget(self.apply_button)
+        buttons.addStretch(1)
+        column.addLayout(buttons)
+
+        self.status_label = QLabel("", self)
+        self.status_label.setObjectName("mutedLabel")
+        column.addWidget(self.status_label)
+        self.current_label = QLabel("", self)
+        self.current_label.setObjectName("mutedLabel")
+        column.addWidget(self.current_label)
+        column.addStretch(1)
+
+        self._populate_quick()
+        self._refresh_current_label()
+        # Connected last: the population above must not read as a user pick.
+        self.device_combo.currentIndexChanged.connect(self._on_device_changed)
+
+    # ----- population ----------------------------------------------------
+
+    def _populate_quick(self) -> None:
+        """Name-only enumeration — doesn't open any device, safe at build time."""
+        names = camera_names()
+        cam_cfg = self._win.config.camera
+        if names:
+            entries = [{"index": idx, "name": name, "resolutions": []} for idx, name in sorted(names.items())]
+        else:
+            idx = int(cam_cfg.get("device_index", 0))
+            entries = [{"index": idx, "name": f"Camera {idx}", "resolutions": []}]
+        self._detected = entries
+        self._fill_device_combo(select_index=int(cam_cfg.get("device_index", 0)))
+        self.status_label.setText("Click Detect / Refresh to probe supported resolutions.")
+
+    def _fill_device_combo(self, *, select_index: int) -> None:
+        self.device_combo.blockSignals(True)
+        self.device_combo.clear()
+        for cam in self._detected:
+            self.device_combo.addItem(_format_camera_choice(cam), cam)
+        if self._detected:
+            match = next((i for i, cam in enumerate(self._detected) if cam["index"] == select_index), 0)
+            self.device_combo.setCurrentIndex(match)
+        self.device_combo.blockSignals(False)
+        self._fill_resolution_combo()
+
+    def _fill_resolution_combo(self) -> None:
+        cam = self.device_combo.currentData()
+        cam_cfg = self._win.config.camera
+        saved = (int(cam_cfg.get("width", 0)), int(cam_cfg.get("height", 0)))
+        resolutions: list[tuple[int, int]] = (cam or {}).get("resolutions") or []
+
+        self.resolution_combo.blockSignals(True)
+        self.resolution_combo.clear()
+        if resolutions:
+            for wh in resolutions:
+                self.resolution_combo.addItem(_format_resolution(wh), wh)
+            # resolutions is sorted ascending by pixel count (list_cameras_with_metadata's
+            # contract), so the last entry is the largest supported.
+            if saved in resolutions and cam is not None and cam["index"] == int(cam_cfg.get("device_index", 0)):
+                self.resolution_combo.setCurrentIndex(resolutions.index(saved))
+            else:
+                self.resolution_combo.setCurrentIndex(len(resolutions) - 1)
+        elif saved[0] and saved[1]:
+            # No probed resolutions yet — keep whatever is saved so the combo isn't empty.
+            self.resolution_combo.addItem(_format_resolution(saved), saved)
+            self.resolution_combo.setCurrentIndex(0)
+        self.resolution_combo.blockSignals(False)
+
+    def _on_device_changed(self, _index: int) -> None:
+        self._fill_resolution_combo()
+
+    # ----- detect ----------------------------------------------------------
+
+    def detect_devices(self) -> None:
+        self.detect_button.setEnabled(False)
+        self.status_label.setText("Detecting cameras… (opens each device)")
+        self._win.run_worker(
+            list_cameras_with_metadata,
+            on_done=self._on_detect_done,
+            on_error=self._on_detect_error,
+        )
+
+    def _on_detect_done(self, cameras: list[dict[str, Any]]) -> None:
+        self.detect_button.setEnabled(True)
+        if not cameras:
+            self.status_label.setText("No cameras detected.")
+            return
+        self._detected = cameras
+        self._fill_device_combo(select_index=int(self._win.config.camera.get("device_index", 0)))
+        cam = self.device_combo.currentData()
+        chosen_name = cam.get("name", "?") if cam else "?"
+        self.status_label.setText(f"Detected {len(cameras)} camera(s). Selected {chosen_name}.")
+
+    def _on_detect_error(self, exc: Exception) -> None:
+        self.detect_button.setEnabled(True)
+        self.status_label.setText(f"Detect failed: {exc}")
+
+    # ----- apply -------------------------------------------------------------
+
+    def apply_camera(self) -> None:
+        """Swap the live camera in place — mirrors ``ui.app.MainWindow.restart_camera``."""
+        cam = self.device_combo.currentData()
+        if cam is None:
+            self._win.set_status("No camera selected.")
+            return
+        wh = self.resolution_combo.currentData()
+        cam_cfg = self._win.config.camera
+        width = int(wh[0]) if wh else int(cam_cfg.get("width", 640))
+        height = int(wh[1]) if wh else int(cam_cfg.get("height", 480))
+
+        self._win.camera.stop()
+        new_camera = Camera(device_index=int(cam["index"]), width=width, height=height)
+        started = new_camera.start_preview()
+        # Swap unconditionally, same as restart_camera: a failed device still
+        # replaces the old (now-stopped) one rather than leaving a dead handle.
+        self._win.camera = new_camera
+        if self._win.run_controller is not None:
+            self._win.run_controller.camera = new_camera
+
+        cam_cfg["device_index"] = int(cam["index"])
+        cam_cfg["device_chosen"] = True
+        cam_cfg["width"] = new_camera.width
+        cam_cfg["height"] = new_camera.height
+        self._win.config.save()
+
+        if started:
+            self._win._set_camera_indicator(
+                f"Camera: connected ({new_camera.width}x{new_camera.height})", connected=True
+            )
+            self._win.set_status(f"Using {cam.get('name', '?')} @ {new_camera.width}x{new_camera.height}.")
+        else:
+            self._win._set_camera_indicator("Camera: failed to start", connected=False)
+            self._win.set_status("Camera failed to start. Check the device index.")
+        self._refresh_current_label()
+
+    def _refresh_current_label(self) -> None:
+        cam = self._win.camera
+        self.current_label.setText(f"Current: device {cam.device_index} @ {cam.width}x{cam.height}")
+
+
+def build_camera_section(win: Any) -> CameraSection:
+    return CameraSection(win)
