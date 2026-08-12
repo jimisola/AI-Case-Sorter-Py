@@ -161,6 +161,8 @@ known-first-party = ["sorter"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+# Generous: the slowest legitimate tests spawn real training subprocesses.
+timeout = 120
 markers = [
     "integration: exercises a real external tool (uv build, git-cliff) instead of a synthetic fixture",
 ]
@@ -172,9 +174,21 @@ markers = [
 [dependency-groups]
 dev = [
     "pytest==9.1.1",
+    # Hangs become failures with tracebacks: the suite is full of worker
+    # round-trips and real subprocesses whose failure mode is silence.
+    "pytest-timeout==2.4.0",
+    "pytest-cov==7.0.0",
     "ruff==0.16.2",
     "ty==0.0.69",
 ]
+
+[tool.coverage.run]
+branch = true
+source = ["sorter"]
+
+[tool.coverage.report]
+# Optional-dependency guards and Windows-only branches never run on one box.
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]
 
 # ty (type checker) configuration.
 #
