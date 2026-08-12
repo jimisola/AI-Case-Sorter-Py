@@ -263,7 +263,7 @@ function Assert-SafeArchiveEntries {
        the same mistake sorter/update/updater.py's Python-side extraction had (it
        tested name[1] of the whole name) and was fixed for; the two paths
        consume the same archives and must reject the same shapes. See
-       Test-ArchiveEntryValidation.ps1, and _safe_members in updater.py. #>
+       tests/Test-ArchiveEntryValidation.ps1, and _safe_members in updater.py. #>
     param([string[]]$EntryNames)
 
     foreach ($entryName in $EntryNames) {
@@ -558,7 +558,7 @@ function New-Shortcuts {
 # ---------------------------------------------------------------------------
 
 # Skipped when the file is dot-sourced (`. install-windows.ps1`), which is how
-# Test-ArchiveEntryValidation.ps1 gets at the functions above. Without this,
+# tests/Test-ArchiveEntryValidation.ps1 gets at the functions above. Without this,
 # loading the script to test one function runs a real install.
 if ($MyInvocation.InvocationName -eq '.') { return }
 

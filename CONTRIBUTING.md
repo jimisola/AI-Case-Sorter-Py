@@ -142,7 +142,7 @@ Windows nor a local PowerShell:
 
 ```bash
 docker run --rm -v "$PWD:/w" -w /w mcr.microsoft.com/powershell:7.4-ubuntu-22.04 \
-  pwsh -File installer/Test-ArchiveEntryValidation.ps1
+  pwsh -File installer/tests/Test-ArchiveEntryValidation.ps1
 ```
 
 Run them if you touch `installer/**` or `sorter/updater.py`'s `_safe_members`

@@ -24,7 +24,7 @@
     covered and a shim is not.
 
     Plain PowerShell rather than Pester, matching Test-ArchiveEntryValidation.ps1.
-    Run:  powershell -File installer/Test-StartBatProbe.ps1
+    Run:  powershell -File installer/tests/Test-StartBatProbe.ps1
 #>
 [CmdletBinding()]
 param()
@@ -33,7 +33,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $LASTEXITCODE = 0
 
-$repo    = Split-Path $PSScriptRoot -Parent
+# installer/tests -> installer -> repo root.
+$repo    = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $startBat = Join-Path $repo 'start.bat'
 if (-not (Test-Path $startBat)) { throw "start.bat not found at $startBat" }
 

@@ -85,13 +85,13 @@ explicitly.
 
 ### Archive-entry validation — runs on any OS
 
-`Test-ArchiveEntryValidation.ps1` needs no Windows. It dot-sources this
-directory's script for its functions only (the guard on the main block stops
+`tests/Test-ArchiveEntryValidation.ps1` needs no Windows. It dot-sources this
+parent directory's script for its functions only (the guard on the main block stops
 it installing anything), so it runs under PowerShell on Linux or macOS:
 
 ```bash
 docker run --rm -v "$PWD:/w" -w /w mcr.microsoft.com/powershell:7.4-ubuntu-22.04 \
-  pwsh -File installer/Test-ArchiveEntryValidation.ps1
+  pwsh -File installer/tests/Test-ArchiveEntryValidation.ps1
 ```
 
 Run it from the repo root; it takes a few seconds. There is no bare `7.4`
