@@ -183,7 +183,9 @@ class SerialSection(QWidget):
 
         baud = int(self.baud_combo.currentText() or win.config.serial.get("baud", 9600))
         timeout = float(self.probe_timeout_spin.value())
-        broker = serial_broker.SerialBroker(port=port, baud=baud, require_serial_ready=True, handshake_timeout_s=timeout)
+        broker = serial_broker.SerialBroker(
+            port=port, baud=baud, require_serial_ready=True, handshake_timeout_s=timeout
+        )
         # Attach before the handshake: a failed open should still leave a
         # trace in the serial dock (mirrors the auto-connect probe).
         win._attach_serial_listeners(broker)

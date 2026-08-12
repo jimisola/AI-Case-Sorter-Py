@@ -220,7 +220,9 @@ def test_changing_a_hough_field_persists_the_key(window, config) -> None:
 def test_changing_primer_mode_persists_the_key(window, config) -> None:
     section = settings_imageproc.build_imageproc_section(window)
 
-    use_index = next(i for i in range(section.primer_mode_combo.count()) if section.primer_mode_combo.itemData(i) == "use")
+    use_index = next(
+        i for i in range(section.primer_mode_combo.count()) if section.primer_mode_combo.itemData(i) == "use"
+    )
     section.primer_mode_combo.setCurrentIndex(use_index)
 
     assert window.config.image_proc["primer_mode"] == "use"
@@ -313,7 +315,9 @@ def test_param_change_reprocesses_the_cached_frame_without_recapturing(window, m
 
 def test_reprocess_is_a_noop_before_any_capture(window, monkeypatch) -> None:
     calls = {"detect": 0}
-    monkeypatch.setattr(settings_imageproc, "hough_detect", lambda *a, **k: (calls.__setitem__("detect", calls["detect"] + 1), None)[1])
+    monkeypatch.setattr(
+        settings_imageproc, "hough_detect", lambda *a, **k: (calls.__setitem__("detect", calls["detect"] + 1), None)[1]
+    )
     section = settings_imageproc.build_imageproc_section(window)
 
     section.min_dist_spin.setValue(321)
@@ -373,9 +377,7 @@ def test_led_debounce_skips_a_repeat_of_the_same_value(window) -> None:
 def test_camera_page_shows_a_live_preview(window) -> None:
     # Apply is blind without a feed (JL) — the page renders the live camera.
     section = settings_camera.build_camera_section(window)
-    window.camera = types.SimpleNamespace(
-        latest_frame=lambda: np.zeros((480, 640, 3), np.uint8)
-    )
+    window.camera = types.SimpleNamespace(latest_frame=lambda: np.zeros((480, 640, 3), np.uint8))
     section._win = window
     section.show()
 

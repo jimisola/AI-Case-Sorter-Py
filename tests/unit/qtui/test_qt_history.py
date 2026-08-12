@@ -156,8 +156,8 @@ def test_below_floor_confidence_colored_warning(window, config) -> None:
     push(window, view, "unknown", 41.0)
 
     above, below = view._entries[1], view._entries[0]  # newest first: 41 pushed last
-    assert f'color: {window.palette_colors["warning"]}' in below.confidence_label.styleSheet()
-    assert f'color: {window.palette_colors["text_muted"]}' in above.confidence_label.styleSheet()
+    assert f"color: {window.palette_colors['warning']}" in below.confidence_label.styleSheet()
+    assert f"color: {window.palette_colors['text_muted']}" in above.confidence_label.styleSheet()
 
 
 def test_a_disabled_floor_never_warns(window, config) -> None:
@@ -166,7 +166,7 @@ def test_a_disabled_floor_never_warns(window, config) -> None:
 
     push(window, view, "unknown", 3.0)
 
-    assert f'color: {window.palette_colors["text_muted"]}' in view._entries[0].confidence_label.styleSheet()
+    assert f"color: {window.palette_colors['text_muted']}" in view._entries[0].confidence_label.styleSheet()
 
 
 # ----- click -> preview --------------------------------------------------------------

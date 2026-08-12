@@ -185,9 +185,7 @@ class ImageProcSection(QWidget):
         self.led_value_label = QLabel(str(initial), box)
         row.addRow("Value", self.led_value_label)
         column.addLayout(row)
-        column.addWidget(
-            QLabel(f"(sends cameraledlevel:N once idle for {LED_DEBOUNCE_MS} ms)", box)
-        )
+        column.addWidget(QLabel(f"(sends cameraledlevel:N once idle for {LED_DEBOUNCE_MS} ms)", box))
 
         self.led_slider.valueChanged.connect(self._on_led_changed)
         return box
@@ -284,9 +282,7 @@ class ImageProcSection(QWidget):
             self._win.set_status(f"Detected circle: r={r:.0f} px at ({cx:.0f}, {cy:.0f}).")
 
         cropped = crop_headstamp(self._raw_frame, cfg)
-        cropped = apply_primer_mask(
-            cropped, self.primer_mode_combo.currentData(), int(self.primer_radius_spin.value())
-        )
+        cropped = apply_primer_mask(cropped, self.primer_mode_combo.currentData(), int(self.primer_radius_spin.value()))
         self._show(self.raw_preview_label, preview)
         self._show(self.processed_preview_label, cropped)
 

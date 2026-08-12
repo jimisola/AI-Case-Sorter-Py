@@ -362,9 +362,7 @@ def test_start_refuses_a_model_without_a_checkpoint(window, connected, monkeypat
 def test_start_routes_a_local_model_without_torch_through_the_gate(window, connected, monkeypatch) -> None:
     # The install gate replaced the launch-the-Tk-UI notice (#7).
     gate_calls = []
-    monkeypatch.setattr(
-        window, "ensure_torch", lambda proceed, **kw: gate_calls.append(kw.get("reason")) and False
-    )
+    monkeypatch.setattr(window, "ensure_torch", lambda proceed, **kw: gate_calls.append(kw.get("reason")) and False)
     monkeypatch.setattr(classifier, "checkpoint_problem", lambda _db: None)
     monkeypatch.setattr(classifier, "uses_local_inference", lambda _db: True)
 
