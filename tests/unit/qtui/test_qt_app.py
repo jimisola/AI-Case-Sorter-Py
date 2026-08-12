@@ -61,6 +61,14 @@ def test_sidebar_switches_pages(window, name: str) -> None:
     assert window.sidebar_buttons[name].isChecked()
 
 
+def test_sidebar_fits_the_widest_label(window) -> None:
+    # Regression: a fixed 84 px sidebar clipped "Community" on wider fonts.
+    sidebar = window.sidebar_buttons["Sort"].parentWidget()
+    widest = max(sidebar.fontMetrics().horizontalAdvance(n) for n in window.sidebar_buttons)
+
+    assert sidebar.minimumWidth() >= widest + 24
+
+
 def test_sort_actions_are_present_but_disabled(window) -> None:
     assert list(window.action_buttons) == ["Start", "Stop", "Manual feed"]
     assert not any(button.isEnabled() for button in window.action_buttons.values())

@@ -195,7 +195,6 @@ class QtMainWindow(QMainWindow):
     def _build_sidebar(self) -> QWidget:
         sidebar = QWidget(self)
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(SIDEBAR_WIDTH)
         column = QVBoxLayout(sidebar)
         column.setContentsMargins(6, 8, 6, 8)
         column.setSpacing(4)
@@ -208,6 +207,12 @@ class QtMainWindow(QMainWindow):
             column.addWidget(self._activity_button(sidebar, glyph, name))
         column.addStretch(1)
         column.addWidget(self._activity_button(sidebar, *SETTINGS_ACTIVITY))
+
+        # Width follows the widest label's font metrics, not a constant — a
+        # fixed pixel width clips "Community" on fonts wider than the dev box.
+        metrics = sidebar.fontMetrics()
+        widest = max(metrics.horizontalAdvance(name) for name in self.sidebar_buttons)
+        sidebar.setFixedWidth(max(SIDEBAR_WIDTH, widest + 24))
 
         self.sidebar_buttons["Sort"].setChecked(True)
         self.show_page("Sort")
