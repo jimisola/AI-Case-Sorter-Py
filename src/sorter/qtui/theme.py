@@ -108,6 +108,17 @@ QListWidget::item:selected {{
     color: {c["text_highlight"]};
 }}
 
+QFrame#slotCard {{
+    background-color: {c["bg_card"]};
+    border: 1px solid {c["border"]};
+    border-radius: 6px;
+}}
+/* The card's background would otherwise cascade into its labels' own fills. */
+QFrame#slotCard QLabel {{ background: transparent; }}
+QLabel#slotTitle {{ color: {c["text"]}; font-weight: bold; }}
+QLabel#slotCount {{ color: {c["text_highlight"]}; font-size: 22px; font-weight: bold; }}
+QLabel#slotNames {{ color: {c["text_muted"]}; }}
+
 QSplitter::handle {{ background-color: {c["border"]}; }}
 QSplitter::handle:horizontal {{ width: 3px; }}
 QSplitter::handle:vertical {{ height: 3px; }}

@@ -2,11 +2,12 @@
 
 This is the requirement-4 proof from docs/ui-modernization.md: real widgets on
 the offscreen platform plugin, with the event bus doing the cross-thread work.
+Fixtures live in conftest.py; the Sort dashboard's own behavior is in
+test_qt_sort.py.
 """
 
 from __future__ import annotations
 
-import os
 import types
 
 import numpy as np
@@ -15,36 +16,7 @@ import pytest
 pytest.importorskip("PySide6")
 pytest.importorskip("tkinter")  # sorter.ui.theme (the palettes) imports it
 
-# Must be set before anything constructs a QApplication.
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QApplication
-
-from sorter.qtui.app import QtMainWindow
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
-
-
-@pytest.fixture
-def config():
-    return types.SimpleNamespace(
-        camera={"device_index": 0, "width": 640, "height": 480},
-        serial={"port": "", "baud": 9600},
-        save=lambda: None,
-        db=None,
-    )
-
-
-@pytest.fixture
-def window(qapp, config):
-    # auto_connect=False: constructing the shell must not open a camera or a port.
-    win = QtMainWindow(config, auto_connect=False)
-    yield win
-    win.close()
 
 
 def test_sidebar_activities(window) -> None:
@@ -69,7 +41,7 @@ def test_sidebar_fits_the_widest_label(window) -> None:
     assert sidebar.minimumWidth() >= widest + 24
 
 
-def test_sort_actions_are_present_but_disabled(window) -> None:
+def test_sort_actions_are_disabled_without_a_board(window) -> None:
     assert list(window.action_buttons) == ["Start", "Stop", "Manual feed"]
     assert not any(button.isEnabled() for button in window.action_buttons.values())
 

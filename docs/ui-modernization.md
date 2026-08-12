@@ -236,6 +236,93 @@ green, ruff/ty clean.
   icons (`QIcon`) are the end state — emoji colour is out of the palette's
   control, which breaks the "every color comes from the theme" rule.
 
+### Third increment: the showcase (implemented 2026-08-12)
+
+Makes the Sort dashboard actually sort, so the demo needs no slideware: slot
+cards with live counts from the real `Config`, the `RunController` wired
+(same preflights as the Tk Run tab; PyTorch install still deferred to the Tk
+UI), a live recent-classification feed, and a minimally real Settings→Serial
+page whose port picker includes **"Emulated"** — the whole demo runs against
+the `SerialEmulator` with no machine on the bench, over the same code path
+the real board uses.
+
+**Demo script (~2 minutes):**
+
+1. `./start.sh` → the familiar Tk UI. Close it. Same command with `--qt` →
+   the new UI. (Point: both ship from one tree; end users see no change.)
+2. Sort dashboard: sidebar, live camera preview, slot cards.
+3. Settings → Serial → port "Emulated" → Connect → status dot goes green,
+   serial dock streams the handshake.
+4. Back to Sort → Manual feed, then Start: cards count up, the recent feed
+   scrolls with confidence coloring, the dock shows each exchange.
+5. Switch theme mid-run (Settings → Theme): everything restyles live,
+   including the dock and cards.
+6. Close, `git log --oneline`: every increment tested headless (no display
+   server) and green in the same suite as the Tk UI.
+
+Explicitly not in the showcase (parity items for the real port): package
+mode counters/reset, sorting-template UI, slot-assignment editing (checkbox
+grid + slot details), auto-select `mode/changed` re-render, wish-list
+capture, the AI-credentials preflight, cropped-frame preview, Serial-page
+disconnect/init-settings push, and the PyTorch install dialog (deliberately
+routed to the Tk UI; `dialog_install_torch`'s `after()`-from-worker pattern
+must not be copied anyway).
+
+**Demo caveat:** the emulator removes the *hardware* dependency, not the
+classifier one. On a fresh DB the app is in AI-config mode and Start will
+fail at classify time against an unconfigured endpoint — demo with a
+configured AI endpoint or a local model (checkpoint + torch). Manual feed
+demos fine with the emulator alone.
+
+**Increment-3 findings (54 qtui tests, full suite 849, ruff/ty clean):**
+
+- Verified `run/*` payload shapes worth pinning for the port: `run/result`
+  carries `ok` and a `slot` even for a failed cycle — counts must key off
+  `ok`; `run/stopped` fires from the loop's `finally` (also on error and
+  package-halt), so button state must derive from `run/started`/`run/stopped`
+  and never from the click handlers; `run/error` does not imply the run
+  stopped.
+- The transparent-children rule is now a rule, not a gotcha: every container
+  with a QSS background (`#header`, `#sidebar`, now `#slotCard`) needs a
+  `... QLabel { background: transparent; }` companion.
+- New-widget color roles belong in objectNames (`#slotCount`, `#slotNames`),
+  which the single `setStyleSheet` repaints on theme switch; only colors
+  baked into rich text (the feed's confidence spans, the status dots) need
+  hand re-rendering.
+- The emulator path is a genuine end-to-end test: `Emulated` →
+  `EmulatorBroker` → `RunController.cycle_once` → timer-delayed `done` →
+  `run/result` → card count, driven headless in 0.12 s by pumping
+  `bus.drain()` in a bounded poll (`drain_until` in the qtui conftest) — the
+  pattern for every future qtui test involving a worker.
+- qtui tests now run against a real `Database` + `Config` on `tmp_path`
+  (shared conftest), not a stub — removed defensive code from the widgets.
+
+## Cost to complete (calibration in progress)
+
+Unit of measure: one *increment* = spec → Opus agent implements → review,
+verify (pytest/ruff/ty), commit. Measured so far: spike 1 ≈ 8 min agent time
+/ ~30 min wall clock (~660 lines); spike 2 ≈ 9 min / ~30 min (~460 lines);
+user-found fixes ≈ 5–10 min each (2 so far). The remaining parity work is
+~17–25 increments (per-chunk table in the session notes; Sort and Models are
+the dense ones).
+
+First estimate ranged **15–25 h** on the assumption that dense,
+behavior-pinned chunks run well above spike velocity. JL disputed that as too
+high, and spike 3 — the deliberate calibration point, ~3× the size of the
+earlier increments and wired into the real run path — measured **~10.5 min
+agent time, ~880 changed lines, 2 implementation passes, ~30 min wall
+clock**: triple the scope at the *same* wall-clock cost. The assumption was
+wrong; density is absorbed by the agent, and the wall-clock floor is the
+spec/review/verify cycle (~20 min) rather than the code volume.
+
+**Re-baselined estimate: ~8–12 h of session wall clock** — the remaining
+parity work is roughly 10–14 spike-3-sized increments at ~30–45 min each.
+Residual risk sits in the deferred-items list above (package mode, template
+UI, assignment editing, the community/auth surfaces that need the real
+backend) and in increments that need look-and-feel rounds. The user-paced
+parts (bench validation against the physical machine) still sit outside
+these hours and set the calendar time regardless.
+
 ## What retiring `ui/` would remove (beyond the directory itself)
 
 Audited 2026-08-12: outside `src/sorter/ui/` and `tests/unit/ui/`, nothing in
@@ -380,4 +467,6 @@ dock, menu bar) with placeholders where real tab logic would go.
 | 2026-08-12 | `[qt]` extra swapped to `PySide6-Essentials==6.11.1` — pixel-identical (spike uses only QtCore/QtGui/QtWidgets, all in essentials; the meta-package adds only unused addons + stubs). Gotcha for existing dev venvs: the wheels overlap, so uninstalling the meta clobbers `PySide6/__init__.py` and the stubs — fix with `uv sync --extra qt --reinstall-package pyside6-essentials`. |
 | 2026-08-12 | Hardware layer stays toolkit-neutral (pyserial + cv2); QtSerialPort/QtMultimedia rejected — see "The hardware layer stays toolkit-neutral". |
 | 2026-08-12 | Clean-slate layout proposed (activity sidebar + Sort dashboard + unified Settings + docks + menu bar — see "Proposed layout"); spike 2 implements its shell. |
+| 2026-08-12 | Spike 3 (showcase) implemented: Sort dashboard sorts for real — slot cards with live counts, RunController wired, recent feed, Settings→Serial with the Emulated port. 54 headless tests. |
+| 2026-08-12 | Cost estimate re-baselined from spike 3's measurement: ~8–12 h session time to parity (was 15–25 h; the "dense chunks are slower" assumption measured false). |
 | 2026-08-12 | Spike 2 built and verified (28 offscreen tests, full unit suite green, ruff/ty clean). New gotchas: `QAction.menu()` deletes the menu it returns; dock title-bar buttons aren't themable without icons. Sidebar glyphs stay emoji until real `QIcon`s exist. |
