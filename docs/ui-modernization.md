@@ -536,6 +536,81 @@ be its own proposal:
   `-1` confidence for "server sent none"; an `Optional[float]` would kill a
   whole family of display guards.
 
+## Windows-app gap analysis (guide v1.1.53) — for the PR
+
+Functionality inventory from the official Application Guide compared against
+this branch (verified against the Tk source, not assumed). Three buckets:
+
+### A. Missing in the whole Python port (Tk AND Qt) — pre-existing gaps
+
+Not qtui regressions: none of these exist in `sorter/ui/` either. Each is a
+candidate work item; per-item agent tasks in a future increment.
+
+- [ ] **Run modes** (Single/Multi Image Highest Confidence, Highest Average,
+  Popular Highest Average) with **Sample Rotations** count and Serial/Parallel
+  prediction — the multi-rotation ensemble prediction pipeline. The Python
+  port always classifies one image once. (Guide pp. 30–31)
+- [ ] **Run speed control** — slider slowing the sort loop.
+- [ ] **Model Enhancer** — clone-to-new-model with center images, add primer
+  masks, add rotations, **balance model**, processing-mode conversion, and
+  **binary model creation** (one-vs-rest). (pp. 21–24)
+- [ ] **Model Statistics** — confusion matrix on a held-out slice, precision/
+  recall per headstamp, training time/date/count. The evaluator overlaps but
+  is folder-based; no confusion view exists. (pp. 27–28)
+- [ ] **Train screen: Feed Batch** — auto-feed a hopper of same-headstamp
+  brass with a speed slider. (p. 25)
+- [ ] **Train screen: UNDO** last added image set. (p. 26)
+- [ ] **Train screen: Button Mode automation** chains ([Add]→Feed,
+  [Save]→Add→Feed, …). (p. 26)
+- [ ] **Evaluator: "Improve Training for Anomalies"** (adds rotations for
+  flagged images). (p. 28)
+- [ ] **Capture-time rotations** (Use Rotations + rotation count + preview
+  panel) — the port trains ConvNeXt with runtime augmentation instead;
+  functionally overlapping but the guide's explicit-rotations workflow (and
+  Balance-by-rotations) has no equivalent. Decide: adopt or document the
+  difference.
+- [ ] **Image-processing detection modes** Manual (click-to-crop X/Y/R) and
+  Hybrid (manual region + auto inside) — the port has Hough only (line-scan
+  ported but hidden). Manual crop is the guide's escape hatch for difficult
+  lighting. (pp. 12–14)
+- [ ] **Processing modes** beyond Color (BlackAndWhite, Grayscale, EdgesOnly,
+  Blur, GSBlur) as capture/model settings with their parameter sets. Verify
+  what `model_mode` actually covers in the port; the guide's six modes are
+  richer. (pp. 14–15, 17–18)
+- [ ] **Home Feed** button (feed-wheel homing; the port has Home Sorter only).
+- [ ] **Advanced Settings free-form key/value grid** for custom firmware
+  parameters (the port has the fixed 14-field list; custom keys can't be
+  sent). (p. 10)
+- [ ] **Run screen: Clear Slots** one-click unbind-all (templates partially
+  cover; no explicit clear).
+- [ ] **Per-headstamp counters inside each slot** (the port counts per slot
+  total only). (p. 29 #2)
+- [ ] **Package-mode alarm parity**: guide beeps 3× and pauses before moving
+  to the next slot; port beeps once. (p. 31)
+- [ ] **Config-DB automatic backups** (last 10 retained; corrupted-DB restore
+  prompt). SQLite+WAL is more robust than the JSON store this guarded, but
+  an automatic backup/restore story is still absent. (p. 6)
+- [ ] **Serial logging to file** as a launch setting (the Qt monitor's Save…
+  covers manual export; continuous logging doesn't exist).
+
+### B. Qt polish gaps (small, from JL's testing + guide details)
+
+- [ ] Image Processing page: label the two previews **Original** /
+  **Processed** and show **processing time in ms** (guide p. 12; JL).
+- [ ] Serial monitor keyboard shortcut (guide: Ctrl+K).
+- [ ] Emulation-mode capture parity: guide's emulator serves random sample
+  images so camera-less demo works end to end; port's emulator covers serial
+  only. Consider bundling a handful of sample frames.
+
+### C. Equivalent by design (no action; explain in PR)
+
+- Deep-learning toggle (Inception vs ML.Net) ↔ ConvNeXt size choice in
+  training config. Different engines, same knob.
+- Sign-in/licensing (guide pp. 3–6) ↔ deliberately absent: OSS build has no
+  license gate; community sign-in is optional.
+- Serial monitor, updater, themes, community sharing, sorting templates,
+  wish-list capture: port-side features that exceed the guide.
+
 ## Findings for the PR description
 
 - **opencv-python → opencv-python-headless.** The standard wheel bundles its
