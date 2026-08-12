@@ -71,6 +71,7 @@ from ..ui.theme import (
 )
 from .dialog_slot_assign import CATCH_ALL_HINT, SlotAssignDialog
 from .dialog_template import EditTemplateDialog, NewTemplateDialog
+from .models_page import build_models_page
 from .settings_ai import build_ai_section
 from .settings_camera import build_camera_section
 from .settings_imageproc import build_imageproc_section
@@ -175,8 +176,9 @@ class QtMainWindow(QMainWindow):
         self.pages = QStackedWidget(central)
         self._pages_by_name: dict[str, QWidget] = {}
         self._add_page("Sort", self._build_sort_page())
-        for name in ("Train", "Models", "Community"):
-            self._add_page(name, self._placeholder_page())
+        self._add_page("Train", self._placeholder_page())
+        self._add_page("Models", self._build_models_page())
+        self._add_page("Community", self._placeholder_page())
         self._add_page("Settings", self._build_settings_page())
         body.addWidget(self._build_sidebar())
         body.addWidget(self.pages, 1)
@@ -409,6 +411,17 @@ class QtMainWindow(QMainWindow):
         row.addWidget(self.settings_pages, 1)
         return page
 
+    def _build_models_page(self) -> QWidget:
+        # Kept on self: mode/changed and navigating to the page both refresh it.
+        self.models_page = build_models_page(self)
+        self.models_page.set_images_hook(self._open_model_images)
+        return self.models_page
+
+    def _open_model_images(self, model: Any) -> None:
+        from .dialog_model_images import ModelImagesDialog
+
+        ModelImagesDialog(self, self.config, model.id).exec()
+
     def _build_ai_page(self) -> QWidget:
         # Kept on self: mode/changed re-reads it (refresh_mode).
         self.ai_section = build_ai_section(self)
@@ -481,6 +494,8 @@ class QtMainWindow(QMainWindow):
             # Assignments can have changed in Settings (or the Tk UI) since the
             # cards were last drawn; they are cheap to re-read and never cached.
             self.slot_grid.refresh_assignments()
+        elif name == "Models":
+            self.models_page.refresh(announce=True)
 
     def _open_data_folder(self) -> None:
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(app_data_dir())))
@@ -631,6 +646,8 @@ class QtMainWindow(QMainWindow):
         self._refresh_templates()
         self.slot_grid.refresh_assignments()
         self.ai_section.refresh_mode()
+        # The library's active marker is the mode, spelled out per row.
+        self.models_page.refresh()
 
     # ----- theme --------------------------------------------------------------
 

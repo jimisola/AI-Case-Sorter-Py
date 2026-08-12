@@ -109,6 +109,24 @@ QListWidget::item:selected {{
     color: {c["text_highlight"]};
 }}
 
+QTreeWidget#modelTable {{
+    background-color: {c["bg_input"]};
+    color: {c["text"]};
+    border: 1px solid {c["border"]};
+}}
+QTreeWidget#modelTable::item {{ padding: 4px 6px; }}
+QTreeWidget#modelTable::item:selected {{
+    background-color: {c["bg_card_sel"]};
+    color: {c["text_highlight"]};
+}}
+QTreeWidget#modelTable QHeaderView::section {{
+    background-color: {c["bg_card"]};
+    color: {c["text_muted"]};
+    border: none;
+    border-bottom: 1px solid {c["border"]};
+    padding: 5px 6px;
+}}
+
 QFrame#slotCard {{
     background-color: {c["bg_card"]};
     border: 1px solid {c["border"]};
@@ -146,6 +164,18 @@ QSpinBox:focus, QDoubleSpinBox:focus {{ border-color: {c["border_focus"]}; }}
 
 QLabel#mutedLabel {{ color: {c["text_muted"]}; }}
 QLabel#aiResultLabel {{ color: {c["text_highlight"]}; font-weight: bold; }}
+
+QFrame#thumbTile {{ border: 1px solid transparent; border-radius: 4px; }}
+QFrame#thumbTile:hover {{ background-color: {c["bg_card_hover"]}; }}
+QFrame#thumbTile[selected="true"] {{ border: 2px solid {c["accent"]}; }}
+QFrame#thumbTile QLabel {{ background: transparent; }}
+QLabel#thumbImage {{ background-color: {c["bg_input"]}; border-radius: 3px; }}
+QLabel#thumbCaption {{ color: {c["text_muted"]}; font-size: 8pt; }}
+QLabel#imagePreview {{
+    background-color: {c["bg_input"]};
+    border: 1px solid {c["border"]};
+    border-radius: 4px;
+}}
 
 QPlainTextEdit {{
     background-color: {c["bg_input"]};
