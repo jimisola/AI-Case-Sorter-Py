@@ -89,6 +89,12 @@ automatically):**
   no `.git` present that overwrites a correct `src/sorter/_version.py` with
   `fallback-version = "0.0.0"`, and `0.0.0+unknown` parses as a pre-release,
   so every launch then sees the current release as newer and re-prompts.
+- **PySide6 spike UI** (developers only): append `--qt` (or set
+  `CASESORTER_QT=1`) to the direct launch above to get the experimental Qt
+  shell in `sorter/qtui/` instead of the Tk UI. Needs a one-time
+  `uv sync --no-install-project --extra qt` first — PySide6 is the optional
+  `[qt]` extra and bootstrap never installs it. See §5 and
+  `docs/ui-modernization.md`.
 
 **Tests:** `pytest` from the repo root (`tests/conftest.py` puts `src/` on
 `sys.path`; it lives at `tests/` top-level so it applies to both
