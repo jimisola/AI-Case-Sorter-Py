@@ -472,6 +472,40 @@ dock, menu bar) with placeholders where real tab logic would go.
   a "Restore defaults / last-saved" escape hatch. Applies to the other
   settings pages as they land, so worth deciding once.
 
+## Free-hands wishlist
+
+Things the orchestrator would change given a free hand — parked here (JL
+2026-08-12) so the port stays conservative. None are commitments; each would
+be its own proposal:
+
+- **Signals/slots over the polled EventBus.** The 50 ms drain timer is a Tk
+  inheritance; Qt's queued signal connections deliver cross-thread events
+  with no polling, no `max_items` tuning, and type-checked payloads. Big
+  refactor of the seam both UIs share — only sensible after `ui/` retires.
+- **Toolkit-neutral palette module.** Palettes out of `sorter/ui/theme.py`
+  into their own module (the known prerequisite for deleting `ui/`; today
+  qtui drags tkinter in transitively).
+- **Typed run events.** `run/*` payloads are ad-hoc dicts ("counts must key
+  off `ok`" is tribal knowledge pinned only by tests); dataclasses would make
+  the contracts self-documenting.
+- **A real async classify pipeline.** `RunController` blocks per case
+  (capture → classify → sort serially); overlapping the next capture with
+  the current classify could raise throughput on slow backends. Hardware
+  timing risk — needs Seth.
+- **First-run wizard.** Fresh install currently lands on a dashboard with a
+  red serial dot and an empty grid; a guided connect-camera/board/pick-model
+  flow would fit the empty-states work (#14) naturally.
+- **SVG icons over emoji glyphs** in the sidebar (emoji color ignores the
+  palette; real `QIcon`s could tint with the theme).
+- **Settings search box** (the Qt Creator pattern) once the section count
+  grows past six.
+- **Live save-state indicator** on settings pages ("Saved ✓" flash) if the
+  save-on-change model wins with Seth — makes the invisible persistence
+  visible.
+- **Drop the `-100.00%` class of sentinel plumbing**: `api_client` returns
+  `-1` confidence for "server sent none"; an `Optional[float]` would kill a
+  whole family of display guards.
+
 ## Decision log
 
 | Date | Decision |

@@ -48,7 +48,7 @@ Status: ☐ todo · ▶ in progress · ✔ done · ✗ blocked
 | 1 | Sort parity core: slot-assignment editing, sorting-template bar + dialog, master/package counters, package halt+bell, cropped-crop preview, AI-credentials preflight, `mode/changed` (Train visibility + grid refresh) | `tab_run.py`, `dialog_slot_template.py` | Opus | ✔ (`3e2e4b6`) |
 | 2 | Settings: Camera page (enumerate/resolutions/apply/restart) + Image Proc page (Hough/primer/LED, before-after preview) | `tab_camera.py`, `tab_imageproc.py` | Sonnet | ✔ (`427dadb`, wired in `3e2e4b6`) |
 | 3 | Settings: AI Config page (server config, headstamp manager, single-shot test) | `tab_ai.py` | Opus | ✔ (`be64586`) |
-| 4 | Settings: Serial page parity (init settings, disconnect, sort-arm test, airdrop) | `tab_serial.py` | Sonnet | ▶ |
+| 4 | Settings: Serial page parity (init settings, disconnect, sort-arm test, airdrop) | `tab_serial.py` | Sonnet | ✔ (`5cb9c50`) |
 | 5 | Models activity: library browse/filter/create/edit/activate/delete, import/export ZIP, "Use AI Config" row; model editor dialog | `tab_models.py`, `dialog_model_editor.py` | Opus | ☐ |
 | 6 | Train activity: feed→capture→classify→label→save loop, sort-while-training, training config + progress dialogs, launch/cancel training | `tab_train.py`, `dialog_training_*.py` | Opus | ☐ |
 | 7 | Install-PyTorch dialog (Qt-native, correct threading — do NOT copy the Tk `after()` pattern) + torch gate equivalent | `dialog_install_torch.py`, `torch_gate.py` | Opus | ☐ |
@@ -83,7 +83,7 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
 - [x] Camera setup (device/resolution)
 - [x] Image-proc tuning (Hough, primer mask, LED)
 - [x] AI Config (server, prompt, headstamp manager, test shot)
-- [ ] Serial board init settings + sort-arm test + airdrop
+- [x] Serial board init settings + sort-arm test + airdrop
 - [ ] Models library (create/edit/activate/delete/import/export)
 - [ ] Train loop (capture/label/save, sort-while-training)
 - [ ] Training runs (config, progress, cancel)
@@ -109,3 +109,10 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
   (Tk parity, jam-clearing), package-halt shows the dialog again (queued out
   of the drain), AI-page Clear-all keeps Tk's confirmation. Run options
   (floor/store-images/auto-select) moved to #14. Increment 4 still running.
+- 2026-08-12 ~23:10 — Increment 4 landed (`5cb9c50`): the Settings view is
+  complete (Camera, Serial, Image Proc, AI Config, Theme). qtui tests 158,
+  full suite 965. Orchestrator fixes at integration: init-on-startup push
+  moved into the shared `_after_connect` (auto-connect parity gap the agent
+  flagged), `connect_serial` decoupled from page widgets. Free-hands
+  wishlist started in docs/ui-modernization.md (JL). Next wave: #5 Models
+  (Opus) + #8 image browser (Sonnet, module-only).
