@@ -472,6 +472,28 @@ dock, menu bar) with placeholders where real tab logic would go.
   a "Restore defaults / last-saved" escape hatch. Applies to the other
   settings pages as they land, so worth deciding once.
 
+## Judgment-call register (revisit before the upstream PR)
+
+Every flagged behavior call from the port, in one place (JL asked
+2026-08-13). "Kept Tk" = parity preserved; "Changed" = deliberate deviation,
+revisitable; "Open" = needs a decision.
+
+| Call | State | Where |
+|------|-------|-------|
+| Slot-assign editor moves a headstamp off its old slot in one step (Tk greys it out and needs an untick first) | Changed — same reachable states, one step fewer; "in slot #N" hint shown | #1, `dialog_slot_assign.py` |
+| Settings persistence: Camera/Image Proc/Serial save-on-change vs Tk's explicit Save (AI Config kept Tk's Save button) | **Open — for Seth** (options a/b/c in "Open questions") | #2/#4 vs #3 |
+| Import ZIP offers three-way Update / Copy / Cancel (Tk: update-or-cancel only) | Changed — capability `model_io` always had; adds the "keep both" path | #5, `models_page.py` |
+| `Images…` disabled for foreign/community models (Tk disables nothing on the Models tab; refusal happened later in Train) | Changed — surfacing the ownership rule earlier | #5, `models_page.py` |
+| Image preview gains prev/next navigation; reclassify/delete keep it open (Tk: one-shot view, closes) | Changed — capability unchanged | #8, `dialog_image_preview.py` |
+| Headstamp rename renames files in `images/` only — not `run_images/` or `feedback_images/` | **Kept Tk — flagged**: feedback queue keeps the old label, which is what gets uploaded; widening is a small follow-up | #17, `dialog_headstamps.py` |
+| `Headstamps…` enabled for every model incl. foreign (renaming a community model's headstamps can break its checkpoint's label mapping) | **Kept Tk — flagged**: alternative is slot-only editing for foreign models | #17 |
+| Rename re-syncs the active sorting template (Tk leaves the stale name and drops the slot on next apply) | Changed — fixes a Tk bug | #17 |
+| Package-mode slot map (names in a settings key) not rewritten on rename | Kept Tk — same latent issue both UIs | #17 |
+| Counters survive Stop/Start; package-halt dialog restored; Clear-all confirm restored | Kept Tk — orchestrator overrides of agent modernizations | #1/#3 overrides |
+| History view: fixed 40-entry cap (Tk: window-size-derived), 3-step recency fade (Tk: 6) | Changed — cosmetic | #13, `history_view.py` |
+| Camera page probes devices on button click, not on page open; device/resolution apply on Apply, not instantly | Changed — no surprise hardware grabs | #2, `settings_camera.py` |
+| Evaluator: Evaluate enabled on checkpoint presence, not ownership (community models evaluable) | Kept Tk | #9 |
+
 ## Free-hands wishlist
 
 Things the orchestrator would change given a free hand — parked here (JL
