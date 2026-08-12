@@ -181,3 +181,6 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
   checklist sweep → full gates → draft PR in the fork, linking issue #29 and
   PLAN.md, noting PLAN.md + docs/guide PoC are deleted before upstream
   merge).
+- 2026-08-13 — JL: quick parity batch (issue #29 B1/B2/A6/A12/A14/A16)
+  WAITS until after the PR. Sequence locked: #21+#16 land → integrate +
+  wire #15's editor button → #19 decoupling (Fable) → final sweep → PR.
