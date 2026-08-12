@@ -160,7 +160,7 @@ known-first-party = ["sorter"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra --cov=sorter --cov-report=term"
 # Generous: the slowest legitimate tests spawn real training subprocesses.
 timeout = 120
 markers = [
