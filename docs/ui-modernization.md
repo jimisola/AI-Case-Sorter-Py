@@ -221,6 +221,25 @@ What stays despite feeling UI-adjacent: `pygrabber` (Windows camera names),
 opencv, and the `EventBus` (still the UI seam; migrating to signals/slots is
 a separate, optional step).
 
+### The hardware layer stays toolkit-neutral: pyserial + cv2
+
+Qt ships its own serial (QtSerialPort) and camera (QtMultimedia) stacks;
+decided against both:
+
+- **pyserial stays.** The serial consumer isn't the UI — it's the sort loop,
+  a daemon thread making *blocking* calls (`sort_and_move` waits on the
+  board's `done`/`ok` with a timeout). QSerialPort is async,
+  event-loop-driven, and not usable across threads without its own
+  `QThread`+loop, so adopting it means rebuilding the run loop's synchronous
+  waits as state machines — real work, no functional gain. Its enumeration
+  perks (VID/PID, friendly names) pyserial already has. It also lives in
+  `pyside6-addons`, which we deliberately don't install.
+- **cv2 stays.** The classifier needs raw numpy BGR frames — exactly what
+  cv2 produces and QtMultimedia doesn't want to hand out.
+- Keeping `hardware/` Qt-free is also what lets both UIs share it during
+  co-existence, along with the emulator and the firmware-pinned protocol
+  tests.
+
 ## Open questions
 
 - Is the pain mostly *visual* (option 2 fixes it) or *structural* — DPI,
@@ -228,8 +247,10 @@ a separate, optional step).
 - Keep the `EventBus` as-is under Qt, or migrate to signals/slots? (Bus keeps
   the non-UI layers untouched; signals are the idiomatic end state.)
 - ~~Wheel-size impact on first-run sync~~ — answered: end users never get
-  the extra; devs pay 36 s once. Remaining decision: switch the extra to
-  `PySide6-Essentials` before the real port starts.
+  the extra; devs pay 36 s once. The extra now pins `PySide6-Essentials`
+  (~80 MB; venv 594 MB vs 1.0 GB with the meta-package). Anything from
+  `pyside6-addons` a future feature wants (e.g. QtWebEngine for in-app HTML
+  reports) gets added to the extra explicitly at that point.
 - Halftone & ink-outline themes: accept flat rendering under Qt, or invest
   in a `paintEvent`/tiled-pixmap port? (Spike showed QSS alone can't do it;
   everything else themes 1:1.)
@@ -244,3 +265,5 @@ a separate, optional step).
 | 2026-08-12 | Spike built as a **co-existing** UI: `sorter/qtui/` beside `ui/`, `--qt`/`CASESORTER_QT=1` opt-in, PySide6 as a `[qt]` extra, palettes shared from `sorter.ui.theme`. Lets Qt work proceed in parallel while tracking upstream Tk changes. |
 | 2026-08-12 | Port principle set: **function parity, not UI parity** — the Qt UI redesigns the UX freely as long as every capability of the Tk UI survives. |
 | 2026-08-12 | Spike implemented and verified (17 offscreen tests, full suite green, ruff/ty clean). Headless story confirmed; wheel estimate corrected to 256 MB (meta) vs ~80 MB (`PySide6-Essentials` — recommended); halftone/ink themes flagged as the one theming gap. |
+| 2026-08-12 | `[qt]` extra swapped to `PySide6-Essentials==6.11.1` — pixel-identical (spike uses only QtCore/QtGui/QtWidgets, all in essentials; the meta-package adds only unused addons + stubs). Gotcha for existing dev venvs: the wheels overlap, so uninstalling the meta clobbers `PySide6/__init__.py` and the stubs — fix with `uv sync --extra qt --reinstall-package pyside6-essentials`. |
+| 2026-08-12 | Hardware layer stays toolkit-neutral (pyserial + cv2); QtSerialPort/QtMultimedia rejected — see "The hardware layer stays toolkit-neutral". |
