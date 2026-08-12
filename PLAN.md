@@ -15,9 +15,19 @@ decision.
 
 - `src/sorter/ui/` is never touched. `__main__.py` keeps the `--qt` branch.
 - Workers never touch widgets: bus post → 50 ms drain, `run_worker` pattern.
-- Every increment lands with headless tests (offscreen, real `Database` +
-  `Config` on tmp_path via `tests/unit/qtui/conftest.py`), and green
-  `pytest -m "not integration"`, `ruff check`, `ty check`.
+- Every increment lands with tests at BOTH levels (JL 2026-08-12):
+  - **Unit**: headless widget/behavior tests (offscreen, real `Database` +
+    `Config` on tmp_path via `tests/unit/qtui/conftest.py`).
+  - **Integration**: at least one end-to-end flow through the real layers —
+    the emulator-driven pattern from increment 3 (real bus → RunController →
+    EmulatorBroker → widgets), DB round-trips for anything persisted, and
+    for subsystem seams (updater, model ZIPs, training subprocess) hooks
+    into the flows `tests/integration/` already exercises.
+  - Green gates before commit: full `pytest` (integration included, minus
+    self-skipping external tools), `ruff check`, `ty check`.
+- Increment 16 additionally builds a cross-cutting e2e suite: scripted
+  demo-path runs (connect→assign→sort→counts→templates) against the
+  emulator, asserting the same things a human demo shows.
 - New pages/dialogs go in their own module; `app.py` only wires.
 - Colors via objectNames in `qtui/theme.py`; every color from the palette.
 - Commits: conventional, DCO-signed, one increment per commit, pushed to
