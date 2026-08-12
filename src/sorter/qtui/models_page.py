@@ -142,6 +142,7 @@ class ModelsPage(QWidget):
         self.settings = SettingsRepo(self.db)
         # Rows currently shown, in table order: (id, Model | None).
         self._rows: list[tuple[int, Model | None]] = []
+        self._columns_sized = False
         self._busy = False
 
         # The training-image browser is increment 8's; until it attaches its
@@ -209,9 +210,21 @@ class ModelsPage(QWidget):
         self.tree.setAlternatingRowColors(False)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        # Every column user-draggable (JL); contents-sized once on fill, then
+        # the user's widths stick. A Stretch section can't be dragged.
+        header = self.tree.header()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setStretchLastSection(True)
         self.tree.currentItemChanged.connect(lambda _cur, _prev: self._update_actions())
         return self.tree
+
+    def _autosize_columns(self) -> None:
+        if self._columns_sized:
+            return  # only before the user has had a chance to drag them
+        self._columns_sized = True
+        for i in range(len(COLUMNS)):
+            self.tree.resizeColumnToContents(i)
+        self.tree.setColumnWidth(0, max(self.tree.columnWidth(0), 260))
 
     def _build_action_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -267,6 +280,7 @@ class ModelsPage(QWidget):
             self._add_model_row(model, cart_by_id, counts, active=model.id == active_id)
 
         self._restore_selection(selected)
+        self._autosize_columns()
         self._update_actions()
         if announce:
             self._announce_active(active_id)
