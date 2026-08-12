@@ -69,6 +69,7 @@ from ..ui.theme import (
 )
 from .dialog_slot_assign import CATCH_ALL_HINT, SlotAssignDialog
 from .dialog_template import EditTemplateDialog, NewTemplateDialog
+from .history_view import build_history_view
 from .models_page import build_models_page
 from .settings_ai import build_ai_section
 from .settings_camera import build_camera_section
@@ -180,8 +181,9 @@ class QtMainWindow(QMainWindow):
         layout.addLayout(body, 1)
         self.setCentralWidget(central)
 
-        # The dock is built before the menus: View hosts its toggle action.
+        # Docks are built before the menus: View hosts their toggle actions.
         self._build_serial_dock()
+        self._build_history_dock()
         self._build_menus()
 
         self._camera_state = ("Camera: disconnected", False)
@@ -463,6 +465,20 @@ class QtMainWindow(QMainWindow):
         # Bottom, like Arduino IDE's monitor / VS Code's terminal (JL).
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.serial_dock)
 
+    def _build_history_dock(self) -> None:
+        self.history_dock = QDockWidget("History", self)
+        self.history_dock.setObjectName("historyDock")
+        self.history_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetClosable
+            | QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+        )
+        self.history_view = build_history_view(self)
+        self.history_dock.setWidget(self.history_view)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.history_dock)
+        # Supplementary, so it starts out of the way; View re-opens it.
+        self.history_dock.hide()
+
     def _build_menus(self) -> None:
         # menuBar().addMenu(str) hands the QMenu back with Python ownership; the
         # menus have to be kept alive here or shiboken deletes them.
@@ -479,6 +495,9 @@ class QtMainWindow(QMainWindow):
         toggle.setText("Serial Monitor")
         self.menus["View"] = self.menuBar().addMenu("&View")
         self.menus["View"].addAction(toggle)
+        history_toggle = self.history_dock.toggleViewAction()
+        history_toggle.setText("Classification History")
+        self.menus["View"].addAction(history_toggle)
 
         self.menus["Help"] = self.menuBar().addMenu("&Help")
         about = self.menus["Help"].addAction("About")
@@ -689,6 +708,8 @@ class QtMainWindow(QMainWindow):
         self._render_feed()
         if hasattr(self, "serial_monitor"):
             self.serial_monitor.apply_palette()
+        if hasattr(self, "history_view"):
+            self.history_view.apply_palette()
         # Indicator dots carry state, not a palette role a stylesheet can reach.
         self._paint_indicators()
 

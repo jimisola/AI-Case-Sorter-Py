@@ -63,8 +63,9 @@ def test_menus(window) -> None:
     ]
     # window.menus, not action.menu(): the latter hands back a Python-owned
     # wrapper and destroys the C++ menu when the temporary is collected.
-    assert [a.text() for a in window.menus["View"].actions()] == ["Serial Monitor"]
+    assert [a.text() for a in window.menus["View"].actions()] == ["Serial Monitor", "Classification History"]
     assert window.serial_dock.toggleViewAction() in window.menus["View"].actions()
+    assert window.history_dock.toggleViewAction() in window.menus["View"].actions()
 
 
 def test_theme_section_hosts_the_theme_combo(window) -> None:
