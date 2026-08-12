@@ -47,6 +47,15 @@ QMainWindow, QWidget {{
     color: {c["text"]};
 }}
 
+/* Unstyled, this is a few px of plain background — indistinguishable from
+   the universal QWidget fill above, so a dock edge had nothing to grab. */
+QMainWindow::separator {{
+    background-color: {c["border"]};
+    width: 5px;
+    height: 5px;
+}}
+QMainWindow::separator:hover {{ background-color: {c["border_focus"]}; }}
+
 #sidebar {{ background-color: {c["bg_surface"]}; }}
 #sidebar QToolButton {{
     background: transparent;
@@ -79,7 +88,16 @@ QMenu::item:selected {{
 }}
 QMenu::separator {{ height: 1px; background-color: {c["border"]}; margin: 4px 0; }}
 
-QDockWidget {{ color: {c["text"]}; }}
+/* Explicit background, not just on ::title: seen blank/transparent on Wayland
+   after a float -> re-dock cycle, letting whatever sits behind the window
+   show through the gaps between styled children (a known class of Qt/Wayland
+   dock-widget repaint issue). QDockWidget > QWidget covers the content
+   container Qt inserts around whatever widget was set on the dock. */
+QDockWidget {{
+    background-color: {c["bg_window"]};
+    color: {c["text"]};
+}}
+QDockWidget > QWidget {{ background-color: {c["bg_window"]}; }}
 QDockWidget::title {{
     background-color: {c["bg_surface"]};
     color: {c["text"]};

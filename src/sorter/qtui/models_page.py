@@ -33,7 +33,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt  # ty: ignore[unresolved-import]
+from PySide6.QtCore import QByteArray, Qt  # ty: ignore[unresolved-import]
 from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QAbstractItemView,
     QComboBox,
@@ -219,6 +219,25 @@ class ModelsPage(QWidget):
         header.setStretchLastSection(True)
         self.tree.currentItemChanged.connect(lambda _cur, _prev: self._update_actions())
         return self.tree
+
+    # ----- column persistence (app.py: saveState-style window/session state) -
+
+    def header_state(self) -> bytes:
+        """Column widths/order, for ``app.py`` to persist across restarts."""
+        return bytes(self.tree.header().saveState().data())
+
+    def restore_header_state(self, data: bytes) -> bool:
+        """Apply a previously-saved header state; a malformed blob is ignored.
+
+        Marks columns as already sized so ``_autosize_columns`` doesn't
+        overwrite what was just restored on the first ``refresh()``.
+        """
+        if not data:
+            return False
+        ok = bool(self.tree.header().restoreState(QByteArray(data)))
+        if ok:
+            self._columns_sized = True
+        return ok
 
     def _autosize_columns(self) -> None:
         if self._columns_sized:

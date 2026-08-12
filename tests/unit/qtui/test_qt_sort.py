@@ -552,3 +552,50 @@ def test_manual_feed_drives_the_emulator_end_to_end(window, config, monkeypatch)
     log = window.serial_monitor.output.toPlainText()
     assert "-> xf:0" in log
     assert "<- done" in log
+
+
+# ----- run options (Tk reference: tab_run.py's run_opts frame) ---------------
+
+
+def test_run_options_reflect_the_config_defaults(window, config) -> None:
+    assert window.floor_spin.value() == config.run_confidence_floor
+    assert window.store_images_combo.currentText() == "None"
+    assert window.auto_select_check.isChecked() == config.run_auto_select_trays
+
+
+def test_confidence_floor_control_persists_and_colors_the_feed(window, config) -> None:
+    window.floor_spin.setValue(80)
+
+    assert config.run_confidence_floor == 80
+
+    window.bus.post("run/history", history("9mm", 92.0))
+    window.bus.post("run/history", history("unknown", 41.0))
+    window.bus.drain()
+
+    text = window.feed_label.text()
+    assert f'<span style="color: {window.palette_colors["success"]};">92%' in text
+    assert f'<span style="color: {window.palette_colors["warning"]};">41%' in text
+
+
+def test_store_images_control_persists_and_warns_once_per_session(window, config) -> None:
+    notices = []
+    window.notify = lambda title, text: notices.append(title)
+
+    window.store_images_combo.setCurrentText("Above Confidence Floor")
+    assert config.run_store_images == "above"
+    assert notices == ["Store images enabled"]
+
+    window.store_images_combo.setCurrentText("All Images")
+    assert config.run_store_images == "all"
+    assert notices == ["Store images enabled"]  # not a second time
+
+    window.store_images_combo.setCurrentText("None")
+    assert config.run_store_images == "none"
+
+
+def test_auto_select_control_persists(window, config) -> None:
+    window.auto_select_check.setChecked(True)
+    assert config.run_auto_select_trays is True
+
+    window.auto_select_check.setChecked(False)
+    assert config.run_auto_select_trays is False

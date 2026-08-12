@@ -14,7 +14,9 @@ Scope and rationale: docs/ui-modernization.md.
 
 from __future__ import annotations
 
+import base64
 import html
+import os
 import sys
 import threading
 import traceback
@@ -23,7 +25,7 @@ from collections.abc import Callable
 from typing import Any
 
 import numpy as np
-from PySide6.QtCore import Qt, QTimer, QUrl  # ty: ignore[unresolved-import]
+from PySide6.QtCore import QByteArray, Qt, QTimer, QUrl  # ty: ignore[unresolved-import]
 from PySide6.QtGui import (  # ty: ignore[unresolved-import]
     QDesktopServices,
     QImage,
@@ -36,10 +38,12 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QCheckBox,
     QComboBox,
     QDockWidget,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QListWidget,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSizePolicy,
@@ -49,6 +53,7 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
 from .. import __version__
@@ -95,6 +100,39 @@ BAUD_CHOICES = (9600, 19200, 38400, 57600, 115200)
 FEED_MAX = 12
 FEED_EMPTY_TEXT = "Recent classifications will appear here."
 
+# Run options (Tk reference: tab_run.py's run_opts frame). Same config keys,
+# same semantics — just grouped into one popover instead of three rows.
+STORE_IMAGES_LABELS = {
+    "none": "None",
+    "above": "Above Confidence Floor",
+    "below": "Below Confidence Floor",
+    "all": "All Images",
+}
+STORE_IMAGES_BY_LABEL = {label: mode for mode, label in STORE_IMAGES_LABELS.items()}
+STORE_IMAGES_WARNING_TITLE = "Store images enabled"
+STORE_IMAGES_WARNING_TEXT = (
+    "Classified run images will be saved under the active model's run_images "
+    "folder. This can use significant disk space over time."
+)
+
+EMPTY_STATE_TITLE = "Nothing connected yet"
+EMPTY_STATE_HINT = "Connect a board and a camera to start sorting."
+
+# Persisted window/session state (JL, increment 14): dock layout + the model
+# table's column widths, the same _load_setting/_save_setting pattern used
+# for the theme choice.
+SETTING_WINDOW_STATE = "ui.window_state"
+SETTING_MODELS_COLUMNS = "ui.models_columns"
+
+# Tk parity (ui/app.py): minsize(960, 660).
+MIN_WINDOW_SIZE = (960, 660)
+
+# A double-click re-dock (or the View toggle) can leave a dock collapsed to
+# near-zero size — visible per its toggle action, but unusable. Below this
+# floor, _restore_collapsed_docks pushes it back out to a usable size.
+DOCK_COLLAPSE_FLOOR_PX = 120
+DOCK_RESTORED_SIZE_PX = 240
+
 
 class QtMainWindow(QMainWindow):
     def __init__(self, config: Any, *, auto_connect: bool = True) -> None:
@@ -110,6 +148,10 @@ class QtMainWindow(QMainWindow):
         self._master_count = 0
         self._templates: list[Any] = []
         self._feed_entries: deque[tuple[str, float, bool]] = deque(maxlen=FEED_MAX)
+        # Tk parity: the store-images disk-usage notice shows once per session.
+        self._store_warning_shown = False
+
+        self.setMinimumSize(*MIN_WINDOW_SIZE)
 
         load_custom_themes(self._load_setting(SETTING_CUSTOM_THEMES))
         self.theme_name = resolve_theme(self._load_setting(SETTING_THEME))
@@ -130,6 +172,7 @@ class QtMainWindow(QMainWindow):
         self.setWindowTitle(f"AI Case Sorter OSS - v{__version__} (Qt) · GPL-3.0")
         self._build_ui()
         self._apply_theme(self.theme_name)
+        self._restore_window_state()
 
         self.bus.subscribe("status", self.set_status)
         # Run state comes from the controller's own events, never from the
@@ -140,7 +183,7 @@ class QtMainWindow(QMainWindow):
         self.bus.subscribe("run/error", lambda msg: self.set_status(f"Run error: {msg}"))
         self.bus.subscribe("run/result", self._on_run_result)
         self.bus.subscribe("run/history", self._on_run_history)
-        self.bus.subscribe("run/assignment_changed", lambda _p: self.slot_grid.refresh_assignments())
+        self.bus.subscribe("run/assignment_changed", lambda _p: self._refresh_sort_grid())
         self.bus.subscribe("run/package_full", self._on_package_full)
         self.bus.subscribe("run/package_halt", self._on_package_halt)
         # Headstamps, templates and the Train activity are all scoped to the
@@ -161,6 +204,11 @@ class QtMainWindow(QMainWindow):
     # ----- construction -------------------------------------------------------
 
     def _build_ui(self) -> None:
+        # Set before any page is built: show_page("Sort") (from the sidebar's
+        # own construction, below) already reaches _update_sort_empty_state.
+        self._camera_state = ("Camera: disconnected", False)
+        self._serial_state = ("Serial: disconnected", False)
+
         central = QWidget(self)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -185,8 +233,6 @@ class QtMainWindow(QMainWindow):
         self._build_history_dock()
         self._build_menus()
 
-        self._camera_state = ("Camera: disconnected", False)
-        self._serial_state = ("Serial: disconnected", False)
         self.camera_label = QLabel(self)
         self.serial_label = QLabel(self)
         # Added left to right, so serial ends up rightmost — same order as the
@@ -261,6 +307,7 @@ class QtMainWindow(QMainWindow):
         column.setSpacing(10)
         column.addLayout(self._build_action_row(page))
         column.addLayout(self._build_template_bar(page))
+        column.addLayout(self._build_run_options_bar(page))
 
         splitter = QSplitter(Qt.Orientation.Horizontal, page)
         splitter.addWidget(self._build_preview_column(splitter))
@@ -269,12 +316,66 @@ class QtMainWindow(QMainWindow):
         self.slot_grid.slot_reset.connect(lambda slot: self.reset_slot_count(slot))
         splitter.addWidget(self.slot_grid)
         splitter.setSizes([600, 400])
-        column.addWidget(splitter, 1)
+
+        # Index 0 is the working dashboard, 1 the first-run guided panel — see
+        # _update_sort_empty_state. Nothing computes the initial state here:
+        # _paint_indicators() (called once _build_ui finishes) does that.
+        self.sort_stack = QStackedWidget(page)
+        self.sort_stack.addWidget(splitter)
+        self.sort_stack.addWidget(self._build_empty_state_panel(page))
+        column.addWidget(self.sort_stack, 1)
 
         self.feed_label = self._muted_label(FEED_EMPTY_TEXT, page)
         self.feed_label.setTextFormat(Qt.TextFormat.RichText)
         column.addWidget(self.feed_label)
         return page
+
+    def _build_empty_state_panel(self, page: QWidget) -> QWidget:
+        """First-run guidance in place of a grid nothing has configured yet."""
+        panel = QWidget(page)
+        column = QVBoxLayout(panel)
+        column.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        column.setSpacing(10)
+
+        title = QLabel(EMPTY_STATE_TITLE, panel)
+        title.setObjectName("emptyStateTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        column.addWidget(title)
+        hint = self._muted_label(EMPTY_STATE_HINT, panel)
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        column.addWidget(hint)
+
+        self.empty_state_board_button = QPushButton("Connect a board — Settings → Serial", panel)
+        self.empty_state_board_button.clicked.connect(lambda: self._open_settings_section("Serial"))
+        column.addWidget(self.empty_state_board_button)
+
+        self.empty_state_camera_button = QPushButton("Connect a camera — Settings → Camera", panel)
+        self.empty_state_camera_button.clicked.connect(lambda: self._open_settings_section("Camera"))
+        column.addWidget(self.empty_state_camera_button)
+        return panel
+
+    def _open_settings_section(self, name: str) -> None:
+        self.sidebar_buttons["Settings"].setChecked(True)
+        self.show_page("Settings")
+        items = self.settings_list.findItems(name, Qt.MatchFlag.MatchExactly)
+        if items:
+            self.settings_list.setCurrentItem(items[0])
+
+    def _refresh_sort_grid(self) -> None:
+        """Assignments changed (bus event, template swap, mode switch, edit)."""
+        self.slot_grid.refresh_assignments()
+        self._update_sort_empty_state()
+
+    def _update_sort_empty_state(self) -> None:
+        """No board, no camera, nothing routed anywhere yet -> the guided panel.
+
+        Re-evaluated on every indicator paint (camera/serial connect changes)
+        and every assignment change, never cached: any one of the three
+        conditions clearing is enough to swap back to the real dashboard.
+        """
+        connected = self._camera_state[1] or self._serial_state[1]
+        fresh_db = not any(int(h.get("slot", 0)) > 0 for h in self.config.headstamps)
+        self.sort_stack.setCurrentIndex(1 if (not connected and fresh_db) else 0)
 
     def _build_action_row(self, page: QWidget) -> QHBoxLayout:
         actions = QHBoxLayout()
@@ -302,10 +403,11 @@ class QtMainWindow(QMainWindow):
         return actions
 
     def _build_template_bar(self, page: QWidget) -> QHBoxLayout:
-        """The slot layout below is whatever the selected template holds.
+        """Template things only — run configuration lives in its own group.
 
-        Package mode keeps its own list (its assignments are many-to-many), so
-        the bar re-populates whenever the mode changes.
+        JL, increment 14: consolidate everything that configures how a run
+        behaves into one place (see ``_build_run_options_button``) instead
+        of scattering it across the tab, as Tk does.
         """
         bar = QHBoxLayout()
         bar.addWidget(self._muted_label("Sorting template", page))
@@ -321,21 +423,84 @@ class QtMainWindow(QMainWindow):
         self.template_hint = self._muted_label("", page)
         bar.addWidget(self.template_hint)
         bar.addStretch(1)
+        self._refresh_templates()
+        return bar
 
-        self.package_check = QCheckBox("Package mode", page)
+    def _build_run_options_bar(self, page: QWidget) -> QHBoxLayout:
+        bar = QHBoxLayout()
+        bar.addWidget(self._build_run_options_button(page))
+        bar.addStretch(1)
+        return bar
+
+    def _build_run_options_button(self, page: QWidget) -> QToolButton:
+        """Everything that configures how a run behaves, in one popover.
+
+        Tk reference: tab_run.py's run_opts frame plus its separate Package
+        Mode / Batch Size rows — same Config keys and semantics throughout,
+        just grouped compactly instead of stacked as five always-visible
+        rows (JL, increment 14: package mode/batch moved here from the
+        template bar, which now carries only template things).
+        """
+        button = QToolButton(page)
+        button.setText("⚙ Run options")
+        button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+
+        menu = QMenu(button)
+        form_holder = QWidget(menu)
+        form = QFormLayout(form_holder)
+        form.setContentsMargins(10, 8, 10, 8)
+
+        self.store_images_combo = QComboBox(form_holder)
+        self.store_images_combo.addItems(list(STORE_IMAGES_LABELS.values()))
+        self.store_images_combo.setCurrentText(STORE_IMAGES_LABELS.get(self.config.run_store_images, "None"))
+        self.store_images_combo.currentTextChanged.connect(self._on_store_images_changed)
+        form.addRow("Store images", self.store_images_combo)
+
+        self.floor_spin = QSpinBox(form_holder)
+        self.floor_spin.setRange(0, 100)
+        self.floor_spin.setSuffix("%")
+        self.floor_spin.setValue(int(self.config.run_confidence_floor))
+        self.floor_spin.valueChanged.connect(self._on_floor_changed)
+        form.addRow("Confidence floor", self.floor_spin)
+
+        self.auto_select_check = QCheckBox("Automatically select trays", form_holder)
+        self.auto_select_check.setChecked(bool(self.config.run_auto_select_trays))
+        self.auto_select_check.toggled.connect(self._on_auto_select_toggled)
+        form.addRow(self.auto_select_check)
+
+        self.package_check = QCheckBox("Package mode", form_holder)
         self.package_check.setChecked(bool(self.config.run_package_mode))
         self.package_check.toggled.connect(self._on_package_mode_toggled)
-        bar.addWidget(self.package_check)
-        self.batch_caption = self._muted_label("Batch", page)
-        self.batch_spin = QSpinBox(page)
+        form.addRow(self.package_check)
+
+        self.batch_caption = self._muted_label("Batch size", form_holder)
+        self.batch_spin = QSpinBox(form_holder)
         self.batch_spin.setRange(1, 999999)
         self.batch_spin.setValue(int(self.config.run_package_size))
         self.batch_spin.valueChanged.connect(self._on_batch_size_changed)
-        bar.addWidget(self.batch_caption)
-        bar.addWidget(self.batch_spin)
+        form.addRow(self.batch_caption, self.batch_spin)
         self._apply_package_visibility()
-        self._refresh_templates()
-        return bar
+
+        action = QWidgetAction(menu)
+        action.setDefaultWidget(form_holder)
+        menu.addAction(action)
+        button.setMenu(menu)
+        return button
+
+    def _on_store_images_changed(self, label: str) -> None:
+        mode = STORE_IMAGES_BY_LABEL.get(label, "none")
+        self.config.set_run_store_images(mode)
+        if mode != "none" and not self._store_warning_shown:
+            self._store_warning_shown = True
+            self.notify(STORE_IMAGES_WARNING_TITLE, STORE_IMAGES_WARNING_TEXT)
+
+    def _on_floor_changed(self, value: int) -> None:
+        # The feed reads config.run_confidence_floor live on every run/history
+        # event (_on_run_history) — no separate wiring needed for the coloring.
+        self.config.set_run_confidence_floor(int(value))
+
+    def _on_auto_select_toggled(self, checked: bool) -> None:
+        self.config.set_run_auto_select_trays(bool(checked))
 
     def _build_preview_column(self, parent: QWidget) -> QWidget:
         holder = QWidget(parent)
@@ -476,6 +641,7 @@ class QtMainWindow(QMainWindow):
         self.serial_dock.setWidget(self.serial_monitor)
         # Bottom, like Arduino IDE's monitor / VS Code's terminal (JL).
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.serial_dock)
+        self._watch_dock_transitions(self.serial_dock)
 
     def _build_history_dock(self) -> None:
         self.history_dock = QDockWidget("History", self)
@@ -490,6 +656,102 @@ class QtMainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.history_dock)
         # Supplementary, so it starts out of the way; View re-opens it.
         self.history_dock.hide()
+        self._watch_dock_transitions(self.history_dock)
+
+    def _watch_dock_transitions(self, dock: QDockWidget) -> None:
+        """Recompute layout and repaint after a float/re-dock.
+
+        Investigated live against a real board (JL, screenshot-verified,
+        Wayland). Two symptoms, two different causes, in the order they were
+        found and ruled out:
+
+        1. Widget fragments visibly mixing into the dock area — turned out to
+           be cv2's bundled Qt plugins loading against PySide6 (scrubbed in
+           ``__main__.py``); the QDockWidget background in theme.py and the
+           repaint calls below stay as defense-in-depth, not the fix.
+        2. On genuine PySide6, after a float -> re-dock the central widget
+           keeps its pre-float (shrunken) geometry — a dead band appears
+           between it and the dock, unowned by either, and the Sort page's
+           slot grid grows a horizontal scrollbar. This is a layout-
+           activation failure, not a paint gap: QMainWindowLayout doesn't
+           always recompute the central widget's geometry on its own when a
+           dock's top-level state changes.
+        3. Double-clicking a floating dock's title re-docks it collapsed —
+           zero height/width, invisible, while its View-menu toggle still
+           shows checked. ``_restore_collapsed_docks`` covers this; also
+           wired to ``visibilityChanged`` for the View-toggle show path,
+           which can leave the same collapsed state — but through a lighter
+           handler than topLevelChanged/dockLocationChanged's: unlike those
+           two, ``visibilityChanged`` fires on perfectly ordinary show/hide
+           (a fresh window's own construction included), so it must never
+           carry the resize-nudge fallback below — that's a "normal
+           operation" case the nudge is explicitly not for, and running it
+           there was an earlier version of this fix's own bug (a stray +1px
+           window-size leak caught by the offscreen test suite).
+        """
+        dock.topLevelChanged.connect(self._schedule_dock_repaint)
+        dock.dockLocationChanged.connect(self._schedule_dock_repaint)
+        dock.visibilityChanged.connect(self._schedule_collapse_check)
+
+    def _schedule_dock_repaint(self, *_args: Any) -> None:
+        # Deferred one event-loop turn: Qt hasn't finished the dock's own
+        # transition (float/re-dock) at the moment the signal fires.
+        QTimer.singleShot(0, self._repaint_after_dock_transition)
+
+    def _schedule_collapse_check(self, *_args: Any) -> None:
+        QTimer.singleShot(0, self._restore_collapsed_docks)
+
+    def _repaint_after_dock_transition(self) -> None:
+        """Force QMainWindowLayout to recompute, then repaint what it owns."""
+        layout = self.layout()
+        if layout is not None:
+            layout.invalidate()
+            layout.activate()
+        central = self.centralWidget()
+        if central is not None:
+            central.updateGeometry()
+            central.update()
+        self.serial_dock.update()
+        self.history_dock.update()
+        self.update()
+        self._restore_collapsed_docks()
+        self._nudge_layout_recompute()
+
+    def _restore_collapsed_docks(self) -> None:
+        """Push a collapsed dock back out to a usable size.
+
+        ``resizeDocks`` is the API that actually sticks against a
+        QMainWindowLayout-managed dock — plain ``resize()``/
+        ``setFixedHeight()`` don't. The orientation-per-dock mapping matches
+        each dock's fixed starting area (bottom / right, see
+        ``_build_serial_dock`` / ``_build_history_dock``): dragging a dock to
+        a different area is a separate user action, not the collapse bug.
+        """
+        for dock, orientation in (
+            (self.serial_dock, Qt.Orientation.Vertical),  # bottom area: height
+            (self.history_dock, Qt.Orientation.Horizontal),  # right area: width
+        ):
+            if not dock.isVisible() or dock.isFloating():
+                continue
+            size = dock.height() if orientation == Qt.Orientation.Vertical else dock.width()
+            if size < DOCK_COLLAPSE_FLOOR_PX:
+                self.resizeDocks([dock], [DOCK_RESTORED_SIZE_PX], orientation)
+
+    def _nudge_layout_recompute(self) -> None:
+        """Belt-and-braces fallback: a 1px resize round-trip.
+
+        ``invalidate()``/``activate()`` is the direct fix and should be
+        enough on its own; this covers whatever it doesn't, on the
+        (unverified offscreen) chance QMainWindowLayout still needs an
+        actual size change to re-flow the central widget against a dock
+        that just changed float state. Guarded to the dock-transition path
+        only — never called during normal operation — and restores the
+        original size on the next event-loop turn, so it's a one-frame
+        nudge rather than a visible resize.
+        """
+        size = self.size()
+        self.resize(size.width(), size.height() + 1)
+        QTimer.singleShot(0, lambda: self.resize(size))
 
     def _build_menus(self) -> None:
         # menuBar().addMenu(str) hands the QMenu back with Python ownership; the
@@ -515,8 +777,13 @@ class QtMainWindow(QMainWindow):
         guide = self.menus["Help"].addAction("User Guide")
         guide.setShortcut(QKeySequence.StandardKey.HelpContents)  # F1
         guide.triggered.connect(self.open_help)
+        self.menus["Help"].addSeparator()
+        # TODO(#11): "Check for updates…" goes here — Help menu, per
+        # docs/ui-modernization.md — once increment 11 lands the dialog.
         about = self.menus["Help"].addAction("About")
         about.triggered.connect(self._show_about)
+        license_action = self.menus["Help"].addAction("License")
+        license_action.triggered.connect(self._show_license)
 
     # ----- navigation ---------------------------------------------------------
 
@@ -525,7 +792,7 @@ class QtMainWindow(QMainWindow):
         if name == "Sort":
             # Assignments can have changed in Settings (or the Tk UI) since the
             # cards were last drawn; they are cheap to re-read and never cached.
-            self.slot_grid.refresh_assignments()
+            self._refresh_sort_grid()
         elif name == "Models":
             self.models_page.refresh(announce=True)
         elif name == "Train":
@@ -537,7 +804,14 @@ class QtMainWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(app_data_dir())))
 
     def _show_about(self) -> None:
-        QMessageBox.about(self, "About", f"AI Case Sorter\nv{__version__}\nQt spike")
+        from .dialog_about import build_about_dialog
+
+        build_about_dialog(self).exec()
+
+    def _show_license(self) -> None:
+        from .dialog_about import build_license_dialog
+
+        build_license_dialog(self).exec()
 
     def open_slot_editor(self, slot: int) -> None:
         """Edit what routes to one slot. The catch-all isn't configurable."""
@@ -545,9 +819,9 @@ class QtMainWindow(QMainWindow):
             self.set_status(CATCH_ALL_HINT)
             return
         dialog = SlotAssignDialog(self.config, int(slot), self)
-        dialog.changed.connect(self.slot_grid.refresh_assignments)
+        dialog.changed.connect(self._refresh_sort_grid)
         dialog.exec()
-        self.slot_grid.refresh_assignments()
+        self._refresh_sort_grid()
 
     def _refresh_templates(self) -> None:
         """Repopulate the combo for the active model + current run mode."""
@@ -606,7 +880,7 @@ class QtMainWindow(QMainWindow):
         """Counters are per-layout: a slot may hold another headstamp now."""
         self._refresh_templates()
         self._clear_counts()
-        self.slot_grid.refresh_assignments()
+        self._refresh_sort_grid()
         self.set_status(status)
 
     def _apply_package_visibility(self) -> None:
@@ -620,11 +894,11 @@ class QtMainWindow(QMainWindow):
         # Counts, assignments and templates are all mode-specific.
         self._clear_counts()
         self._refresh_templates()
-        self.slot_grid.refresh_assignments()
+        self._refresh_sort_grid()
 
     def _on_batch_size_changed(self, value: int) -> None:
         self.config.set_run_package_size(int(value))
-        self.slot_grid.refresh_assignments()
+        self._refresh_sort_grid()
 
     def _clear_counts(self) -> None:
         self.slot_grid.reset_counts()
@@ -675,7 +949,7 @@ class QtMainWindow(QMainWindow):
         self._apply_mode_visibility()
         self._clear_counts()
         self._refresh_templates()
-        self.slot_grid.refresh_assignments()
+        self._refresh_sort_grid()
         self.ai_section.refresh_mode()
         # Everything on the Train page is scoped to the active model.
         self.train_page.refresh()
@@ -705,6 +979,33 @@ class QtMainWindow(QMainWindow):
         except Exception:
             # A preference that can't be persisted still applies this session.
             pass
+
+    @staticmethod
+    def _bytes_to_setting(data: bytes) -> str:
+        """Base64 text: SettingsRepo stores JSON-encoded values, not raw bytes."""
+        return base64.b64encode(bytes(data)).decode("ascii")
+
+    @staticmethod
+    def _setting_to_bytes(value: Any) -> bytes | None:
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            return base64.b64decode(value.encode("ascii"))
+        except (ValueError, TypeError):
+            return None
+
+    def _restore_window_state(self) -> None:
+        """Dock layout + the model table's column widths, from the last session."""
+        state = self._setting_to_bytes(self._load_setting(SETTING_WINDOW_STATE))
+        if state is not None:
+            self.restoreState(QByteArray(state))
+        columns = self._setting_to_bytes(self._load_setting(SETTING_MODELS_COLUMNS))
+        if columns is not None:
+            self.models_page.restore_header_state(columns)
+
+    def _save_window_state(self) -> None:
+        self._save_setting(SETTING_WINDOW_STATE, self._bytes_to_setting(bytes(self.saveState().data())))
+        self._save_setting(SETTING_MODELS_COLUMNS, self._bytes_to_setting(self.models_page.header_state()))
 
     def set_theme(self, name: str) -> None:
         """Switch palettes live and remember the choice."""
@@ -743,6 +1044,9 @@ class QtMainWindow(QMainWindow):
             (self.serial_label, self._serial_state),
         ):
             label.setText(self._indicator_html(message, connected=connected))
+        # Every camera/serial connect-state change can flip the Sort page
+        # between the guided empty state and the real dashboard.
+        self._update_sort_empty_state()
 
     def _set_camera_indicator(self, message: str, *, connected: bool) -> None:
         self._camera_state = (message, connected)
@@ -961,7 +1265,7 @@ class QtMainWindow(QMainWindow):
             bus=self.bus,
             db=self.db,
         )
-        self.slot_grid.refresh_assignments()
+        self._refresh_sort_grid()
         self._update_run_buttons()
 
     def notify(self, title: str, text: str) -> None:
@@ -1010,7 +1314,7 @@ class QtMainWindow(QMainWindow):
         controller = self._ready_to_sort()
         if controller is None or self._is_running:
             return
-        self.slot_grid.refresh_assignments()
+        self._refresh_sort_grid()
         controller.start()
 
     def stop_run(self) -> None:
@@ -1151,6 +1455,10 @@ class QtMainWindow(QMainWindow):
     # ----- lifecycle ----------------------------------------------------------
 
     def closeEvent(self, event: Any) -> None:
+        # No confirm-on-close while a run is active: Tk's own _on_close
+        # (ui/app.py) doesn't ask either — it just stops the controller and
+        # destroys the window. Mirrored here rather than adding a prompt Tk
+        # never had.
         try:
             if self.run_controller is not None:
                 self.run_controller.stop()
@@ -1165,10 +1473,35 @@ class QtMainWindow(QMainWindow):
             self.camera.stop()
         except Exception:
             pass
+        try:
+            self._save_window_state()
+        except Exception:
+            # A preference that can't be persisted must never block shutdown.
+            pass
         super().closeEvent(event)
 
 
+def default_qpa_platform() -> None:
+    """Linux: prefer XCB (XWayland) over native Wayland.
+
+    A floated ``QDockWidget`` is frozen under native Wayland — JL hit this
+    live (release a floating dock and it can no longer be moved or resized):
+    a frameless top-level window can't ask a Wayland compositor to move/
+    resize it, an upstream Qt/Wayland limitation, not something fixable in
+    application code. XCB via XWayland doesn't have the gap.
+
+    ``setdefault`` so an explicit ``QT_QPA_PLATFORM`` (env, or a test's
+    ``offscreen``) always wins. The semicolon list, never a bare ``"xcb"``:
+    Qt tries entries left to right, so this still falls back to native
+    Wayland on a box missing an XWayland dependency (JL hit
+    ``libxcb-cursor0`` missing) instead of failing to start.
+    """
+    if sys.platform.startswith("linux"):
+        os.environ.setdefault("QT_QPA_PLATFORM", "xcb;wayland")
+
+
 def run_app(config: Any) -> int:
+    default_qpa_platform()
     app = QApplication.instance() or QApplication(sys.argv[:1])
     window = QtMainWindow(config)
     window.resize(1024, 768)
