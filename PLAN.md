@@ -61,6 +61,7 @@ Status: ☐ todo · ▶ in progress · ✔ done · ✗ blocked
 | 14 | Chrome parity: sign-in button + auth state, empty states (no camera/board/model), Tools menu (check updates, sign in), window/session polish, **remaining Run options: confidence floor, store-images mode, auto-select trays (left out of #1)**; **Help menu grows (JL): bigger About, Help→License, links (this repo, CS7.2 hardware/firmware repo, Seth's shop, report-an-issue)**; dock-position persistence (saveState) | `app.py` (Tk), `tab_run.py` options | Sonnet | ☐ |
 | 15 | Theme editor (build/save/rename/import/export custom themes) — descopable; halftone/ink themes stay flat under Qt either way | `dialog_theme_editor.py` | Opus | ☐ |
 | 17 | **Headstamp manager dialog** (parents, auto-suggest, rename incl. on-disk image renames, unsaved guard — gap found in #5: Tk's Models tab has it, no Qt equivalent; ~660 Tk lines) | `dialog_headstamps.py` (Tk: inside `tab_models.py`) | Opus | ▶ |
+| 18 | **Application documentation** — original user guide for the OSS app, informed by the structure/topics of Seth's CS7.2 Application Guide PDF (his copyrighted work: adapt with permission, never copy); includes picking the format and an in-app context-aware help mechanism (see log) | new `docs/guide/` | — | ✗ **blocked: needs Seth's green light (JL 2026-08-13)** |
 | 16 | CI: qt test job (offscreen, `--extra qt`); CLAUDE.md + docs final pass; parity sign-off checklist | workflows, docs | Fable | ☐ |
 
 Increments 1–2 run in parallel (disjoint modules; the orchestrator wires
@@ -134,3 +135,12 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
   via the orchestrator at integration. Landed meanwhile: resizable model
   columns (`35a25fd`), Settings-Camera live feed (`a97a5b2`), bottom serial
   dock (`05bdd01`).
+- 2026-08-13 — #18 added (JL), explicitly NOT started until Seth approves:
+  app documentation adapted for the OSS version. Format leaning: Markdown
+  in-repo (GitHub renders it; MkDocs Material later if a site is wanted;
+  AsciiDoc overpowered here; Mintlify is hosted/commercial and shaped for
+  API/SaaS docs — poor fit for a desktop app). Context-aware inline help is
+  feasible with zero new deps: QTextBrowser renders Markdown natively, so
+  the same docs source can back per-page F1 help via anchors, plus Qt's
+  built-in QWhatsThis (Shift+F1 per-widget) and status-bar tips. Decision
+  deferred to the increment itself.
