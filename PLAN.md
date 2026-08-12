@@ -54,16 +54,17 @@ Status: ☐ todo · ▶ in progress · ✔ done · ✗ blocked
 | 7 | Install-PyTorch dialog (Qt-native, correct threading — do NOT copy the Tk `after()` pattern) + torch gate equivalent | `dialog_install_torch.py`, `torch_gate.py` | Opus | ✔ (`6101ddb`) |
 | 8 | Model images browser + preview (reclassify/delete) | `dialog_model_images.py`, `dialog_image_preview.py` | Sonnet | ✔ (`cc6b425`) |
 | 9 | Evaluator: run eval, HTML report, history | `dialog_model_evaluator.py` | Opus | ✔ (`39e178f`) |
-| 10 | Community activity + login + share dialogs (auth-gated sidebar entry) | `tab_community.py`, `dialog_login.py`, `dialog_share_model.py` | Opus | ▶ |
-| 11 | Updates: **Help → "Check for updates…"** (JL 2026-08-12: not under Settings) + status-bar affordance when one is staged, dialog (notes→progress→restart), version picker; drop the Settings→Updates section | `dialog_update.py`, `app.py` update wiring | Opus | ▶ |
+| 10 | Community activity + login + share dialogs (auth-gated sidebar entry) | `tab_community.py`, `dialog_login.py`, `dialog_share_model.py` | Opus | ✔ (`8e20b81`, wired `255a3fe`) |
+| 11 | Updates: **Help → "Check for updates…"** (JL 2026-08-12: not under Settings) + status-bar affordance when one is staged, dialog (notes→progress→restart), version picker; drop the Settings→Updates section | `dialog_update.py`, `app.py` update wiring | Opus | ✔ (`415d33c`, wired `255a3fe`) |
 | 12 | Serial monitor dock parity: filter, RX/TX/notes toggles, pause/flush, save, timestamps, line endings, command box + history, baud switch, full-history-since-launch (JL: upstream #78/#86 features) | `serial_monitor.py` | Sonnet | ✔ (`0bf3e8b`) |
 | 13 | Classification history with images (dashboard feed grows thumbnails / dock) | `monitor.py` | Sonnet | ✔ (`1a43bb1`) |
-| 14 | Chrome parity: sign-in button + auth state, empty states (no camera/board/model), Tools menu (check updates, sign in), window/session polish, **remaining Run options: confidence floor, store-images mode, auto-select trays (left out of #1)**; **Help menu grows (JL): bigger About, Help→License, links (this repo, CS7.2 hardware/firmware repo, Seth's shop, report-an-issue)**; dock-position persistence (saveState) | `app.py` (Tk), `tab_run.py` options | Sonnet | ▶ |
+| 14 | Chrome parity: sign-in button + auth state, empty states (no camera/board/model), Tools menu (check updates, sign in), window/session polish, **remaining Run options: confidence floor, store-images mode, auto-select trays (left out of #1)**; **Help menu grows (JL): bigger About, Help→License, links (this repo, CS7.2 hardware/firmware repo, Seth's shop, report-an-issue)**; dock-position persistence (saveState) | `app.py` (Tk), `tab_run.py` options | Sonnet | ✔ (`8bc7f6d`) |
 | 15 | Theme editor (build/save/rename/import/export custom themes) — descopable; halftone/ink themes stay flat under Qt either way | `dialog_theme_editor.py` | Opus | ☐ |
 | 17 | **Headstamp manager dialog** (parents, auto-suggest, rename incl. on-disk image renames, unsaved guard — gap found in #5: Tk's Models tab has it, no Qt equivalent; ~660 Tk lines) | `dialog_headstamps.py` (Tk: inside `tab_models.py`) | Opus | ✔ (`35c9896`) |
 | 20 | **The PR** (JL 2026-08-13, clarified: **in the fork** — base `jimisola:main`, head `ui-modernization-research`, created by Fable via `gh`; Seth reviews by link; NOT a cross-repo PR to sjseth). Body top-to-bottom: (1) how to run the qtui (clone/sync/launch, three OSes); (2) explicit note that the Tk UI is untouched and remains the default — nothing removed (yet); (3) feature-parity table from PLAN's checklist; (4) design decisions (co-existence, activity sidebar, docks, function-not-UI parity) + the judgment-call register; (5) open items (register "Open" rows, halftone themes, #18 docs approval) + LINK the parity-gap issue jimisola#29 (Windows-guide inventory); (6) pros of the stack (headless CI without Xvfb, PySide6-Essentials sizing, LGPL/GPL fit, single-source docs PoC); (7) test/velocity numbers. Draft PR; no merge — Seth decides. | `docs/ui-modernization.md`, `PLAN.md` as sources | Fable | ☐ (needs JL go) |
 | 18 | **Application documentation** — original user guide for the OSS app, informed by the structure/topics of Seth's CS7.2 Application Guide PDF (his copyrighted work: adapt with permission, never copy); includes picking the format and an in-app context-aware help mechanism (see log) | new `docs/guide/` | — | ✗ **blocked: needs Seth's green light (JL 2026-08-13)** |
 | 19 | **Decouple qtui from ui/** (JL 2026-08-13: no qtui→ui dependencies): copy palettes + theme machinery to `qtui/palettes.py`, copy serial-monitor constants; byte-equality drift-pin tests against the ui/ originals (CI-enforced); drop tkinter importorskip from qtui tests | `ui/theme.py`, `ui/serial_monitor.py` (read-only) | Fable | ☐ (after wave-3 integration) |
+| 21 | Polish batch (JL live-testing): app-wide ISO dates (YYYY-MM-DD, 24h) via one shared helper regardless of UI language; Models-table column sorting (typed items, evaluator's `_SortableItem` pattern — natively supported by Qt); Settings gear colored via objectName QSS; file-filter labels that survive GNOME's paren-stripping (e.g. "Model archives — *.zip") | qtui polish | Sonnet | ☐ next |
 | 16 | CI: qt test job (offscreen, `--extra qt`); CLAUDE.md + docs final pass; parity sign-off checklist | workflows, docs | Fable | ☐ |
 
 Increments 1–2 run in parallel (disjoint modules; the orchestrator wires
@@ -94,12 +95,12 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
 - [x] PyTorch install gate (Qt-native)
 - [x] Training-image browser (reclassify/delete)
 - [x] Evaluator + HTML report
-- [ ] Community (browse/download/share) + sign-in
-- [ ] Feedback loop + wish-list capture (Run-tab side)
-- [ ] Self-update dialog + version picker
+- [x] Community (browse/download/share) + sign-in
+- [x] Feedback loop + wish-list capture (Run-tab side) — RunController-side, active since #3's run wiring
+- [x] Self-update dialog + version picker
 - [x] Serial monitor (full feature set)
-- [ ] Theme switching (built-ins + custom loading) — done; editor pending
-- [ ] First-run/empty states
+- [x] Theme switching (built-ins + custom loading) — editor is #15
+- [x] First-run/empty states
 
 ## Progress log
 
@@ -166,3 +167,11 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
   chrome (Sonnet, sole app.py/theme.py owner). Also in flight: single-file
   guide restructure (Sonnet); help-as-dock conversion (JL) applies at its
   integration. #19 decoupling held until #14 releases app.py.
+- 2026-08-13 — Wave 4 fully landed (`8bc7f6d`, `8e20b81`, `415d33c`,
+  `255a3fe`): chrome, Community, updates, sign-in, guide dock. qtui 463
+  green; full suite 1277. Issue #29 expanded to implementable specs (agent
+  audit corrected 6 inventory items — e.g. Model Statistics schema already
+  exists as dead columns). #20 note (JL): the PR points at PLAN.md; PLAN.md
+  and docs/guide PoC get DELETED from the branch before any upstream merge.
+  Remaining: #21 polish batch, #15 theme editor, #19 decoupling, #16 CI+e2e,
+  #18 (Seth), #20 (PR — JL go).
