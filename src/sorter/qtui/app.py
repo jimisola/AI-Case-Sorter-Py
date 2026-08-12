@@ -463,7 +463,8 @@ class QtMainWindow(QMainWindow):
         # Ring-buffer semantics, the QPlainTextEdit way — matches the Tk monitor's deque.
         self.serial_log.setMaximumBlockCount(SERIAL_LOG_LINES)
         self.serial_dock.setWidget(self.serial_log)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.serial_dock)
+        # Bottom, like Arduino IDE's monitor / VS Code's terminal (JL).
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.serial_dock)
 
     def _build_menus(self) -> None:
         # menuBar().addMenu(str) hands the QMenu back with Python ownership; the
