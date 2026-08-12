@@ -1,0 +1,918 @@
+"""The Community activity, sign-in and share dialogs, offscreen.
+
+No network and no MSAL anywhere: the seams are ``page.api_factory`` (a fake
+``CommunityApi`` with canned catalogue rows) and the auth object the page reads
+off the window (a fake ``AuthManager``). Building the page must not construct a
+real one, and one test pins exactly that.
+
+The download and share tests are end-to-end on purpose. The fake API hands back
+a **real** model ZIP built by ``model_io.export_model`` from a seeded model, and
+the page runs the actual ``import_model`` — so ownership (``CommunityManaged``,
+``is_trainable`` False), in-place updates and the version stamp are asserted
+against the real persistence layer, not a mock of it. The share path likewise
+packages a real archive and records what would have been uploaded.
+
+``CASESORTER_DATA_DIR`` is redirected autouse: imports write model directories
+and shares write scratch archives, so an unset data root would have these tests
+rummaging in the developer's own library.
+"""
+
+from __future__ import annotations
+
+import shutil
+import time
+import zipfile
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+pytest.importorskip("PySide6")
+pytest.importorskip("tkinter")  # sorter.ui.theme (the palettes) imports it
+
+from PySide6.QtWidgets import QDialog
+
+from sorter import paths
+from sorter.community.auth import AuthError, PortInUseError
+from sorter.community.community_api import CartridgeInfo, ModelInfo, UserMetaData
+from sorter.data.model_io import ExportMode, export_model
+from sorter.data.models import Model, is_trainable
+from sorter.data.repository import CartridgeRepo, HeadstampRepo, ModelRepo
+from sorter.qtui.community_page import (
+    ACTION_LABELS,
+    ALL_CARTRIDGES,
+    COLUMNS,
+    STATE_DOWNLOAD,
+    STATE_INSTALLED,
+    STATE_LABELS,
+    STATE_UPDATE,
+    build_community_page,
+    format_date,
+    format_size,
+)
+from sorter.qtui.dialog_login import LoginDialog
+from sorter.qtui.dialog_share_model import (
+    MISSING_NAME_TITLE,
+    NO_CHECKPOINT_TITLE,
+    ShareModelDialog,
+)
+
+from .conftest import drain_until
+
+
+@pytest.fixture(autouse=True)
+def _data_root(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CASESORTER_DATA_DIR", str(tmp_path / "data"))
+    assert paths.app_data_dir() == tmp_path / "data"
+
+
+# ----- fakes -------------------------------------------------------------------
+
+
+class _Recorder:
+    """Stand-in for ``notify`` — a modal would hang the offscreen run."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def __call__(self, title: str, text: str) -> None:
+        self.calls.append((title, text))
+
+    @property
+    def titles(self) -> list[str]:
+        return [title for title, _text in self.calls]
+
+
+class FakeAuth:
+    """The slice of ``AuthManager`` the community surface actually uses."""
+
+    def __init__(
+        self,
+        *,
+        signed_in: bool = True,
+        name: str | None = "Ada Lovelace",
+        email: str | None = "ada@example.com",
+        login_error: Exception | None = None,
+    ) -> None:
+        self.signed_in = signed_in
+        self.name = name
+        self.email = email
+        self.login_error = login_error
+        self.logins = 0
+        self.logouts = 0
+
+    def is_authenticated(self) -> bool:
+        return self.signed_in
+
+    def identity(self) -> tuple[str | None, str | None]:
+        return self.name, self.email
+
+    def login_interactive(self) -> str:
+        self.logins += 1
+        if self.login_error is not None:
+            raise self.login_error
+        self.signed_in = True
+        return "token"
+
+    def logout(self) -> None:
+        self.logouts += 1
+        self.signed_in = False
+
+
+class FakeApi:
+    """Canned catalogue + a real ZIP on the wire, recording every call."""
+
+    def __init__(
+        self,
+        *,
+        models: list[ModelInfo] | None = None,
+        cartridges: list[CartridgeInfo] | None = None,
+        metadata: UserMetaData | None = None,
+        archive: Path | None = None,
+        list_error: Exception | None = None,
+        share_error: Exception | None = None,
+        server_uid: str | None = None,
+    ) -> None:
+        self.models = list(models or [])
+        self.cartridges = list(cartridges or [])
+        self.metadata = metadata
+        self.archive = archive
+        self.list_error = list_error
+        self.share_error = share_error
+        self.server_uid = server_uid
+        self.queries: list[tuple[str, str, str]] = []
+        self.download_requests: list[str] = []
+        self.shares: list[dict[str, Any]] = []
+
+    def get_user_metadata(self) -> UserMetaData | None:
+        return self.metadata
+
+    def get_available_cartridges(self) -> list[CartridgeInfo]:
+        return list(self.cartridges)
+
+    def get_models(self, search: str = "", model_type: str = "", cartridge: str = "") -> list[ModelInfo]:
+        self.queries.append((search, model_type, cartridge))
+        if self.list_error is not None:
+            raise self.list_error
+        return list(self.models)
+
+    def request_download(self, model_uid: str) -> dict[str, Any]:
+        self.download_requests.append(model_uid)
+        return {"FullUrl": f"https://example.invalid/{model_uid}.zip"}
+
+    def download_to(self, url: str, dest: Any, *, expected_total: Any = None, progress: Any = None) -> Path:
+        assert self.archive is not None, "this test needs an archive on the fake API"
+        shutil.copyfile(self.archive, dest)
+        size = Path(dest).stat().st_size
+        if progress is not None:
+            progress(size // 2, size)
+            progress(size, size)
+        return Path(dest)
+
+    def share_model(
+        self, *, zip_path: Any, manifest_path: Any, model_info: dict[str, Any], progress: Any = None
+    ) -> str:
+        with zipfile.ZipFile(zip_path) as zf:
+            entries = sorted(zf.namelist())
+        self.shares.append(
+            {
+                "model_info": dict(model_info),
+                "entries": entries,
+                "manifest_exists": Path(manifest_path).exists(),
+            }
+        )
+        if self.share_error is not None:
+            raise self.share_error
+        if progress is not None:
+            progress(1, 2)
+            progress(2, 2)
+        return self.server_uid or str(model_info.get("CommunityModelUID") or "")
+
+
+def info(
+    uid: str = "uid-1",
+    *,
+    name: str = "Range brass",
+    version: int = 1,
+    cartridge: str = "9mm",
+    description: str = "",
+    size: int = 2048,
+    published: str = "2026-03-04T10:00:00",
+    author: str = "publisher",
+    headstamps: int = 3,
+    images: int = 12,
+    export_mode: str = "ModelAndImages",
+) -> ModelInfo:
+    return ModelInfo(
+        model_uid=uid,
+        model_name=name,
+        cartridge_name=cartridge,
+        cartridge_id=1,
+        model_version=version,
+        model_description=description,
+        author=author,
+        publish_date=published,
+        image_count=images,
+        headstamp_count=headstamps,
+        download_size=size,
+        export_mode=export_mode,
+    )
+
+
+# ----- fixtures / helpers ------------------------------------------------------
+
+
+@pytest.fixture
+def api() -> FakeApi:
+    return FakeApi(
+        models=[info()],
+        cartridges=[CartridgeInfo(id=1, name="9mm"), CartridgeInfo(id=2, name=".223")],
+        metadata=UserMetaData(profile_name="ada", roles=1),
+    )
+
+
+def build_page(window: Any, api: FakeApi, *, auth: FakeAuth | None = None) -> Any:
+    """A community page on this window, with every seam replaced."""
+    window.auth = auth
+    window.notify = _Recorder()
+    page = build_community_page(window)
+    page.api_factory = lambda: api
+    page.confirm = lambda _title, _text: pytest.fail("unexpected confirmation")
+    page.ask_download_choice = lambda _name: pytest.fail("unexpected update prompt")
+    page.open_login = lambda: pytest.fail("unexpected login dialog")
+    page.open_share = lambda: pytest.fail("unexpected share dialog")
+    return page
+
+
+@pytest.fixture
+def page(window, api):
+    """Signed in, catalogue loaded."""
+    built = build_page(window, api, auth=FakeAuth())
+    built.refresh_auth_state()
+    assert drain_until(window, lambda: built.tree.topLevelItemCount() > 0), "the catalogue never loaded"
+    return built
+
+
+def cell(page: Any, row: int, column: str) -> str:
+    return page.tree.topLevelItem(row).text(COLUMNS.index(column))
+
+
+def names(page: Any) -> list[str]:
+    return [cell(page, row, "Model") for row in range(page.tree.topLevelItemCount())]
+
+
+def select_row(page: Any, index: int) -> None:
+    item = page.tree.topLevelItem(index)
+    assert item is not None, f"no row {index}"
+    page.tree.setCurrentItem(item)
+
+
+def pump(qapp: Any, predicate: Any, timeout_s: float = 10.0) -> bool:
+    """Pump the Qt loop until ``predicate`` holds — the QThread dialogs' drain."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        qapp.processEvents()
+        if predicate():
+            return True
+        time.sleep(0.005)
+    for _ in range(5):  # flush signals queued right before the worker finished
+        qapp.processEvents()
+    return predicate()
+
+
+def make_model(config: Any, name: str, **fields: Any) -> Model:
+    cartridge = CartridgeRepo(config.db).list()[0]
+    return ModelRepo(config.db).create(Model(name=name, cartridge_id=cartridge.id, **fields))
+
+
+def seed_exportable(config: Any, name: str, **fields: Any) -> Model:
+    """A model with a headstamp, a training image and a checkpoint on disk."""
+    model = make_model(config, name, **fields)
+    HeadstampRepo(config.db).add(model.id, "9mm FC", 1)
+    images = paths.model_images_dir(model.id)
+    images.mkdir(parents=True, exist_ok=True)
+    (images / "9mm FC__1.jpg").write_bytes(b"jpeg-ish")
+    trained = paths.model_trained_dir(model.id)
+    trained.mkdir(parents=True, exist_ok=True)
+    checkpoint = trained / f"{model.id}.pth"
+    checkpoint.write_bytes(b"not-really-a-checkpoint")
+    model.model_path = str(checkpoint)
+    ModelRepo(config.db).update(model)
+    fresh = ModelRepo(config.db).get(model.id)
+    assert fresh is not None
+    return fresh
+
+
+def write_archive(config: Any, dest: Path, model: Model, **overrides: Any) -> Path:
+    """A real community-shaped ZIP for ``model``, as a publisher would ship it."""
+    cartridge = CartridgeRepo(config.db).get(model.cartridge_id)
+    assert cartridge is not None
+    published = Model(**{**model.__dict__, **overrides})
+    return export_model(
+        dest,
+        published,
+        cartridge.name,
+        HeadstampRepo(config.db).list_for_model(model.id),
+        mode=ExportMode.MODEL_AND_IMAGES,
+        model_file=Path(model.model_path) if model.model_path else None,
+        images_dir=paths.model_images_dir(model.id),
+    )
+
+
+def download(page: Any, window: Any, *, row: int = 0) -> None:
+    """Click Download on a row and wait for the import to land."""
+    select_row(page, row)
+    before = len(window.notify.calls)
+    page.download_selected()
+    assert drain_until(window, lambda: len(window.notify.calls) > before), "the download worker never finished"
+
+
+# ----- signed-out state --------------------------------------------------------
+
+
+def test_signed_out_shows_the_sign_in_panel(window, api) -> None:
+    page = build_page(window, api, auth=None)
+
+    assert page.stack.currentIndex() == 0
+    assert not page.is_signed_in()
+    # Nothing was asked of the network, and no manager exists to ask with.
+    assert api.queries == []
+    assert page._auth is None
+
+
+def test_building_the_page_never_constructs_an_auth_manager(window, api, monkeypatch) -> None:
+    built: list[Any] = []
+
+    class _Manager:
+        def __init__(self) -> None:
+            built.append(self)
+
+        def is_authenticated(self) -> bool:
+            return False
+
+    monkeypatch.setattr("sorter.community.auth.AuthManager", _Manager)
+    page = build_page(window, api, auth=None)
+
+    assert built == []
+
+    # Only a user action reaches for one — and the window then shares it.
+    manager = page.auth_manager()
+
+    assert built == [manager]
+    assert window.auth is manager
+
+
+def test_a_signed_out_page_does_not_query_the_catalogue(window, api) -> None:
+    page = build_page(window, api, auth=FakeAuth(signed_in=False))
+
+    page.refresh()
+
+    assert api.queries == []
+    assert page.stack.currentIndex() == 0
+
+
+def test_signing_in_switches_the_page_and_tells_the_window(window, api) -> None:
+    auth = FakeAuth(signed_in=False)
+    page = build_page(window, api, auth=auth)
+    changed: list[int] = []
+    page.on_auth_changed = lambda: changed.append(1)
+
+    auth.signed_in = True
+    page.on_signed_in()
+
+    assert page.stack.currentIndex() == 1
+    assert changed == [1]
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 1)
+
+
+# ----- the catalogue -----------------------------------------------------------
+
+
+def test_the_list_carries_the_facts_the_tk_cards_showed(window, api) -> None:
+    api.models = [info(description="Mixed range pickup", size=5 * 1024 * 1024)]
+    page = build_page(window, api, auth=FakeAuth())
+    page.refresh_auth_state()
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 1)
+
+    assert cell(page, 0, "Model") == "Range brass"
+    assert cell(page, 0, "Cartridge") == "9mm"
+    assert cell(page, 0, "Version") == "v1"
+    assert cell(page, 0, "Includes") == "ModelAndImages"
+    assert cell(page, 0, "Headstamps") == "3"
+    assert cell(page, 0, "Images") == "12"
+    assert cell(page, 0, "Size") == "5.00 MB"
+    assert cell(page, 0, "Published") == "3/4/2026"
+    assert cell(page, 0, "Author") == "publisher"
+    assert cell(page, 0, "State") == STATE_LABELS[STATE_DOWNLOAD]
+    # The description follows the selection rather than repeating per row.
+    select_row(page, 0)
+    assert page.hint_label.text() == "Mixed range pickup"
+
+
+def test_size_and_date_formatting_degrade_gracefully() -> None:
+    assert format_size(0) == "—"
+    assert format_size(900) == "900 B"
+    assert format_size(1536) == "1.50 KB"
+    assert format_date("") == ""
+    assert format_date("not a date") == "not a date"
+    assert format_date("2026-01-09") == "1/9/2026"
+
+
+def test_the_filters_are_what_the_server_is_asked_for(page, window, api) -> None:
+    def last_query_is(expected: tuple[str, str, str]) -> bool:
+        return drain_until(window, lambda: bool(api.queries) and api.queries[-1] == expected)
+
+    api.queries.clear()
+    page.type_combo.setCurrentText("Model only")
+    assert last_query_is(("", "ModelOnly", "")), api.queries
+
+    page.cartridge_combo.setCurrentText(".223")
+    assert last_query_is(("", "ModelOnly", ".223")), api.queries
+
+    # Typing is not a query — every keystroke would be a request. Enter (or
+    # the Search button, same slot) is what asks.
+    page.search_edit.setText("  federal  ")
+    assert api.queries[-1] == ("", "ModelOnly", ".223")
+
+    page.refresh()
+    assert last_query_is(("federal", "ModelOnly", ".223")), api.queries
+
+
+def test_the_cartridge_filter_comes_from_the_server(page) -> None:
+    values = [page.cartridge_combo.itemText(i) for i in range(page.cartridge_combo.count())]
+
+    assert values == [ALL_CARTRIDGES, "9mm", ".223"]
+
+
+def test_a_failed_query_reports_and_empties_the_table(window, api) -> None:
+    page = build_page(window, api, auth=FakeAuth())
+    page.refresh_auth_state()
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 1)
+    api.list_error = RuntimeError("GetModels → 503")
+
+    page.refresh()
+
+    assert drain_until(window, lambda: page.status_label.text().startswith("Failed:"))
+    assert page.tree.topLevelItemCount() == 0
+    assert not page.download_button.isEnabled()
+
+
+def test_an_empty_catalogue_says_so(window, api) -> None:
+    api.models = []
+    page = build_page(window, api, auth=FakeAuth())
+    page.refresh_auth_state()
+
+    assert drain_until(window, lambda: page.status_label.text().startswith("No community models"))
+
+
+# ----- installed state ---------------------------------------------------------
+
+
+def test_the_state_column_and_action_follow_the_local_library(window, api, config) -> None:
+    make_model(config, "Installed one", community_model_uid="uid-installed", model_version=2)
+    make_model(config, "Older one", community_model_uid="uid-old", model_version=1)
+    api.models = [
+        info("uid-new", name="Not installed", version=1),
+        info("uid-installed", name="Installed one", version=2),
+        info("uid-old", name="Older one", version=3),
+    ]
+    page = build_page(window, api, auth=FakeAuth())
+    page.refresh_auth_state()
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 3)
+
+    assert [cell(page, row, "State") for row in range(3)] == [
+        STATE_LABELS[STATE_DOWNLOAD],
+        STATE_LABELS[STATE_INSTALLED],
+        STATE_LABELS[STATE_UPDATE],
+    ]
+
+    select_row(page, 0)
+    assert page.download_button.text() == ACTION_LABELS[STATE_DOWNLOAD]
+    assert page.download_button.isEnabled()
+
+    select_row(page, 1)
+    assert page.download_button.text() == ACTION_LABELS[STATE_INSTALLED]
+    assert not page.download_button.isEnabled()
+
+    select_row(page, 2)
+    assert page.download_button.text() == ACTION_LABELS[STATE_UPDATE]
+    assert page.download_button.isEnabled()
+    # Blue, not the download green: this replaces something already installed.
+    assert page.download_button.objectName() == "update"
+    select_row(page, 0)
+    assert page.download_button.objectName() == "action"
+
+
+# ----- identity, share gating, sign-out ----------------------------------------
+
+
+def test_the_identity_line_and_share_gating_follow_the_role(window, api) -> None:
+    page = build_page(window, api, auth=FakeAuth())
+    page.refresh_auth_state()
+
+    assert drain_until(window, lambda: page.identity_label.text() == "Ada Lovelace (ada@example.com)")
+    # Read-only role: the Share button never appears.
+    assert not page.can_contribute
+    assert page.share_button.isHidden()
+
+
+def test_a_contributor_gets_the_share_button(window, api) -> None:
+    api.metadata = UserMetaData(profile_name="ada", roles=3)
+    page = build_page(window, api, auth=FakeAuth())
+    page.refresh_auth_state()
+
+    assert drain_until(window, lambda: page.can_contribute)
+    assert not page.share_button.isHidden()
+    assert page.community_username == "ada"
+
+
+def test_the_community_handle_stands_in_for_a_missing_name(window, api) -> None:
+    api.metadata = UserMetaData(profile_name="ada", roles=3)
+    page = build_page(window, api, auth=FakeAuth(name=None))
+    page.refresh_auth_state()
+
+    assert drain_until(window, lambda: page.identity_label.text() == "ada (ada@example.com)")
+
+
+def test_sign_out_needs_confirmation(page, window) -> None:
+    auth = window.auth
+    page.confirm = lambda _title, _text: False
+
+    page.sign_out()
+
+    assert auth.logouts == 0
+    assert page.stack.currentIndex() == 1
+
+
+def test_sign_out_clears_the_page_and_tells_the_window(page, window) -> None:
+    auth = window.auth
+    changed: list[int] = []
+    page.on_auth_changed = lambda: changed.append(1)
+    page.confirm = lambda _title, _text: True
+
+    page.sign_out()
+
+    assert auth.logouts == 1
+    assert page.stack.currentIndex() == 0
+    assert page.tree.topLevelItemCount() == 0
+    assert changed == [1]
+
+
+# ----- download (end to end, real archives) ------------------------------------
+
+
+def test_the_security_notice_can_refuse_a_download(page, window, api, config, tmp_path) -> None:
+    api.archive = write_archive(config, tmp_path / "m.zip", seed_exportable(config, "Source"))
+    page.confirm = lambda _title, _text: False
+    select_row(page, 0)
+
+    page.download_selected()
+
+    assert api.download_requests == []
+    assert [m.name for m in ModelRepo(config.db).list()] == ["Default", "Source"]
+
+
+def test_a_download_installs_the_publishers_model(page, window, api, config, tmp_path) -> None:
+    source = seed_exportable(config, "Source")
+    api.archive = write_archive(config, tmp_path / "m.zip", source, name="Range brass")
+    page.confirm = lambda _title, _text: True
+
+    download(page, window)
+
+    assert api.download_requests == ["uid-1"]
+    installed = next(m for m in ModelRepo(config.db).list() if m.name == "Range brass")
+    # Ownership is decided by how it got here (CLAUDE.md §5): the checkpoint is
+    # the publisher's, so the Train activity must stay off it.
+    assert installed.model_type == "CommunityManaged"
+    assert not is_trainable(installed)
+    assert installed.model_path is not None and Path(installed.model_path).exists()
+    assert [h.name for h in HeadstampRepo(config.db).list_for_model(installed.id)] == ["9mm FC"]
+    assert window.notify.titles == ["Download complete"]
+
+
+def test_a_download_of_a_feedback_model_explains_the_loop(page, window, api, config, tmp_path) -> None:
+    source = seed_exportable(config, "Source")
+    api.archive = write_archive(
+        config,
+        tmp_path / "m.zip",
+        source,
+        name="Loop model",
+        community_model_uid="uid-1",
+        feedback_loop_enabled=True,
+        feedback_loop_confidence_floor=80,
+    )
+    page.confirm = lambda _title, _text: True
+
+    download(page, window)
+
+    assert window.notify.titles == ["Feedback loop enabled"]
+    assert "80%" in window.notify.calls[0][1]
+
+
+def test_the_catalogue_version_is_recorded_over_the_archives(page, window, api, config, tmp_path) -> None:
+    # The manifest can lag what the catalogue advertises; without recording the
+    # catalogue's version a just-installed model still reads "Update available".
+    source = seed_exportable(config, "Source")
+    api.models = [info("uid-7", name="Range brass", version=5)]
+    api.archive = write_archive(config, tmp_path / "m.zip", source, name="Range brass", community_model_uid="uid-7")
+    page.refresh()
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 1)
+    page.confirm = lambda _title, _text: True
+
+    download(page, window)
+
+    installed = next(m for m in ModelRepo(config.db).list() if m.community_model_uid == "uid-7")
+    assert installed.model_version == 5
+    assert drain_until(window, lambda: cell(page, 0, "State") == STATE_LABELS[STATE_INSTALLED])
+
+
+def test_an_update_refreshes_the_installed_row_in_place(page, window, api, config, tmp_path) -> None:
+    installed = seed_exportable(config, "My copy", community_model_uid="uid-9", model_version=1)
+    api.models = [info("uid-9", name="Range brass", version=2)]
+    api.archive = write_archive(config, tmp_path / "m.zip", installed, name="Range brass")
+    page.refresh()
+    assert drain_until(window, lambda: cell(page, 0, "State") == STATE_LABELS[STATE_UPDATE])
+    page.ask_download_choice = lambda _name: STATE_UPDATE
+
+    download(page, window)
+
+    rows = [m for m in ModelRepo(config.db).list() if m.community_model_uid == "uid-9"]
+    assert [m.id for m in rows] == [installed.id], "the update added a row instead of refreshing one"
+    assert rows[0].name == "My copy", "the update overwrote the name the user gave it"
+    assert rows[0].model_version == 2
+    assert window.notify.titles == ["Update complete"]
+
+
+def test_an_update_can_install_a_separate_copy(page, window, api, config, tmp_path) -> None:
+    installed = seed_exportable(config, "My copy", community_model_uid="uid-9", model_version=1)
+    api.models = [info("uid-9", name="Range brass", version=2)]
+    api.archive = write_archive(config, tmp_path / "m.zip", installed, name="Range brass")
+    page.refresh()
+    assert drain_until(window, lambda: cell(page, 0, "State") == STATE_LABELS[STATE_UPDATE])
+    page.ask_download_choice = lambda _name: "copy"
+
+    download(page, window)
+
+    rows = sorted(
+        (m for m in ModelRepo(config.db).list() if m.community_model_uid == "uid-9"),
+        key=lambda m: m.id,
+    )
+    assert [m.name for m in rows] == ["My copy", "Range brass"]
+    assert rows[0].model_type == "Standard", "the local copy lost its ownership"
+    assert rows[1].model_type == "CommunityManaged"
+
+
+def test_declining_the_update_prompt_downloads_nothing(page, window, api, config, tmp_path) -> None:
+    installed = seed_exportable(config, "My copy", community_model_uid="uid-9", model_version=1)
+    api.models = [info("uid-9", name="Range brass", version=2)]
+    api.archive = write_archive(config, tmp_path / "m.zip", installed, name="Range brass")
+    page.refresh()
+    assert drain_until(window, lambda: cell(page, 0, "State") == STATE_LABELS[STATE_UPDATE])
+    page.ask_download_choice = lambda _name: "cancel"
+
+    page.download_selected()
+
+    assert api.download_requests == []
+
+
+def test_a_failed_download_reports_instead_of_raising(page, window, api, config) -> None:
+    api.archive = None  # download_to asserts, standing in for a transport error
+    page.confirm = lambda _title, _text: True
+    select_row(page, 0)
+
+    page.download_selected()
+
+    assert drain_until(window, lambda: window.notify.titles == ["Download failed"])
+    assert page.download_button.isEnabled(), "the page stayed busy after a failure"
+
+
+# ----- sign-in dialog ----------------------------------------------------------
+
+
+@pytest.fixture
+def login(window):
+    def _make(auth: FakeAuth) -> tuple[Any, _Recorder]:
+        dialog = LoginDialog(window, auth=auth)
+        recorder = _Recorder()
+        dialog.notify = recorder
+        return dialog, recorder
+
+    return _make
+
+
+def test_sign_in_runs_on_a_worker_and_accepts(qapp, login) -> None:
+    auth = FakeAuth(signed_in=False)
+    dialog, notified = login(auth)
+
+    dialog.sign_in()
+
+    assert pump(qapp, lambda: dialog.auth_result is not None), "the sign-in worker never finished"
+    assert auth.logins == 1
+    assert auth.is_authenticated()
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    assert notified.calls == [], "success must not open a modal on top of the visible state change"
+
+
+def test_a_bound_redirect_port_is_reported_specifically(qapp, login) -> None:
+    dialog, notified = login(
+        FakeAuth(signed_in=False, login_error=PortInUseError("Local redirect port 44300 is in use."))
+    )
+
+    dialog.sign_in()
+
+    assert pump(qapp, lambda: notified.calls != []), "the sign-in worker never finished"
+    assert notified.titles == ["Port in use"]
+    assert "Close any other instance" in notified.calls[0][1]
+    assert dialog.result() != QDialog.DialogCode.Accepted
+    # Retryable: the button comes back rather than leaving a dead dialog.
+    assert dialog.sign_in_button.isEnabled()
+
+
+def test_an_auth_error_shows_its_message_and_anything_else_its_repr(qapp, login) -> None:
+    dialog, notified = login(FakeAuth(signed_in=False, login_error=AuthError("Login failed: no access_token")))
+    dialog.sign_in()
+    assert pump(qapp, lambda: notified.calls != [])
+
+    assert notified.calls[0] == ("Sign-in failed", "Login failed: no access_token")
+
+    other, other_notified = login(FakeAuth(signed_in=False, login_error=ValueError("boom")))
+    other.sign_in()
+    assert pump(qapp, lambda: other_notified.calls != [])
+
+    assert other_notified.calls[0] == ("Sign-in failed", "ValueError('boom')")
+
+
+def test_the_auth_manager_can_be_built_lazily_by_the_dialog(qapp, window) -> None:
+    auth = FakeAuth(signed_in=False)
+    dialog = LoginDialog(window, auth_factory=lambda: auth)
+    dialog.notify = _Recorder()
+
+    dialog.sign_in()
+
+    assert pump(qapp, lambda: dialog.auth_result is not None)
+    assert auth.logins == 1
+
+
+# ----- share dialog ------------------------------------------------------------
+
+
+@pytest.fixture
+def share(window, config, api, qapp):
+    dialogs: list[Any] = []
+
+    def _make(**kwargs: Any) -> tuple[Any, _Recorder]:
+        dialog = ShareModelDialog(window, db=config.db, api_factory=lambda: api, username="ada", **kwargs)
+        recorder = _Recorder()
+        dialog.notify = recorder
+        dialog.confirm = lambda _title, _text: True
+        dialogs.append(dialog)
+        # The cartridge list loads on a worker; let it land before the form is driven.
+        assert pump(qapp, lambda: dialog.cartridge_combo.count() > 0)
+        return dialog, recorder
+
+    yield _make
+    for dialog in dialogs:
+        dialog.close()
+
+
+def select_model(dialog: Any, name: str) -> None:
+    dialog.model_combo.setCurrentIndex([m.name for m in dialog._models].index(name))
+
+
+def test_the_form_defaults_to_the_models_own_name_and_cartridge(share, config) -> None:
+    seed_exportable(config, "Range brass")
+    dialog, _notified = share()
+    select_model(dialog, "Range brass")
+
+    assert dialog.name_edit.text() == "Range brass"
+    assert dialog.cartridge_combo.currentText() == "9mm"
+
+
+def test_share_refuses_an_empty_name(share, config, api) -> None:
+    seed_exportable(config, "Range brass")
+    dialog, notified = share()
+    select_model(dialog, "Range brass")
+    dialog.name_edit.setText("   ")
+
+    dialog.share()
+
+    assert notified.titles == [MISSING_NAME_TITLE]
+    assert api.shares == []
+
+
+def test_share_refuses_to_publish_a_model_with_no_checkpoint(share, config, api) -> None:
+    make_model(config, "Untrained")
+    dialog, notified = share()
+    select_model(dialog, "Untrained")
+
+    dialog.share()
+
+    assert notified.titles == [NO_CHECKPOINT_TITLE]
+    assert api.shares == []
+
+
+def test_images_only_can_be_shared_without_a_checkpoint(share, config, api, qapp) -> None:
+    model = make_model(config, "Untrained")
+    images = paths.model_images_dir(model.id)
+    images.mkdir(parents=True, exist_ok=True)
+    (images / "9mm FC__1.jpg").write_bytes(b"jpeg-ish")
+    dialog, notified = share()
+    select_model(dialog, "Untrained")
+    dialog.export_combo.setCurrentText("Images only")
+
+    dialog.share()
+
+    assert pump(qapp, lambda: api.shares != []), "the share worker never finished"
+    assert notified.titles == ["Model shared"]
+    assert api.shares[0]["model_info"]["ModelExportMode"] == 2
+    assert "images/9mm FC__1.jpg" in api.shares[0]["entries"]
+
+
+def test_sharing_uploads_a_real_archive_and_stamps_the_uid(share, config, api, qapp) -> None:
+    model = seed_exportable(config, "Range brass")
+    dialog, notified = share()
+    select_model(dialog, "Range brass")
+    dialog.description_edit.setPlainText("Mixed range pickup")
+    dialog.fb_enabled_check.setChecked(True)
+    dialog.fb_floor_spin.setValue(90)
+
+    dialog.share()
+
+    assert pump(qapp, lambda: api.shares != []), "the share worker never finished"
+    payload = api.shares[0]
+    assert payload["manifest_exists"], "the standalone manifest was not uploaded alongside the ZIP"
+    assert "manifest.json" in payload["entries"]
+    assert f"model/{model.id}.pth" in payload["entries"]
+    sent = payload["model_info"]
+    assert sent["ModelName"] == "Range brass"
+    assert sent["ModelDescription"] == "Mixed range pickup"
+    assert sent["Author"] == "ada"
+    assert sent["CartridgeId"] == 1
+    assert (sent["FeedbackLoopEnabled"], sent["FeedbackLoopConfidenceFloor"]) == (True, 90)
+    assert sent["HeadstampCount"] == 1
+    assert sent["ModelVersion"] == model.model_version
+
+    stored = ModelRepo(config.db).get(model.id)
+    assert stored is not None
+    assert stored.community_model_uid == sent["CommunityModelUID"]
+    assert notified.titles == ["Model shared"]
+
+
+def test_sharing_your_own_model_does_not_make_it_foreign(share, config, api, qapp) -> None:
+    # A community UID means "exists in the community", not "isn't yours"
+    # (CLAUDE.md §5) — the publisher's own copy stays trainable.
+    model = seed_exportable(config, "Range brass")
+    dialog, _notified = share()
+    select_model(dialog, "Range brass")
+
+    dialog.share()
+    assert pump(qapp, lambda: api.shares != [])
+
+    stored = ModelRepo(config.db).get(model.id)
+    assert stored is not None
+    assert stored.community_model_uid
+    assert stored.model_type == "Standard"
+    assert is_trainable(stored)
+
+
+def test_resharing_keeps_the_uid_and_bumps_the_version(share, config, api, qapp) -> None:
+    model = seed_exportable(config, "Range brass", community_model_uid="uid-mine", model_version=4)
+    dialog, _notified = share()
+    select_model(dialog, "Range brass")
+
+    dialog.share()
+    assert pump(qapp, lambda: api.shares != [])
+
+    assert api.shares[0]["model_info"]["CommunityModelUID"] == "uid-mine"
+    assert api.shares[0]["model_info"]["ModelVersion"] == 5
+    stored = ModelRepo(config.db).get(model.id)
+    assert stored is not None and stored.model_version == 5
+
+
+def test_the_server_can_rename_the_uid(share, config, api, qapp) -> None:
+    model = seed_exportable(config, "Range brass")
+    api.server_uid = "uid-from-server"
+    dialog, _notified = share()
+    select_model(dialog, "Range brass")
+
+    dialog.share()
+    assert pump(qapp, lambda: api.shares != [])
+
+    stored = ModelRepo(config.db).get(model.id)
+    assert stored is not None and stored.community_model_uid == "uid-from-server"
+
+
+def test_a_failed_share_reports_and_leaves_the_model_untouched(share, config, api, qapp) -> None:
+    model = seed_exportable(config, "Range brass")
+    api.share_error = RuntimeError("FileUploadRequest → HTTP 403")
+    dialog, notified = share()
+    select_model(dialog, "Range brass")
+
+    dialog.share()
+
+    assert pump(qapp, lambda: notified.calls != []), "the share worker never finished"
+    assert notified.titles == ["Share failed"]
+    assert dialog.status_label.text().startswith("Share failed")
+    assert dialog.share_button.isEnabled(), "the dialog stayed busy after a failure"
+    stored = ModelRepo(config.db).get(model.id)
+    assert stored is not None and not stored.community_model_uid
