@@ -148,6 +148,8 @@ class ModelsPage(QWidget):
         # The training-image browser is increment 8's; until it attaches its
         # hook (`set_images_hook`) the button it drives isn't shown at all.
         self.open_images: Callable[[Model], None] | None = None
+        self.open_headstamps: Callable[[Model], None] | None = None
+        self.open_evaluator: Callable[[Model], None] | None = None
 
         # Replaceable hooks — a test never opens a native dialog.
         self.confirm: Callable[[str, str], bool] = self._ask
@@ -233,6 +235,8 @@ class ModelsPage(QWidget):
             ("Activate", "action", self.activate_selected),
             ("Edit…", "", self.edit_selected),
             ("Images…", "", self.images_selected),
+            ("Headstamps…", "", self.headstamps_selected),
+            ("Evaluate…", "", self.evaluate_selected),
             ("Export…", "", self.export_selected),
             ("Delete", "danger", self.delete_selected),
         ):
@@ -254,6 +258,14 @@ class ModelsPage(QWidget):
         """
         self.open_images = open_images
         self.buttons["Images…"].setVisible(open_images is not None)
+
+    def set_headstamps_hook(self, open_headstamps: Callable[[Model], None] | None) -> None:
+        self.open_headstamps = open_headstamps
+        self.buttons["Headstamps…"].setVisible(open_headstamps is not None)
+
+    def set_evaluate_hook(self, open_evaluator: Callable[[Model], None] | None) -> None:
+        self.open_evaluator = open_evaluator
+        self.buttons["Evaluate…"].setVisible(open_evaluator is not None)
         self._update_actions()
 
     # ----- data ---------------------------------------------------------------
@@ -403,6 +415,11 @@ class ModelsPage(QWidget):
         # trained here, so there is no training set to curate. (Tk leaves the
         # browser open for these; the Train tab then refuses.)
         self.buttons["Images…"].setEnabled(real and is_trainable(model))
+        # Tk parity: headstamps manageable on every model, foreign included
+        # (see the judgment-call register). Evaluate needs a checkpoint, not
+        # ownership — scoring a community model on your folder is legitimate.
+        self.buttons["Headstamps…"].setEnabled(real)
+        self.buttons["Evaluate…"].setEnabled(real and bool(model and model.model_path))
         self.hint_label.setText(self._hint_for(model, is_ai_row))
 
     def _hint_for(self, model: Model | None, is_ai_row: bool) -> str:
@@ -478,6 +495,18 @@ class ModelsPage(QWidget):
         if dialog.exec():
             self.refresh()
             self._win.set_status(f"Saved '{model.name}'.")
+
+    def headstamps_selected(self) -> None:
+        model = self.selected_model()
+        if model is None or self.open_headstamps is None:
+            return
+        self.open_headstamps(model)
+
+    def evaluate_selected(self) -> None:
+        model = self.selected_model()
+        if model is None or self.open_evaluator is None:
+            return
+        self.open_evaluator(model)
 
     def images_selected(self) -> None:
         model = self.selected_model()

@@ -109,17 +109,17 @@ QListWidget::item:selected {{
     color: {c["text_highlight"]};
 }}
 
-QTreeWidget#modelTable {{
+QTreeWidget#modelTable, QTreeWidget#headstampTable {{
     background-color: {c["bg_input"]};
     color: {c["text"]};
     border: 1px solid {c["border"]};
 }}
-QTreeWidget#modelTable::item {{ padding: 4px 6px; }}
-QTreeWidget#modelTable::item:selected {{
+QTreeWidget#modelTable::item, QTreeWidget#headstampTable::item {{ padding: 4px 6px; }}
+QTreeWidget#modelTable::item:selected, QTreeWidget#headstampTable::item:selected {{
     background-color: {c["bg_card_sel"]};
     color: {c["text_highlight"]};
 }}
-QTreeWidget#modelTable QHeaderView::section {{
+QTreeWidget#modelTable QHeaderView::section, QTreeWidget#headstampTable QHeaderView::section {{
     background-color: {c["bg_card"]};
     color: {c["text_muted"]};
     border: none;
@@ -209,6 +209,15 @@ QSlider::handle:horizontal {{
     margin: -6px 0;
     border-radius: 7px;
 }}
+
+QProgressBar {{
+    background-color: {c["bg_input"]};
+    color: {c["text"]};
+    border: 1px solid {c["border"]};
+    border-radius: 3px;
+    text-align: center;
+}}
+QProgressBar::chunk {{ background-color: {c["action"]}; border-radius: 2px; }}
 
 QSplitter::handle {{ background-color: {c["border"]}; }}
 QSplitter::handle:horizontal {{ width: 3px; }}

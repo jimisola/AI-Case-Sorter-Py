@@ -57,7 +57,7 @@ from ..control.run_controller import RunController
 from ..hardware import serial_broker
 from ..hardware.camera import Camera
 from ..hardware.serial_emulator import EMULATED_PORT, EmulatorBroker
-from ..ml import classifier, local_inference
+from ..ml import classifier
 from ..paths import app_data_dir
 from ..ui.theme import (
     SETTING_CUSTOM_THEMES,
@@ -69,13 +69,14 @@ from ..ui.theme import (
 )
 from .dialog_slot_assign import CATCH_ALL_HINT, SlotAssignDialog
 from .dialog_template import EditTemplateDialog, NewTemplateDialog
+from .help_viewer import build_help_window, topic_for
 from .history_view import build_history_view
 from .models_page import build_models_page
+from .serial_monitor import build_serial_monitor
 from .settings_ai import build_ai_section
 from .settings_camera import build_camera_section
 from .settings_imageproc import build_imageproc_section
 from .settings_serial import build_serial_section
-from .serial_monitor import build_serial_monitor
 from .slot_grid import SlotGrid
 from .theme import build_stylesheet
 from .torch_gate import TorchGate
@@ -90,7 +91,7 @@ PLACEHOLDER_TEXT = "Not ported to the Qt spike yet — launch without --qt for t
 # Sidebar: (glyph, page name). Settings is pinned to the bottom, below the stretch.
 ACTIVITIES = (("▶", "Sort"), ("🎓", "Train"), ("📦", "Models"), ("🌐", "Community"))
 SETTINGS_ACTIVITY = ("⚙", "Settings")
-SETTINGS_SECTIONS = ("Camera", "Serial", "Image Proc", "AI Config", "Updates", "Theme")
+SETTINGS_SECTIONS = ("Camera", "Serial", "Image Processing", "AI Config", "Updates", "Theme")
 BAUD_CHOICES = (9600, 19200, 38400, 57600, 115200)
 FEED_MAX = 12
 FEED_EMPTY_TEXT = "Recent classifications will appear here."
@@ -125,8 +126,9 @@ class QtMainWindow(QMainWindow):
 
         # The one sanctioned front door for anything needing local inference.
         self.ensure_torch = TorchGate(self)
+        self._help_window: Any | None = None
 
-        self.setWindowTitle(f"AI Case Sorter - v{__version__} (Qt spike)")
+        self.setWindowTitle(f"AI Case Sorter OSS - v{__version__} (Qt)")
         self._build_ui()
         self._apply_theme(self.theme_name)
 
@@ -210,7 +212,7 @@ class QtMainWindow(QMainWindow):
         font.setPointSize(font.pointSize() + 5)
         title.setFont(font)
         row.addWidget(title)
-        row.addWidget(self._muted_label("Open Source Client", header))
+        row.addWidget(self._muted_label("Open Source Client · GPL-3.0", header))
         row.addStretch(1)
         return header
 
@@ -395,7 +397,7 @@ class QtMainWindow(QMainWindow):
             "Theme": self._build_theme_section,
             "Serial": self._build_serial_page,
             "Camera": lambda: build_camera_section(self),
-            "Image Proc": lambda: build_imageproc_section(self),
+            "Image Processing": lambda: build_imageproc_section(self),
             "AI Config": self._build_ai_page,
         }
         for name in SETTINGS_SECTIONS:
@@ -417,12 +419,41 @@ class QtMainWindow(QMainWindow):
         # Kept on self: mode/changed and navigating to the page both refresh it.
         self.models_page = build_models_page(self)
         self.models_page.set_images_hook(self._open_model_images)
+        self.models_page.set_headstamps_hook(self._open_headstamps)
+        self.models_page.set_evaluate_hook(self._open_evaluator)
         return self.models_page
+
+    def open_help(self) -> None:
+        """F1 / Help menu: the guide, opened at the section for where you stand."""
+        page = next(
+            (name for name, w in self._pages_by_name.items() if w is self.pages.currentWidget()),
+            "Sort",
+        )
+        section = None
+        if page == "Settings":
+            item = self.settings_list.currentItem()
+            section = item.text() if item is not None else None
+        if self._help_window is None:
+            self._help_window = build_help_window(self)
+        self._help_window.show_topic(topic_for(page, section))
+        self._help_window.show()
+        self._help_window.raise_()
+        self._help_window.activateWindow()
 
     def _open_model_images(self, model: Any) -> None:
         from .dialog_model_images import ModelImagesDialog
 
         ModelImagesDialog(self, self.config, model.id).exec()
+
+    def _open_headstamps(self, model: Any) -> None:
+        from .dialog_headstamps import HeadstampManagerDialog
+
+        HeadstampManagerDialog(self, self.config, model.id, bus=self.bus).exec()
+
+    def _open_evaluator(self, model: Any) -> None:
+        from .dialog_model_evaluator import ModelEvaluatorDialog
+
+        ModelEvaluatorDialog(self, self, model).exec()
 
     def _build_ai_page(self) -> QWidget:
         # Kept on self: mode/changed re-reads it (refresh_mode).
@@ -500,6 +531,9 @@ class QtMainWindow(QMainWindow):
         self.menus["View"].addAction(history_toggle)
 
         self.menus["Help"] = self.menuBar().addMenu("&Help")
+        guide = self.menus["Help"].addAction("User Guide")
+        guide.setShortcut(QKeySequence.StandardKey.HelpContents)  # F1
+        guide.triggered.connect(self.open_help)
         about = self.menus["Help"].addAction("About")
         about.triggered.connect(self._show_about)
 
