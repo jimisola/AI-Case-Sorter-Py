@@ -426,8 +426,11 @@ IDE 2):
    recent-classification feed integrated — an OBS-style monitoring surface.
    A `QSplitter` trades preview size against grid size.
 3. **All configuration becomes one Settings view**: Camera, Serial, Image
-   Proc, AI Config, Updates, Theme as a searchable section list (Qt Creator
+   Proc, AI Config, Theme as a searchable section list (Qt Creator
    Options / OBS Settings pattern). Removes four top-level tabs in one move.
+   Updates are *not* settings: they live under **Help → "Check for
+   updates…"** per desktop convention (JL), with the status bar only
+   surfacing a staged update ("Restart to update").
 4. **`QDockWidget` for utility panels.** Serial monitor and classification
    history become dockable/floatable panels — beside Sort on a wide screen,
    floated to a second monitor, closed when irrelevant. Native Qt strength;
