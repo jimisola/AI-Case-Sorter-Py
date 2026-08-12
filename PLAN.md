@@ -50,17 +50,18 @@ Status: ☐ todo · ▶ in progress · ✔ done · ✗ blocked
 | 3 | Settings: AI Config page (server config, headstamp manager, single-shot test) | `tab_ai.py` | Opus | ✔ (`be64586`) |
 | 4 | Settings: Serial page parity (init settings, disconnect, sort-arm test, airdrop) | `tab_serial.py` | Sonnet | ✔ (`5cb9c50`) |
 | 5 | Models activity: library browse/filter/create/edit/activate/delete, import/export ZIP, "Use AI Config" row; model editor dialog | `tab_models.py`, `dialog_model_editor.py` | Opus | ✔ (`29d7be6`) |
-| 6 | Train activity: feed→capture→classify→label→save loop, sort-while-training, training config + progress dialogs, launch/cancel training | `tab_train.py`, `dialog_training_*.py` | Opus | ▶ |
-| 7 | Install-PyTorch dialog (Qt-native, correct threading — do NOT copy the Tk `after()` pattern) + torch gate equivalent | `dialog_install_torch.py`, `torch_gate.py` | Opus | ▶ |
+| 6 | Train activity: feed→capture→classify→label→save loop, sort-while-training, training config + progress dialogs, launch/cancel training | `tab_train.py`, `dialog_training_*.py` | Opus | ✔ (`2c8fd6c`) |
+| 7 | Install-PyTorch dialog (Qt-native, correct threading — do NOT copy the Tk `after()` pattern) + torch gate equivalent | `dialog_install_torch.py`, `torch_gate.py` | Opus | ✔ (`6101ddb`) |
 | 8 | Model images browser + preview (reclassify/delete) | `dialog_model_images.py`, `dialog_image_preview.py` | Sonnet | ✔ (`cc6b425`) |
-| 9 | Evaluator: run eval, HTML report, history | `dialog_model_evaluator.py` | Opus | ▶ |
+| 9 | Evaluator: run eval, HTML report, history | `dialog_model_evaluator.py` | Opus | ✔ (`39e178f`) |
 | 10 | Community activity + login + share dialogs (auth-gated sidebar entry) | `tab_community.py`, `dialog_login.py`, `dialog_share_model.py` | Opus | ☐ |
 | 11 | Updates: **Help → "Check for updates…"** (JL 2026-08-12: not under Settings) + status-bar affordance when one is staged, dialog (notes→progress→restart), version picker; drop the Settings→Updates section | `dialog_update.py`, `app.py` update wiring | Opus | ☐ |
-| 12 | Serial monitor dock parity: filter, RX/TX/notes toggles, pause/flush, save, timestamps, line endings, command box + history, baud switch, full-history-since-launch (JL: upstream #78/#86 features) | `serial_monitor.py` | Sonnet | ▶ |
-| 13 | Classification history with images (dashboard feed grows thumbnails / dock) | `monitor.py` | Sonnet | ▶ |
+| 12 | Serial monitor dock parity: filter, RX/TX/notes toggles, pause/flush, save, timestamps, line endings, command box + history, baud switch, full-history-since-launch (JL: upstream #78/#86 features) | `serial_monitor.py` | Sonnet | ✔ (`0bf3e8b`) |
+| 13 | Classification history with images (dashboard feed grows thumbnails / dock) | `monitor.py` | Sonnet | ✔ (`1a43bb1`) |
 | 14 | Chrome parity: sign-in button + auth state, empty states (no camera/board/model), Tools menu (check updates, sign in), window/session polish, **remaining Run options: confidence floor, store-images mode, auto-select trays (left out of #1)**; **Help menu grows (JL): bigger About, Help→License, links (this repo, CS7.2 hardware/firmware repo, Seth's shop, report-an-issue)**; dock-position persistence (saveState) | `app.py` (Tk), `tab_run.py` options | Sonnet | ☐ |
 | 15 | Theme editor (build/save/rename/import/export custom themes) — descopable; halftone/ink themes stay flat under Qt either way | `dialog_theme_editor.py` | Opus | ☐ |
-| 17 | **Headstamp manager dialog** (parents, auto-suggest, rename incl. on-disk image renames, unsaved guard — gap found in #5: Tk's Models tab has it, no Qt equivalent; ~660 Tk lines) | `dialog_headstamps.py` (Tk: inside `tab_models.py`) | Opus | ▶ |
+| 17 | **Headstamp manager dialog** (parents, auto-suggest, rename incl. on-disk image renames, unsaved guard — gap found in #5: Tk's Models tab has it, no Qt equivalent; ~660 Tk lines) | `dialog_headstamps.py` (Tk: inside `tab_models.py`) | Opus | ✔ (`35c9896`) |
+| 20 | **The PR to upstream** (JL 2026-08-13): open the PR to sjseth once JL greenlights. Body top-to-bottom: (1) how to run the qtui (clone/sync/launch, three OSes); (2) explicit note that the Tk UI is untouched and remains the default — nothing removed (yet); (3) feature-parity table from PLAN's checklist; (4) design decisions (co-existence, activity sidebar, docks, function-not-UI parity) + the judgment-call register; (5) open items (register "Open" rows, halftone themes, #18 docs approval); (6) pros of the stack (headless CI without Xvfb, PySide6-Essentials sizing, LGPL/GPL fit, single-source docs PoC); (7) test/velocity numbers. Draft PR; no merge — Seth decides. | `docs/ui-modernization.md`, `PLAN.md` as sources | Fable | ☐ (needs JL go) |
 | 18 | **Application documentation** — original user guide for the OSS app, informed by the structure/topics of Seth's CS7.2 Application Guide PDF (his copyrighted work: adapt with permission, never copy); includes picking the format and an in-app context-aware help mechanism (see log) | new `docs/guide/` | — | ✗ **blocked: needs Seth's green light (JL 2026-08-13)** |
 | 19 | **Decouple qtui from ui/** (JL 2026-08-13: no qtui→ui dependencies): copy palettes + theme machinery to `qtui/palettes.py`, copy serial-monitor constants; byte-equality drift-pin tests against the ui/ originals (CI-enforced); drop tkinter importorskip from qtui tests | `ui/theme.py`, `ui/serial_monitor.py` (read-only) | Fable | ☐ (after wave-3 integration) |
 | 16 | CI: qt test job (offscreen, `--extra qt`); CLAUDE.md + docs final pass; parity sign-off checklist | workflows, docs | Fable | ☐ |
@@ -88,15 +89,15 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
 - [x] AI Config (server, prompt, headstamp manager, test shot)
 - [x] Serial board init settings + sort-arm test + airdrop
 - [x] Models library (create/edit/activate/delete/import/export)
-- [ ] Train loop (capture/label/save, sort-while-training)
-- [ ] Training runs (config, progress, cancel)
-- [ ] PyTorch install gate (Qt-native)
+- [x] Train loop (capture/label/save, sort-while-training)
+- [x] Training runs (config, progress, cancel)
+- [x] PyTorch install gate (Qt-native)
 - [x] Training-image browser (reclassify/delete)
-- [ ] Evaluator + HTML report
+- [x] Evaluator + HTML report
 - [ ] Community (browse/download/share) + sign-in
 - [ ] Feedback loop + wish-list capture (Run-tab side)
 - [ ] Self-update dialog + version picker
-- [ ] Serial monitor (full feature set)
+- [x] Serial monitor (full feature set)
 - [ ] Theme switching (built-ins + custom loading) — done; editor pending
 - [ ] First-run/empty states
 
@@ -152,3 +153,11 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
 - 2026-08-13 — JL: write out "Image Proc" as "Image Processing" in the UI.
   Queued for the wave-3 integration pass (the string is in app.py, owned by
   #6 until it lands).
+- 2026-08-13 — Wave 3 fully integrated and pushed (`2c8fd6c`…`e6cf42f`):
+  Train, torch gate, serial monitor, history dock, evaluator, headstamp
+  manager, docs PoC, OSS title + GPL header, "Image Processing" written
+  out. Full suite 1176 passed; ruff/format/ty clean. Register additions:
+  Feed disabled without a board (#6, changed), counts-list click
+  saves-and-feeds (#6, kept Tk), evaluator preview uses #8's browsable
+  navigation. Remaining: #10 Community, #11 Updates, #14 chrome, #15 theme
+  editor, #19 decouple, #16 CI/e2e, #18 (Seth), #20 (PR, JL go).
