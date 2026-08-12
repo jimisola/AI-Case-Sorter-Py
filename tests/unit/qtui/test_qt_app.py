@@ -52,7 +52,7 @@ def test_serial_dock_logs_traffic(window) -> None:
     window.bus.post("serial/rx", "ok")
     window.bus.drain()
 
-    assert "<- ok" in window.serial_log.toPlainText()
+    assert "<- ok" in window.serial_monitor.output.toPlainText()
 
 
 def test_menus(window) -> None:

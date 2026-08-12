@@ -551,6 +551,6 @@ def test_manual_feed_drives_the_emulator_end_to_end(window, config, monkeypatch)
     assert drain_until(window, lambda: window.slot_grid.cards[2].count_label.text() == "1")
     assert "9mm FC" in window.feed_label.text()
     # The dock saw the exchange: the wheel command out, the board's ack back.
-    log = window.serial_log.toPlainText()
+    log = window.serial_monitor.output.toPlainText()
     assert "-> xf:0" in log
     assert "<- done" in log

@@ -359,11 +359,11 @@ def with_checkpoint(config: Any, tmp_path: Path) -> int:
 def test_feed_proceeds_without_a_gate_and_says_why_nothing_was_predicted(
     connected, window, config, tmp_path, monkeypatch
 ) -> None:
-    """Increment 7 owns the gate; until it is wired, Feed must still feed."""
+    """The gate is optional by contract: a window without one must still feed."""
     with_checkpoint(config, tmp_path)
     connected.refresh()
     monkeypatch.setattr("sorter.ml.local_inference.is_installed", lambda: False)
-    assert not hasattr(window, "ensure_torch")
+    monkeypatch.delattr(window, "ensure_torch")
 
     do_feed(connected, window)
 

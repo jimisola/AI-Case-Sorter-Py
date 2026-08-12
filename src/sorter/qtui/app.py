@@ -26,7 +26,6 @@ import numpy as np
 from PySide6.QtCore import Qt, QTimer, QUrl  # ty: ignore[unresolved-import]
 from PySide6.QtGui import (  # ty: ignore[unresolved-import]
     QDesktopServices,
-    QFontDatabase,
     QImage,
     QKeySequence,
     QPixmap,
@@ -42,7 +41,6 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QListWidget,
     QMainWindow,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
     QSpinBox,
@@ -76,6 +74,7 @@ from .settings_ai import build_ai_section
 from .settings_camera import build_camera_section
 from .settings_imageproc import build_imageproc_section
 from .settings_serial import build_serial_section
+from .serial_monitor import build_serial_monitor
 from .slot_grid import SlotGrid
 from .theme import build_stylesheet
 from .torch_gate import TorchGate
@@ -85,7 +84,6 @@ PREVIEW_FPS = 20
 CROP_SIZE = 132
 HEADER_HEIGHT = 56
 SIDEBAR_WIDTH = 84
-SERIAL_LOG_LINES = 500
 PLACEHOLDER_TEXT = "Not ported to the Qt spike yet — launch without --qt for the full UI."
 
 # Sidebar: (glyph, page name). Settings is pinned to the bottom, below the stretch.
@@ -132,9 +130,6 @@ class QtMainWindow(QMainWindow):
         self._apply_theme(self.theme_name)
 
         self.bus.subscribe("status", self.set_status)
-        self.bus.subscribe("serial/rx", lambda line: self._append_serial("<-", line))
-        self.bus.subscribe("serial/tx", lambda line: self._append_serial("->", line))
-        self.bus.subscribe("serial/note", lambda line: self._append_serial("--", line))
         # Run state comes from the controller's own events, never from the
         # button handlers — a run can also end on its own (error, package halt).
         self.bus.subscribe("run/started", lambda _p: self._on_run_started())
@@ -461,13 +456,10 @@ class QtMainWindow(QMainWindow):
             | QDockWidget.DockWidgetFeature.DockWidgetMovable
             | QDockWidget.DockWidgetFeature.DockWidgetFloatable
         )
-        self.serial_log = QPlainTextEdit(self.serial_dock)
-        self.serial_log.setObjectName("serialLog")
-        self.serial_log.setReadOnly(True)
-        self.serial_log.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
-        # Ring-buffer semantics, the QPlainTextEdit way — matches the Tk monitor's deque.
-        self.serial_log.setMaximumBlockCount(SERIAL_LOG_LINES)
-        self.serial_dock.setWidget(self.serial_log)
+        # The monitor subscribes serial/* itself and keeps the full session
+        # history — a dock that exists from startup needs no backlog replay.
+        self.serial_monitor = build_serial_monitor(self)
+        self.serial_dock.setWidget(self.serial_monitor)
         # Bottom, like Arduino IDE's monitor / VS Code's terminal (JL).
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.serial_dock)
 
@@ -512,11 +504,6 @@ class QtMainWindow(QMainWindow):
 
     def _show_about(self) -> None:
         QMessageBox.about(self, "About", f"AI Case Sorter\nv{__version__}\nQt spike")
-
-    def _append_serial(self, prefix: str, line: Any) -> None:
-        self.serial_log.appendPlainText(f"{prefix} {str(line).rstrip()}")
-
-    # ----- sort dashboard: assignments, templates, counters -------------------
 
     def open_slot_editor(self, slot: int) -> None:
         """Edit what routes to one slot. The catch-all isn't configurable."""
@@ -698,8 +685,10 @@ class QtMainWindow(QMainWindow):
         muted = f"color: {self.palette_colors['text_muted']};"
         for label in self._muted_labels:
             label.setStyleSheet(muted)
-        # The feed's confidence colors are baked into its spans.
+        # Colors baked into rich text / per-line paints need a hand re-render.
         self._render_feed()
+        if hasattr(self, "serial_monitor"):
+            self.serial_monitor.apply_palette()
         # Indicator dots carry state, not a palette role a stylesheet can reach.
         self._paint_indicators()
 
