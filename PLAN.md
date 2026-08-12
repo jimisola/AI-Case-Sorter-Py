@@ -53,14 +53,14 @@ Status: ☐ todo · ▶ in progress · ✔ done · ✗ blocked
 | 6 | Train activity: feed→capture→classify→label→save loop, sort-while-training, training config + progress dialogs, launch/cancel training | `tab_train.py`, `dialog_training_*.py` | Opus | ▶ |
 | 7 | Install-PyTorch dialog (Qt-native, correct threading — do NOT copy the Tk `after()` pattern) + torch gate equivalent | `dialog_install_torch.py`, `torch_gate.py` | Opus | ▶ |
 | 8 | Model images browser + preview (reclassify/delete) | `dialog_model_images.py`, `dialog_image_preview.py` | Sonnet | ✔ (`cc6b425`) |
-| 9 | Evaluator: run eval, HTML report, history | `dialog_model_evaluator.py` | Opus | ☐ |
+| 9 | Evaluator: run eval, HTML report, history | `dialog_model_evaluator.py` | Opus | ▶ |
 | 10 | Community activity + login + share dialogs (auth-gated sidebar entry) | `tab_community.py`, `dialog_login.py`, `dialog_share_model.py` | Opus | ☐ |
 | 11 | Updates: **Help → "Check for updates…"** (JL 2026-08-12: not under Settings) + status-bar affordance when one is staged, dialog (notes→progress→restart), version picker; drop the Settings→Updates section | `dialog_update.py`, `app.py` update wiring | Opus | ☐ |
 | 12 | Serial monitor dock parity: filter, RX/TX/notes toggles, pause/flush, save, timestamps, line endings, command box + history, baud switch, full-history-since-launch (JL: upstream #78/#86 features) | `serial_monitor.py` | Sonnet | ▶ |
-| 13 | Classification history with images (dashboard feed grows thumbnails / dock) | `monitor.py` | Sonnet | ☐ |
+| 13 | Classification history with images (dashboard feed grows thumbnails / dock) | `monitor.py` | Sonnet | ▶ |
 | 14 | Chrome parity: sign-in button + auth state, empty states (no camera/board/model), Tools menu (check updates, sign in), window/session polish, **remaining Run options: confidence floor, store-images mode, auto-select trays (left out of #1)**; **Help menu grows (JL): bigger About, Help→License, links (this repo, CS7.2 hardware/firmware repo, Seth's shop, report-an-issue)**; dock-position persistence (saveState) | `app.py` (Tk), `tab_run.py` options | Sonnet | ☐ |
 | 15 | Theme editor (build/save/rename/import/export custom themes) — descopable; halftone/ink themes stay flat under Qt either way | `dialog_theme_editor.py` | Opus | ☐ |
-| 17 | **Headstamp manager dialog** (parents, auto-suggest, rename incl. on-disk image renames, unsaved guard — gap found in #5: Tk's Models tab has it, no Qt equivalent; ~660 Tk lines) | `dialog_headstamps.py` (Tk: inside `tab_models.py`) | Opus | ☐ |
+| 17 | **Headstamp manager dialog** (parents, auto-suggest, rename incl. on-disk image renames, unsaved guard — gap found in #5: Tk's Models tab has it, no Qt equivalent; ~660 Tk lines) | `dialog_headstamps.py` (Tk: inside `tab_models.py`) | Opus | ▶ |
 | 16 | CI: qt test job (offscreen, `--extra qt`); CLAUDE.md + docs final pass; parity sign-off checklist | workflows, docs | Fable | ☐ |
 
 Increments 1–2 run in parallel (disjoint modules; the orchestrator wires
@@ -128,3 +128,9 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
   manager — parity gap #5 uncovered). Open UX flags for JL: three-way
   import choice (kept), preview prev/next (kept), Images-disabled for
   foreign models (kept).
+- 2026-08-13 — New token session; JL: max parallelism. Wave 3 = SIX
+  concurrent: #6 (Opus, sole app.py owner), #7/#9/#17 (Opus, module-only),
+  #12/#13 (Sonnet, module-only). theme.py frozen for everyone — QSS lands
+  via the orchestrator at integration. Landed meanwhile: resizable model
+  columns (`35a25fd`), Settings-Camera live feed (`a97a5b2`), bottom serial
+  dock (`05bdd01`).
