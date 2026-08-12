@@ -546,6 +546,13 @@ be its own proposal:
   scrub of `QT_QPA_PLATFORM_PLUGIN_PATH` stays as defense for environments
   with another cv2 on the path.
 
+- **`libxcb-cursor0` becomes a soft Linux dependency.** Qt ≥ 6.5 needs it to
+  load the xcb platform plugin; with the `xcb;wayland` default (floating
+  docks are frozen under native Wayland — upstream Qt), machines without it
+  silently fall back to Wayland and lose dock floating. Candidate for
+  `start.sh`'s Linux package probe (alongside libGL/glib) when the Qt UI
+  ships.
+
 ## Decision log
 
 | Date | Decision |
