@@ -65,7 +65,7 @@ Status: ☐ todo · ▶ in progress · ✔ done · ✗ blocked
 | 18 | **Application documentation** — original user guide for the OSS app, informed by the structure/topics of Seth's CS7.2 Application Guide PDF (his copyrighted work: adapt with permission, never copy); includes picking the format and an in-app context-aware help mechanism (see log) | new `docs/guide/` | — | ✗ **blocked: needs Seth's green light (JL 2026-08-13)** |
 | 19 | **Decouple qtui from ui/** (JL 2026-08-13: no qtui→ui dependencies): copy palettes + theme machinery to `qtui/palettes.py`, copy serial-monitor constants; byte-equality drift-pin tests against the ui/ originals (CI-enforced); drop tkinter importorskip from qtui tests | `ui/theme.py`, `ui/serial_monitor.py` (read-only) | Fable | ☐ (after wave-3 integration) |
 | 21 | Polish batch (JL live-testing): app-wide ISO dates (YYYY-MM-DD, 24h) via one shared helper regardless of UI language; Models-table column sorting (typed items, evaluator's `_SortableItem` pattern — natively supported by Qt); Settings gear colored via objectName QSS; file-filter labels that survive GNOME's paren-stripping (e.g. "Model archives — *.zip") | qtui polish | Sonnet | ▶ (dates respec'd: OS-locale formats via QLocale.system, NOT hardcoded ISO — JL correction) |
-| 16 | CI: qt test job (offscreen, `--extra qt`); CLAUDE.md + docs final pass; parity sign-off checklist | workflows, docs | Opus | ▶ |
+| 16 | CI: qt test job (offscreen, `--extra qt`); CLAUDE.md + docs final pass; parity sign-off checklist | workflows, docs | Opus | ✔ (`1b9da2a`) |
 
 Increments 1–2 run in parallel (disjoint modules; the orchestrator wires
 `app.py` integration for #2 to avoid conflicts). Later increments are
@@ -187,3 +187,15 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
 - 2026-08-13 — PR #30 CREATED as draft (token-safety, JL): body per spec
   incl. small-improvements section; updated as 21/16/19 land, then sweep,
   then un-draft.
+- 2026-08-13 — JL: PR's lead argument is the **modern UI + better UX**, not
+  testability — coverage/testability moves down to a supporting pro. Fold in
+  when the body is refreshed for un-draft.
+- 2026-08-13 — spend-limit outage killed #21/#16 mid-run; credits restored,
+  both resumed from transcript. #16 landed (`1b9da2a`): qtui CI job
+  (offscreen, no Xvfb, out-of-matrix rationale in build.yml), 8-test e2e
+  journey suite, CLAUDE.md Qt-UI section. Its findings: (1) the Qt↔Tk
+  torch-dialog argv drift pin runs in NO CI job (Tk leg lacks PySide6, qt job
+  lacks a display) — #19 should rework it display-free; (2) a model ZIP
+  carries headstamp names, not slots, so imports land unrouted (guide + PR
+  parity note); (3) guide lacks an "Image Processing" heading (F1 falls back);
+  (4) build.yml Tk-job comments stale re opencv-headless.
