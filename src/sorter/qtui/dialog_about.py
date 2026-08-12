@@ -97,7 +97,7 @@ class AboutDialog(QDialog):
             ("Project on GitHub", REPO_URL),
             ("Hardware & firmware (CS7.2)", FIRMWARE_REPO_URL),
             ("Report an issue", ISSUES_URL),
-            ("Seth's shop", SHOP_URL),
+            ("SJSeth's Shop", SHOP_URL),
         ):
             link = QLabel(f'<a href="{url}">{text}</a>', self)
             link.setOpenExternalLinks(True)
