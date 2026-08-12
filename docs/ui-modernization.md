@@ -549,9 +549,16 @@ be its own proposal:
 - **`libxcb-cursor0` becomes a soft Linux dependency.** Qt ≥ 6.5 needs it to
   load the xcb platform plugin; with the `xcb;wayland` default (floating
   docks are frozen under native Wayland — upstream Qt), machines without it
-  silently fall back to Wayland and lose dock floating. Candidate for
-  `start.sh`'s Linux package probe (alongside libGL/glib) when the Qt UI
-  ships.
+  silently fall back to Wayland and lose dock floating.
+  **Fragmentation policy (JL):** feature-detection with graceful degradation,
+  never distro-detection with hard requirements — the app must launch on any
+  Linux with no new system packages. Plan: (1) runtime check of
+  `QApplication.platformName()`; when Wayland loaded where xcb was
+  preferred, a one-time package-manager-neutral hint (`libxcb-cursor0` on
+  Debian/Ubuntu, `xcb-util-cursor` on Fedora/Arch) pointing at the guide;
+  (2) `start.sh`'s existing apt-only best-effort probe may add it, never
+  blocking; (3) the guide's Linux notes carry the per-family package table
+  (#18 scope).
 
 ## Decision log
 
