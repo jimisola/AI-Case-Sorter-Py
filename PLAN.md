@@ -32,6 +32,11 @@ decision.
 - Colors via objectNames in `qtui/theme.py`; every color from the palette.
 - Commits: conventional, DCO-signed, one increment per commit, pushed to
   `origin/ui-modernization-research` after review.
+- **UX deltas are conservative by default** (JL 2026-08-12): users know the
+  WinForms-style UI, so don't change workflows gratuitously. Layout/idiom
+  modernization is fine; *bigger* departures (a workflow moving, an
+  interaction model changing, a feature relocating) stop and ask JL first
+  unless the improvement is obvious.
 
 ## Increments
 
