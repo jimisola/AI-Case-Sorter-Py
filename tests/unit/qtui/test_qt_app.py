@@ -82,3 +82,22 @@ def test_bgr_frame_renders(window) -> None:
 
     assert not pixmap.isNull()
     assert (pixmap.width(), pixmap.height()) == (640, 480)
+
+
+def test_preview_frames_never_grow_the_window(qapp, window) -> None:
+    # Regression: the scaled pixmap must not feed back into the layout's
+    # minimum, or the window ratchets larger on every preview repaint.
+    window.resize(1024, 768)
+    window.show()
+    qapp.processEvents()
+    minimum_before = window.minimumSizeHint()
+    size_before = window.size()
+
+    frame = np.zeros((1080, 1920, 3), np.uint8)
+    window.camera = types.SimpleNamespace(latest_frame=lambda: frame)
+    for _ in range(3):
+        window._refresh_preview()
+        qapp.processEvents()
+
+    assert window.minimumSizeHint() == minimum_before
+    assert window.size() == size_before

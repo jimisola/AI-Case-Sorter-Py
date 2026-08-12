@@ -103,7 +103,11 @@ class QtMainWindow(QMainWindow):
         self.tabs = QTabWidget(central)
         self.preview_label = QLabel("No frame", self.tabs)
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        # Ignored + tiny minimum: the label must never report the pixmap as
+        # its size hint, or each scaled frame grows the layout that the next
+        # frame is scaled to — the window ratchets larger on every repaint.
+        self.preview_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.preview_label.setMinimumSize(1, 1)
         # A video letterbox is black in every theme; not chrome, so not themed.
         self.preview_label.setStyleSheet("background-color: #000000; color: #808080;")
         camera_tab = QWidget(self.tabs)
