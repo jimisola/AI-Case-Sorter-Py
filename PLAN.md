@@ -195,8 +195,10 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
   Essentials not the meta-package, ~80 MB vs 256 MB); the core swap
   opencv-python → **opencv-python-headless** (same cv2 API minus bundled GUI/
   Qt plugins — those plugins hijacked PySide6's plugin path and corrupted
-  rendering; the app never used cv2's GUI, so Tk loses nothing and every
-  install gets smaller); dev-group additions pytest-cov + pytest-timeout.
+  rendering; the app never used cv2's GUI, so Tk loses nothing. Size: ~13–15
+  MB (~20%) smaller on Linux, negligible on Windows (44.0→43.8 MB) — the fix
+  is the point, size a Linux-only side benefit); dev-group additions
+  pytest-cov + pytest-timeout.
 - 2026-08-13 — spend-limit outage killed #21/#16 mid-run; credits restored,
   both resumed from transcript. #16 landed (`1b9da2a`): qtui CI job
   (offscreen, no Xvfb, out-of-matrix rationale in build.yml), 8-test e2e
