@@ -14,12 +14,15 @@ from __future__ import annotations
 
 from typing import Any
 
+from PySide6.QtCore import Qt, QTimer  # ty: ignore[unresolved-import]
+from PySide6.QtGui import QPixmap  # ty: ignore[unresolved-import]
 from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QComboBox,
     QFormLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -74,12 +77,40 @@ class CameraSection(QWidget):
         self.current_label = QLabel("", self)
         self.current_label.setObjectName("mutedLabel")
         column.addWidget(self.current_label)
-        column.addStretch(1)
+
+        # Live feed, so Apply isn't blind — same as the Tk camera tab. Ignored
+        # policy + tiny minimum: the scaled pixmap must not drive the layout
+        # (the Sort-preview window-growth bug, same fix).
+        self.preview_label = QLabel("No frame", self)
+        self.preview_label.setObjectName("cropPanel")
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.preview_label.setMinimumSize(1, 1)
+        column.addWidget(self.preview_label, 1)
+
+        self._preview_timer = QTimer(self)
+        self._preview_timer.timeout.connect(self._refresh_preview)
+        self._preview_timer.start(100)
 
         self._populate_quick()
         self._refresh_current_label()
         # Connected last: the population above must not read as a user pick.
         self.device_combo.currentIndexChanged.connect(self._on_device_changed)
+
+    def _refresh_preview(self) -> None:
+        if not self.isVisible():
+            return  # don't decode frames for a page nobody is looking at
+        frame = self._win.camera.latest_frame()
+        if frame is None:
+            return
+        pixmap = QPixmap.fromImage(self._win.frame_to_image(frame))
+        self.preview_label.setPixmap(
+            pixmap.scaled(
+                self.preview_label.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
 
     # ----- population ----------------------------------------------------
 

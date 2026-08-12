@@ -368,3 +368,22 @@ def test_led_debounce_skips_a_repeat_of_the_same_value(window) -> None:
     section._apply_led()
 
     assert window.broker.sent == ["cameraledlevel:200"]
+
+
+def test_camera_page_shows_a_live_preview(window) -> None:
+    # Apply is blind without a feed (JL) — the page renders the live camera.
+    section = settings_camera.build_camera_section(window)
+    window.camera = types.SimpleNamespace(
+        latest_frame=lambda: np.zeros((480, 640, 3), np.uint8)
+    )
+    section._win = window
+    section.show()
+
+    section._refresh_preview()
+
+    assert section.preview_label.pixmap() is not None
+    # Same layout-feedback guard as the Sort preview: never grows the page.
+    from PySide6.QtWidgets import QSizePolicy
+
+    assert section.preview_label.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Ignored
+    section.close()
