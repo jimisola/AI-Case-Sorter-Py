@@ -493,6 +493,9 @@ revisitable; "Open" = needs a decision.
 | History view: fixed 40-entry cap (Tk: window-size-derived), 3-step recency fade (Tk: 6) | Changed — cosmetic | #13, `history_view.py` |
 | Camera page probes devices on button click, not on page open; device/resolution apply on Apply, not instantly | Changed — no surprise hardware grabs | #2, `settings_camera.py` |
 | Evaluator: Evaluate enabled on checkpoint presence, not ownership (community models evaluable) | Kept Tk | #9 |
+| Train Feed button disabled without a board (Tk allows camera-only Feed; the method still works board-less) | Changed — Feed follows the connection like Start | #6, `train_page.py` |
+| Train counts list: single click saves-and-feeds (same click-intending-selection hazard as Tk's cards) | **Kept Tk — flagged** for a rethink | #6 |
+| Training-console close mid-run asks and cancels (Tk closes silently, stranding the subprocess) | Changed — fixes a Tk hazard | #6 |
 
 ## Free-hands wishlist
 
