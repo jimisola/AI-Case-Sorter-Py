@@ -72,6 +72,7 @@ from ..ui.theme import (
 )
 from .dialog_slot_assign import CATCH_ALL_HINT, SlotAssignDialog
 from .dialog_template import EditTemplateDialog, NewTemplateDialog
+from .settings_ai import build_ai_section
 from .settings_camera import build_camera_section
 from .settings_imageproc import build_imageproc_section
 from .slot_grid import SlotGrid
@@ -396,6 +397,7 @@ class QtMainWindow(QMainWindow):
             "Serial": self._build_serial_section,
             "Camera": lambda: build_camera_section(self),
             "Image Proc": lambda: build_imageproc_section(self),
+            "AI Config": self._build_ai_page,
         }
         for name in SETTINGS_SECTIONS:
             self.settings_list.addItem(name)
@@ -406,6 +408,11 @@ class QtMainWindow(QMainWindow):
         row.addWidget(self.settings_list)
         row.addWidget(self.settings_pages, 1)
         return page
+
+    def _build_ai_page(self) -> QWidget:
+        # Kept on self: mode/changed re-reads it (refresh_mode).
+        self.ai_section = build_ai_section(self)
+        return self.ai_section
 
     def _build_theme_section(self) -> QWidget:
         page = QWidget()
@@ -672,6 +679,7 @@ class QtMainWindow(QMainWindow):
         self._clear_counts()
         self._refresh_templates()
         self.slot_grid.refresh_assignments()
+        self.ai_section.refresh_mode()
 
     # ----- theme --------------------------------------------------------------
 

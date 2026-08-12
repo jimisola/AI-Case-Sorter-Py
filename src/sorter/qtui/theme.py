@@ -145,6 +145,15 @@ QSpinBox, QDoubleSpinBox {{
 QSpinBox:focus, QDoubleSpinBox:focus {{ border-color: {c["border_focus"]}; }}
 
 QLabel#mutedLabel {{ color: {c["text_muted"]}; }}
+QLabel#aiResultLabel {{ color: {c["text_highlight"]}; font-weight: bold; }}
+
+QPlainTextEdit {{
+    background-color: {c["bg_input"]};
+    color: {c["text"]};
+    border: 1px solid {c["border"]};
+    border-radius: 3px;
+}}
+QPlainTextEdit:focus {{ border-color: {c["border_focus"]}; }}
 
 QGroupBox {{
     border: 1px solid {c["border"]};
