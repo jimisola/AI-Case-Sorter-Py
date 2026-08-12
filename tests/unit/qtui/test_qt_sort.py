@@ -510,27 +510,14 @@ def test_a_model_switch_re_reads_the_slots_and_templates(window, config) -> None
 # ----- Settings → Serial -----------------------------------------------------
 
 
-def test_port_list_offers_the_emulator_first(window, monkeypatch) -> None:
-    # Regression: 32 legacy /dev/ttyS* ports buried "Emulated" (and the real
-    # USB adapter) at the bottom of the dropdown.
-    legacy = [f"/dev/ttyS{i}" for i in range(32)]
-    monkeypatch.setattr(
-        "sorter.hardware.serial_broker.list_serial_ports",
-        lambda: [*legacy, "/dev/ttyUSB0"],
-    )
-
-    window.refresh_ports()
-
-    ports = [window.port_combo.itemText(i) for i in range(window.port_combo.count())]
-    assert ports[:2] == [EMULATED_PORT, "/dev/ttyUSB0"]
-    assert set(ports[2:]) == set(legacy)
+# Port-combo ordering (Emulated first, USB before /dev/ttyS*) is pinned in
+# test_qt_settings_serial.py, where the combo lives now.
 
 
 def test_connecting_the_emulator_wires_the_run_controller(window, config) -> None:
     from sorter.data.config import Config
 
-    window.port_combo.setCurrentText(EMULATED_PORT)
-    window.connect_serial()
+    window.connect_serial(EMULATED_PORT)
 
     assert isinstance(window.broker, EmulatorBroker)
     assert isinstance(window.run_controller, RunController)
@@ -550,8 +537,7 @@ def test_manual_feed_drives_the_emulator_end_to_end(window, config, monkeypatch)
         latest_frame=lambda: None,
         stop=lambda: None,
     )
-    window.port_combo.setCurrentText(EMULATED_PORT)
-    window.connect_serial()
+    window.connect_serial(EMULATED_PORT)
 
     window.action_buttons["Manual feed"].click()
 

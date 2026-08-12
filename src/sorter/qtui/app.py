@@ -37,7 +37,6 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QCheckBox,
     QComboBox,
     QDockWidget,
-    QFormLayout,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -75,6 +74,7 @@ from .dialog_template import EditTemplateDialog, NewTemplateDialog
 from .settings_ai import build_ai_section
 from .settings_camera import build_camera_section
 from .settings_imageproc import build_imageproc_section
+from .settings_serial import build_serial_section
 from .slot_grid import SlotGrid
 from .theme import build_stylesheet
 
@@ -394,7 +394,7 @@ class QtMainWindow(QMainWindow):
         self.settings_pages = QStackedWidget(page)
         builders = {
             "Theme": self._build_theme_section,
-            "Serial": self._build_serial_section,
+            "Serial": self._build_serial_page,
             "Camera": lambda: build_camera_section(self),
             "Image Proc": lambda: build_imageproc_section(self),
             "AI Config": self._build_ai_page,
@@ -430,59 +430,10 @@ class QtMainWindow(QMainWindow):
         column.addStretch(1)
         return page
 
-    def _build_serial_section(self) -> QWidget:
-        page = QWidget()
-        column = QVBoxLayout(page)
-        column.setContentsMargins(0, 0, 0, 0)
-        column.setSpacing(8)
-
-        form = QFormLayout()
-        self.port_combo = QComboBox(page)
-        self.port_combo.setMaximumWidth(240)
-        self.baud_combo = QComboBox(page)
-        self.baud_combo.setMaximumWidth(240)
-        self.baud_combo.addItems([str(b) for b in BAUD_CHOICES])
-        saved_baud = str(int(self.config.serial.get("baud", 9600)))
-        if saved_baud not in [str(b) for b in BAUD_CHOICES]:
-            self.baud_combo.addItem(saved_baud)
-        self.baud_combo.setCurrentText(saved_baud)
-        form.addRow("Port", self.port_combo)
-        form.addRow("Baud", self.baud_combo)
-        column.addLayout(form)
-
-        buttons = QHBoxLayout()
-        connect = QPushButton("Connect", page)
-        connect.setObjectName("action")
-        connect.clicked.connect(lambda: self.connect_serial())
-        refresh = QPushButton("Refresh ports", page)
-        refresh.clicked.connect(self.refresh_ports)
-        buttons.addWidget(connect)
-        buttons.addWidget(refresh)
-        buttons.addStretch(1)
-        column.addLayout(buttons)
-        column.addWidget(
-            self._muted_label(
-                "The board's init settings are still the Tk Serial tab's job.",
-                page,
-            )
-        )
-        column.addStretch(1)
-        self.refresh_ports()
-        return page
-
-    def refresh_ports(self) -> None:
-        """Re-enumerate ports, keeping the current selection if it survived."""
-        selected = self.port_combo.currentText() or (self.config.serial.get("port") or "").strip()
-        # Emulated first, then USB/ACM adapters (where a real board lives),
-        # then the rest — Linux lists 32 legacy /dev/ttyS* UARTs, and anything
-        # below that wall is effectively invisible in the dropdown.
-        detected = serial_broker.list_serial_ports()
-        likely = [p for p in detected if "USB" in p or "ACM" in p or "COM" in p.upper()]
-        ports = [EMULATED_PORT, *likely, *(p for p in detected if p not in likely)]
-        self.port_combo.clear()
-        self.port_combo.addItems(ports)
-        if selected in ports:
-            self.port_combo.setCurrentText(selected)
+    def _build_serial_page(self) -> QWidget:
+        # Kept on self for tests and the serial/state reactions it subscribes.
+        self.serial_section = build_serial_section(self)
+        return self.serial_section
 
     def _build_serial_dock(self) -> None:
         self.serial_dock = QDockWidget("Serial Monitor", self)
@@ -877,6 +828,16 @@ class QtMainWindow(QMainWindow):
         )
         self.set_status(f"{'Auto-connected' if source == 'auto' else 'Connected'} to {port}.")
         self._rebuild_run_controller()
+        # Tk pushes the board init settings from its shared connect tail too,
+        # so auto-connect and the Settings page behave alike.
+        if self.config.serial.get("init_on_startup", False):
+            settings = dict(self.config.serial.get("init_settings", {}))
+            if settings:
+                self.run_worker(
+                    lambda: broker.update_init_settings(settings),
+                    on_done=lambda _r: self.set_status(f"Connected to {port}. Init settings pushed."),
+                    on_error=lambda err: self.set_status(f"Init push failed: {err}"),
+                )
 
     def connect_serial(self, port: str | None = None) -> None:
         """Open one explicit port, chosen in Settings → Serial.
@@ -897,7 +858,7 @@ class QtMainWindow(QMainWindow):
             self._update_run_buttons()
 
         if port is None:
-            port = self.port_combo.currentText().strip()
+            port = (self.config.serial.get("port") or "").strip()
         if not port:
             self.set_status("No port selected.")
             self._set_serial_indicator("Serial: no port selected", connected=False)
@@ -909,7 +870,7 @@ class QtMainWindow(QMainWindow):
             self._after_connect(broker, port, source="manual")
             return
 
-        baud = int(self.baud_combo.currentText() or self.config.serial.get("baud", 9600))
+        baud = int(self.config.serial.get("baud", 9600))
         broker = serial_broker.SerialBroker(port=port, baud=baud, require_serial_ready=True)
         # As in the probe: a failed open should still leave a trace in the monitor.
         self._attach_serial_listeners(broker)
