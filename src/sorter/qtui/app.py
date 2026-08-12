@@ -78,6 +78,7 @@ from .settings_imageproc import build_imageproc_section
 from .settings_serial import build_serial_section
 from .slot_grid import SlotGrid
 from .theme import build_stylesheet
+from .train_page import build_train_page
 
 PREVIEW_FPS = 20
 CROP_SIZE = 132
@@ -176,7 +177,7 @@ class QtMainWindow(QMainWindow):
         self.pages = QStackedWidget(central)
         self._pages_by_name: dict[str, QWidget] = {}
         self._add_page("Sort", self._build_sort_page())
-        self._add_page("Train", self._placeholder_page())
+        self._add_page("Train", self._build_train_page())
         self._add_page("Models", self._build_models_page())
         self._add_page("Community", self._placeholder_page())
         self._add_page("Settings", self._build_settings_page())
@@ -411,6 +412,11 @@ class QtMainWindow(QMainWindow):
         row.addWidget(self.settings_pages, 1)
         return page
 
+    def _build_train_page(self) -> QWidget:
+        # Kept on self: mode/changed and navigating to the page both refresh it.
+        self.train_page = build_train_page(self)
+        return self.train_page
+
     def _build_models_page(self) -> QWidget:
         # Kept on self: mode/changed and navigating to the page both refresh it.
         self.models_page = build_models_page(self)
@@ -497,6 +503,10 @@ class QtMainWindow(QMainWindow):
             self.slot_grid.refresh_assignments()
         elif name == "Models":
             self.models_page.refresh(announce=True)
+        elif name == "Train":
+            # Headstamps and images change from the Models page, the Tk UI and
+            # imports; the counts are read off disk every time, never cached.
+            self.train_page.refresh()
 
     def _open_data_folder(self) -> None:
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(app_data_dir())))
@@ -647,6 +657,8 @@ class QtMainWindow(QMainWindow):
         self._refresh_templates()
         self.slot_grid.refresh_assignments()
         self.ai_section.refresh_mode()
+        # Everything on the Train page is scoped to the active model.
+        self.train_page.refresh()
         # The library's active marker is the mode, spelled out per row.
         self.models_page.refresh()
 
@@ -1006,6 +1018,10 @@ class QtMainWindow(QMainWindow):
             button = self.action_buttons[name]
             button.setEnabled(enabled)
             button.setToolTip("" if connected else "Connect to the board first")
+        # The Train page's Feed drives the same board.
+        train_page = getattr(self, "train_page", None)
+        if train_page is not None:
+            train_page.refresh_connection()
 
     def _on_run_result(self, result: Any) -> None:
         # `run/result` carries a slot even for a failed cycle, so `ok` is what
