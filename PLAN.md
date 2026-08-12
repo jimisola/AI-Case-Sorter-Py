@@ -54,11 +54,11 @@ Status: ☐ todo · ▶ in progress · ✔ done · ✗ blocked
 | 7 | Install-PyTorch dialog (Qt-native, correct threading — do NOT copy the Tk `after()` pattern) + torch gate equivalent | `dialog_install_torch.py`, `torch_gate.py` | Opus | ✔ (`6101ddb`) |
 | 8 | Model images browser + preview (reclassify/delete) | `dialog_model_images.py`, `dialog_image_preview.py` | Sonnet | ✔ (`cc6b425`) |
 | 9 | Evaluator: run eval, HTML report, history | `dialog_model_evaluator.py` | Opus | ✔ (`39e178f`) |
-| 10 | Community activity + login + share dialogs (auth-gated sidebar entry) | `tab_community.py`, `dialog_login.py`, `dialog_share_model.py` | Opus | ☐ |
-| 11 | Updates: **Help → "Check for updates…"** (JL 2026-08-12: not under Settings) + status-bar affordance when one is staged, dialog (notes→progress→restart), version picker; drop the Settings→Updates section | `dialog_update.py`, `app.py` update wiring | Opus | ☐ |
+| 10 | Community activity + login + share dialogs (auth-gated sidebar entry) | `tab_community.py`, `dialog_login.py`, `dialog_share_model.py` | Opus | ▶ |
+| 11 | Updates: **Help → "Check for updates…"** (JL 2026-08-12: not under Settings) + status-bar affordance when one is staged, dialog (notes→progress→restart), version picker; drop the Settings→Updates section | `dialog_update.py`, `app.py` update wiring | Opus | ▶ |
 | 12 | Serial monitor dock parity: filter, RX/TX/notes toggles, pause/flush, save, timestamps, line endings, command box + history, baud switch, full-history-since-launch (JL: upstream #78/#86 features) | `serial_monitor.py` | Sonnet | ✔ (`0bf3e8b`) |
 | 13 | Classification history with images (dashboard feed grows thumbnails / dock) | `monitor.py` | Sonnet | ✔ (`1a43bb1`) |
-| 14 | Chrome parity: sign-in button + auth state, empty states (no camera/board/model), Tools menu (check updates, sign in), window/session polish, **remaining Run options: confidence floor, store-images mode, auto-select trays (left out of #1)**; **Help menu grows (JL): bigger About, Help→License, links (this repo, CS7.2 hardware/firmware repo, Seth's shop, report-an-issue)**; dock-position persistence (saveState) | `app.py` (Tk), `tab_run.py` options | Sonnet | ☐ |
+| 14 | Chrome parity: sign-in button + auth state, empty states (no camera/board/model), Tools menu (check updates, sign in), window/session polish, **remaining Run options: confidence floor, store-images mode, auto-select trays (left out of #1)**; **Help menu grows (JL): bigger About, Help→License, links (this repo, CS7.2 hardware/firmware repo, Seth's shop, report-an-issue)**; dock-position persistence (saveState) | `app.py` (Tk), `tab_run.py` options | Sonnet | ▶ |
 | 15 | Theme editor (build/save/rename/import/export custom themes) — descopable; halftone/ink themes stay flat under Qt either way | `dialog_theme_editor.py` | Opus | ☐ |
 | 17 | **Headstamp manager dialog** (parents, auto-suggest, rename incl. on-disk image renames, unsaved guard — gap found in #5: Tk's Models tab has it, no Qt equivalent; ~660 Tk lines) | `dialog_headstamps.py` (Tk: inside `tab_models.py`) | Opus | ✔ (`35c9896`) |
 | 20 | **The PR to upstream** (JL 2026-08-13): open the PR to sjseth once JL greenlights. Body top-to-bottom: (1) how to run the qtui (clone/sync/launch, three OSes); (2) explicit note that the Tk UI is untouched and remains the default — nothing removed (yet); (3) feature-parity table from PLAN's checklist; (4) design decisions (co-existence, activity sidebar, docks, function-not-UI parity) + the judgment-call register; (5) open items (register "Open" rows, halftone themes, #18 docs approval); (6) pros of the stack (headless CI without Xvfb, PySide6-Essentials sizing, LGPL/GPL fit, single-source docs PoC); (7) test/velocity numbers. Draft PR; no merge — Seth decides. | `docs/ui-modernization.md`, `PLAN.md` as sources | Fable | ☐ (needs JL go) |
@@ -161,3 +161,8 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
   saves-and-feeds (#6, kept Tk), evaluator preview uses #8's browsable
   navigation. Remaining: #10 Community, #11 Updates, #14 chrome, #15 theme
   editor, #19 decouple, #16 CI/e2e, #18 (Seth), #20 (PR, JL go).
+- 2026-08-13 — Wave 4 launched: #10 Community (Opus, module-only), #11
+  Updates dialog (Opus, module-only; Help-menu wiring at integration), #14
+  chrome (Sonnet, sole app.py/theme.py owner). Also in flight: single-file
+  guide restructure (Sonnet); help-as-dock conversion (JL) applies at its
+  integration. #19 decoupling held until #14 releases app.py.
