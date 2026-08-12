@@ -45,9 +45,9 @@ Status: ☐ todo · ▶ in progress · ✔ done · ✗ blocked
 | # | Increment | Covers (Tk reference) | Agent | Status |
 |---|-----------|----------------------|-------|--------|
 | 0 | Spikes 1–3: shell, layout, showcase | app shell, run loop core | Opus | ✔ (`2f0711b`…`5de9b58`) |
-| 1 | Sort parity core: slot-assignment editing, sorting-template bar + dialog, master/package counters, package halt+bell, cropped-crop preview, AI-credentials preflight, `mode/changed` (Train visibility + grid refresh) | `tab_run.py`, `dialog_slot_template.py` | Opus | ▶ |
-| 2 | Settings: Camera page (enumerate/resolutions/apply/restart) + Image Proc page (Hough/primer/LED, before-after preview) | `tab_camera.py`, `tab_imageproc.py` | Sonnet | ▶ |
-| 3 | Settings: AI Config page (server config, headstamp manager, single-shot test) | `tab_ai.py` | Opus | ▶ |
+| 1 | Sort parity core: slot-assignment editing, sorting-template bar + dialog, master/package counters, package halt+bell, cropped-crop preview, AI-credentials preflight, `mode/changed` (Train visibility + grid refresh) | `tab_run.py`, `dialog_slot_template.py` | Opus | ✔ (`3e2e4b6`) |
+| 2 | Settings: Camera page (enumerate/resolutions/apply/restart) + Image Proc page (Hough/primer/LED, before-after preview) | `tab_camera.py`, `tab_imageproc.py` | Sonnet | ✔ (`427dadb`, wired in `3e2e4b6`) |
+| 3 | Settings: AI Config page (server config, headstamp manager, single-shot test) | `tab_ai.py` | Opus | ✔ (`be64586`) |
 | 4 | Settings: Serial page parity (init settings, disconnect, sort-arm test, airdrop) | `tab_serial.py` | Sonnet | ▶ |
 | 5 | Models activity: library browse/filter/create/edit/activate/delete, import/export ZIP, "Use AI Config" row; model editor dialog | `tab_models.py`, `dialog_model_editor.py` | Opus | ☐ |
 | 6 | Train activity: feed→capture→classify→label→save loop, sort-while-training, training config + progress dialogs, launch/cancel training | `tab_train.py`, `dialog_training_*.py` | Opus | ☐ |
@@ -58,7 +58,7 @@ Status: ☐ todo · ▶ in progress · ✔ done · ✗ blocked
 | 11 | Updates: **Help → "Check for updates…"** (JL 2026-08-12: not under Settings) + status-bar affordance when one is staged, dialog (notes→progress→restart), version picker; drop the Settings→Updates section | `dialog_update.py`, `app.py` update wiring | Opus | ☐ |
 | 12 | Serial monitor dock parity: filter, RX/TX/notes toggles, pause/flush, save, timestamps, line endings, command box + history, baud switch, backlog replay | `serial_monitor.py` | Sonnet | ☐ |
 | 13 | Classification history with images (dashboard feed grows thumbnails / dock) | `monitor.py` | Sonnet | ☐ |
-| 14 | Chrome parity: sign-in button + auth state, empty states (no camera/board/model), Tools menu (check updates, sign in), window/session polish | `app.py` (Tk) | Sonnet | ☐ |
+| 14 | Chrome parity: sign-in button + auth state, empty states (no camera/board/model), Tools menu (check updates, sign in), window/session polish, **remaining Run options: confidence floor, store-images mode, auto-select trays (left out of #1)** | `app.py` (Tk), `tab_run.py` options | Sonnet | ☐ |
 | 15 | Theme editor (build/save/rename/import/export custom themes) — descopable; halftone/ink themes stay flat under Qt either way | `dialog_theme_editor.py` | Opus | ☐ |
 | 16 | CI: qt test job (offscreen, `--extra qt`); CLAUDE.md + docs final pass; parity sign-off checklist | workflows, docs | Fable | ☐ |
 
@@ -75,14 +75,14 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
 - [x] Start/Stop/manual-feed with Tk preflights (torch/checkpoint)
 - [x] Slot cards with live counts; catch-all slot
 - [x] Recent-classification feed (labels + confidence)
-- [ ] Slot assignment editing (standard + package + parents)
-- [ ] Sorting templates (switch/new/rename/delete, live sync)
-- [ ] Package mode (counters, halt, bell, reset)
-- [ ] Auto-select trays (`run/assignment_changed`) — events wired, needs editing UI
-- [ ] Master counter + reset
-- [ ] Camera setup (device/resolution)
-- [ ] Image-proc tuning (Hough, primer mask, LED)
-- [ ] AI Config (server, prompt, headstamp manager, test shot)
+- [x] Slot assignment editing (standard + package + parents)
+- [x] Sorting templates (switch/new/rename/delete, live sync)
+- [x] Package mode (counters, halt, bell, reset)
+- [x] Auto-select trays (`run/assignment_changed`) — grid follows; the enable toggle ships with #14
+- [x] Master counter + reset
+- [x] Camera setup (device/resolution)
+- [x] Image-proc tuning (Hough, primer mask, LED)
+- [x] AI Config (server, prompt, headstamp manager, test shot)
 - [ ] Serial board init settings + sort-arm test + airdrop
 - [ ] Models library (create/edit/activate/delete/import/export)
 - [ ] Train loop (capture/label/save, sort-while-training)
@@ -101,3 +101,11 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
 
 - 2026-08-12 ~21:15 — Plan created. Wave 1 launched: increment 1 (Opus) and
   increment 2 (Sonnet, module-only contract; orchestrator wires `app.py`).
+- 2026-08-12 ~22:05 — Increments 3–4 launched in parallel with 1 (JL asked
+  for all settings). Theme editor decision (JL): keep in plan, late (#15).
+- 2026-08-12 ~22:40 — Increments 1, 2, 3 landed (`427dadb`, `3e2e4b6`,
+  `be64586`). qtui tests 54 → 133; full suite 940 green. Orchestrator
+  overrides applied per the conservative-UX rule: counts survive Stop/Start
+  (Tk parity, jam-clearing), package-halt shows the dialog again (queued out
+  of the drain), AI-page Clear-all keeps Tk's confirmation. Run options
+  (floor/store-images/auto-select) moved to #14. Increment 4 still running.
