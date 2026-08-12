@@ -377,7 +377,12 @@ class QtMainWindow(QMainWindow):
     def refresh_ports(self) -> None:
         """Re-enumerate ports, keeping the current selection if it survived."""
         selected = self.port_combo.currentText() or (self.config.serial.get("port") or "").strip()
-        ports = [*serial_broker.list_serial_ports(), EMULATED_PORT]
+        # Emulated first, then USB/ACM adapters (where a real board lives),
+        # then the rest — Linux lists 32 legacy /dev/ttyS* UARTs, and anything
+        # below that wall is effectively invisible in the dropdown.
+        detected = serial_broker.list_serial_ports()
+        likely = [p for p in detected if "USB" in p or "ACM" in p or "COM" in p.upper()]
+        ports = [EMULATED_PORT, *likely, *(p for p in detected if p not in likely)]
         self.port_combo.clear()
         self.port_combo.addItems(ports)
         if selected in ports:

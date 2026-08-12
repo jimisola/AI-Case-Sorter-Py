@@ -295,13 +295,20 @@ def test_run_error_reaches_the_status_bar(window) -> None:
 # ----- Settings → Serial -----------------------------------------------------
 
 
-def test_port_list_offers_the_emulator(window, monkeypatch) -> None:
-    monkeypatch.setattr("sorter.hardware.serial_broker.list_serial_ports", lambda: ["COM7"])
+def test_port_list_offers_the_emulator_first(window, monkeypatch) -> None:
+    # Regression: 32 legacy /dev/ttyS* ports buried "Emulated" (and the real
+    # USB adapter) at the bottom of the dropdown.
+    legacy = [f"/dev/ttyS{i}" for i in range(32)]
+    monkeypatch.setattr(
+        "sorter.hardware.serial_broker.list_serial_ports",
+        lambda: [*legacy, "/dev/ttyUSB0"],
+    )
 
     window.refresh_ports()
 
     ports = [window.port_combo.itemText(i) for i in range(window.port_combo.count())]
-    assert ports == ["COM7", EMULATED_PORT]
+    assert ports[:2] == [EMULATED_PORT, "/dev/ttyUSB0"]
+    assert set(ports[2:]) == set(legacy)
 
 
 def test_connecting_the_emulator_wires_the_run_controller(window, config) -> None:
