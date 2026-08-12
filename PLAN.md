@@ -49,10 +49,10 @@ Status: ☐ todo · ▶ in progress · ✔ done · ✗ blocked
 | 2 | Settings: Camera page (enumerate/resolutions/apply/restart) + Image Proc page (Hough/primer/LED, before-after preview) | `tab_camera.py`, `tab_imageproc.py` | Sonnet | ✔ (`427dadb`, wired in `3e2e4b6`) |
 | 3 | Settings: AI Config page (server config, headstamp manager, single-shot test) | `tab_ai.py` | Opus | ✔ (`be64586`) |
 | 4 | Settings: Serial page parity (init settings, disconnect, sort-arm test, airdrop) | `tab_serial.py` | Sonnet | ✔ (`5cb9c50`) |
-| 5 | Models activity: library browse/filter/create/edit/activate/delete, import/export ZIP, "Use AI Config" row; model editor dialog | `tab_models.py`, `dialog_model_editor.py` | Opus | ☐ |
+| 5 | Models activity: library browse/filter/create/edit/activate/delete, import/export ZIP, "Use AI Config" row; model editor dialog | `tab_models.py`, `dialog_model_editor.py` | Opus | ✔ (`29d7be6`) |
 | 6 | Train activity: feed→capture→classify→label→save loop, sort-while-training, training config + progress dialogs, launch/cancel training | `tab_train.py`, `dialog_training_*.py` | Opus | ☐ |
 | 7 | Install-PyTorch dialog (Qt-native, correct threading — do NOT copy the Tk `after()` pattern) + torch gate equivalent | `dialog_install_torch.py`, `torch_gate.py` | Opus | ☐ |
-| 8 | Model images browser + preview (reclassify/delete) | `dialog_model_images.py`, `dialog_image_preview.py` | Sonnet | ☐ |
+| 8 | Model images browser + preview (reclassify/delete) | `dialog_model_images.py`, `dialog_image_preview.py` | Sonnet | ✔ (`cc6b425`) |
 | 9 | Evaluator: run eval, HTML report, history | `dialog_model_evaluator.py` | Opus | ☐ |
 | 10 | Community activity + login + share dialogs (auth-gated sidebar entry) | `tab_community.py`, `dialog_login.py`, `dialog_share_model.py` | Opus | ☐ |
 | 11 | Updates: **Help → "Check for updates…"** (JL 2026-08-12: not under Settings) + status-bar affordance when one is staged, dialog (notes→progress→restart), version picker; drop the Settings→Updates section | `dialog_update.py`, `app.py` update wiring | Opus | ☐ |
@@ -60,6 +60,7 @@ Status: ☐ todo · ▶ in progress · ✔ done · ✗ blocked
 | 13 | Classification history with images (dashboard feed grows thumbnails / dock) | `monitor.py` | Sonnet | ☐ |
 | 14 | Chrome parity: sign-in button + auth state, empty states (no camera/board/model), Tools menu (check updates, sign in), window/session polish, **remaining Run options: confidence floor, store-images mode, auto-select trays (left out of #1)** | `app.py` (Tk), `tab_run.py` options | Sonnet | ☐ |
 | 15 | Theme editor (build/save/rename/import/export custom themes) — descopable; halftone/ink themes stay flat under Qt either way | `dialog_theme_editor.py` | Opus | ☐ |
+| 17 | **Headstamp manager dialog** (parents, auto-suggest, rename incl. on-disk image renames, unsaved guard — gap found in #5: Tk's Models tab has it, no Qt equivalent; ~660 Tk lines) | `dialog_headstamps.py` (Tk: inside `tab_models.py`) | Opus | ☐ |
 | 16 | CI: qt test job (offscreen, `--extra qt`); CLAUDE.md + docs final pass; parity sign-off checklist | workflows, docs | Fable | ☐ |
 
 Increments 1–2 run in parallel (disjoint modules; the orchestrator wires
@@ -84,11 +85,11 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
 - [x] Image-proc tuning (Hough, primer mask, LED)
 - [x] AI Config (server, prompt, headstamp manager, test shot)
 - [x] Serial board init settings + sort-arm test + airdrop
-- [ ] Models library (create/edit/activate/delete/import/export)
+- [x] Models library (create/edit/activate/delete/import/export)
 - [ ] Train loop (capture/label/save, sort-while-training)
 - [ ] Training runs (config, progress, cancel)
 - [ ] PyTorch install gate (Qt-native)
-- [ ] Training-image browser (reclassify/delete)
+- [x] Training-image browser (reclassify/delete)
 - [ ] Evaluator + HTML report
 - [ ] Community (browse/download/share) + sign-in
 - [ ] Feedback loop + wish-list capture (Run-tab side)
@@ -120,3 +121,10 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
   After increments 5+8 integrate, switch to ONE subagent at a time to pace
   the burn; #12 (serial monitor parity, Sonnet) goes first as the cheapest
   file-disjoint increment, then back to plan order after the reset.
+- 2026-08-13 ~00:05 — Increments 5+8 landed (`29d7be6`, `cc6b425`); qtui
+  tests 199, full suite 1006. Session token ceiling: STOPPING here. Next
+  session: hoist CASESORTER_DATA_DIR isolation into qtui conftest (#5's
+  finding), then #6+#7 (Opus), #12 (Sonnet), and new #17 (headstamp
+  manager — parity gap #5 uncovered). Open UX flags for JL: three-way
+  import choice (kept), preview prev/next (kept), Images-disabled for
+  foreign models (kept).
