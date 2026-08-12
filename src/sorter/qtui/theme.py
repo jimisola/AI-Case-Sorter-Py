@@ -28,7 +28,13 @@ _FALLBACK = {
     "text_muted": "#9a9a9a",
     "text_subtle": "#6f6f6f",
     "text_inverse": "#121212",
+    "accent": "#e0e0e0",
     "accent_dim": "#2e2e2e",
+    "update": "#60a5fa",
+    "update_hover": "#93c5fd",
+    "update_press": "#3b82f6",
+    "success": "#22c55e",
+    "warning": "#f59e0b",
     "action": "#22c55e",
     "action_hover": "#4ade80",
     "action_press": "#16a34a",
@@ -175,6 +181,16 @@ QSpinBox, QDoubleSpinBox {{
 QSpinBox:focus, QDoubleSpinBox:focus {{ border-color: {c["border_focus"]}; }}
 
 QLabel#mutedLabel {{ color: {c["text_muted"]}; }}
+QLabel#updateTitle {{ color: {c["text_highlight"]}; font-weight: bold; }}
+QLabel#updateVersion {{ color: {c["accent"]}; }}
+
+QTextBrowser {{
+    background-color: {c["bg_input"]};
+    color: {c["text"]};
+    border: 1px solid {c["border"]};
+    border-radius: 3px;
+    padding: 6px;
+}}
 QLabel#aiResultLabel {{ color: {c["text_highlight"]}; font-weight: bold; }}
 
 QFrame#thumbTile {{ border: 1px solid transparent; border-radius: 4px; }}
@@ -282,6 +298,20 @@ QPushButton#action:hover {{
 QPushButton#action:pressed {{
     background-color: {c["action_press"]};
     border-color: {c["action_press"]};
+}}
+
+QPushButton#update {{
+    background-color: {c["update"]};
+    color: {c["text_inverse"]};
+    border-color: {c["update"]};
+}}
+QPushButton#update:hover {{
+    background-color: {c["update_hover"]};
+    border-color: {c["update_hover"]};
+}}
+QPushButton#update:pressed {{
+    background-color: {c["update_press"]};
+    border-color: {c["update_press"]};
 }}
 
 QPushButton#danger {{

@@ -37,7 +37,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, QUrl  # ty: ignore[unresolved-import]
+from PySide6.QtCore import QUrl  # ty: ignore[unresolved-import]
 from PySide6.QtGui import QTextCursor  # ty: ignore[unresolved-import]
 from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QHBoxLayout,
@@ -83,7 +83,7 @@ class HelpWindow(QWidget):
     """Non-modal Markdown viewer over ``docs/guide/GUIDE.md``. Caller owns the single instance."""
 
     def __init__(self, parent: QWidget | None = None, *, docs_root: Path | None = None) -> None:
-        super().__init__(parent, Qt.WindowType.Window)
+        super().__init__(parent)
         self.setWindowTitle("AI Case Sorter Help")
         self.resize(640, 520)
         self._docs_root = docs_root if docs_root is not None else app_root() / "docs" / "guide"

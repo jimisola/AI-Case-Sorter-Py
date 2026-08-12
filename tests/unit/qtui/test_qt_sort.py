@@ -461,7 +461,19 @@ def mode_changed(window) -> None:
 
 def test_train_is_hidden_in_ai_config_mode(window) -> None:
     assert window.sidebar_buttons["Train"].isHidden()
+
+
+def test_community_follows_auth_state(window) -> None:
+    # Signed out (the fixture never constructs an AuthManager): hidden, and
+    # the status-bar button offers sign-in.
+    assert window.sidebar_buttons["Community"].isHidden()
+    assert window.signin_button.text() == "Sign in"
+
+    window.community_page.is_signed_in = lambda: True
+    window._apply_auth_visibility()
+
     assert not window.sidebar_buttons["Community"].isHidden()
+    assert window.signin_button.text() == "Sign out"
 
 
 def test_train_appears_for_a_model_this_user_owns(window, config) -> None:

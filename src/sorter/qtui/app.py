@@ -72,6 +72,7 @@ from ..ui.theme import (
     resolve_theme,
     theme_names,
 )
+from .community_page import build_community_page
 from .dialog_slot_assign import CATCH_ALL_HINT, SlotAssignDialog
 from .dialog_template import EditTemplateDialog, NewTemplateDialog
 from .help_viewer import build_help_window, topic_for
@@ -167,7 +168,6 @@ class QtMainWindow(QMainWindow):
 
         # The one sanctioned front door for anything needing local inference.
         self.ensure_torch = TorchGate(self)
-        self._help_window: Any | None = None
 
         self.setWindowTitle(f"AI Case Sorter OSS - v{__version__} (Qt) · GPL-3.0")
         self._build_ui()
@@ -197,9 +197,23 @@ class QtMainWindow(QMainWindow):
         self._preview_timer.timeout.connect(self._refresh_preview)
         self._preview_timer.start(int(1000 / PREVIEW_FPS))
 
+        self.auth: Any | None = None
+        self._update_info: Any | None = None
+        self._pending_update: Any | None = None
         if auto_connect:
+            # Tk parity: a returning signed-in user finds Community present at
+            # launch. Reads the token cache only; never constructed in tests.
+            try:
+                from ..community.auth import AuthManager
+
+                self.auth = AuthManager()
+            except Exception:
+                self.auth = None
+            self.community_page.refresh_auth_state()
             self.start_camera()
             self._auto_connect_serial()
+            QTimer.singleShot(2500, self._startup_update_check)
+        self._apply_auth_visibility()
 
     # ----- construction -------------------------------------------------------
 
@@ -221,7 +235,7 @@ class QtMainWindow(QMainWindow):
         self._add_page("Sort", self._build_sort_page())
         self._add_page("Train", self._build_train_page())
         self._add_page("Models", self._build_models_page())
-        self._add_page("Community", self._placeholder_page())
+        self._add_page("Community", self._build_community_page())
         self._add_page("Settings", self._build_settings_page())
         body.addWidget(self._build_sidebar())
         body.addWidget(self.pages, 1)
@@ -231,6 +245,7 @@ class QtMainWindow(QMainWindow):
         # Docks are built before the menus: View hosts their toggle actions.
         self._build_serial_dock()
         self._build_history_dock()
+        self._build_help_dock()
         self._build_menus()
 
         self.camera_label = QLabel(self)
@@ -239,6 +254,16 @@ class QtMainWindow(QMainWindow):
         # Tk status bar.
         self.statusBar().addPermanentWidget(self.camera_label)
         self.statusBar().addPermanentWidget(self.serial_label)
+        # Rightmost pair, Tk order: update affordance (hidden until there is
+        # something to do — Help menu is the always-reachable route), sign-in.
+        self.update_button = QPushButton(self)
+        self.update_button.setObjectName("update")
+        self.update_button.clicked.connect(lambda: self.open_update_dialog())
+        self.update_button.hide()
+        self.statusBar().addPermanentWidget(self.update_button)
+        self.signin_button = QPushButton("Sign in", self)
+        self.signin_button.clicked.connect(self._on_signin_clicked)
+        self.statusBar().addPermanentWidget(self.signin_button)
         self._paint_indicators()
         self._apply_mode_visibility()
         self.set_status("Idle.")
@@ -570,7 +595,7 @@ class QtMainWindow(QMainWindow):
         return self.models_page
 
     def open_help(self) -> None:
-        """F1 / Help menu: the guide, opened at the section for where you stand."""
+        """F1 / Help menu: the guide dock, opened at the current context's topic."""
         page = next(
             (name for name, w in self._pages_by_name.items() if w is self.pages.currentWidget()),
             "Sort",
@@ -579,12 +604,9 @@ class QtMainWindow(QMainWindow):
         if page == "Settings":
             item = self.settings_list.currentItem()
             section = item.text() if item is not None else None
-        if self._help_window is None:
-            self._help_window = build_help_window(self)
-        self._help_window.show_topic(topic_for(page, section))
-        self._help_window.show()
-        self._help_window.raise_()
-        self._help_window.activateWindow()
+        self.help_view.show_topic(topic_for(page, section))
+        self.help_dock.show()
+        self.help_dock.raise_()
 
     def _open_model_images(self, model: Any) -> None:
         from .dialog_model_images import ModelImagesDialog
@@ -753,6 +775,76 @@ class QtMainWindow(QMainWindow):
         self.resize(size.width(), size.height() + 1)
         QTimer.singleShot(0, lambda: self.resize(size))
 
+    def _build_community_page(self) -> QWidget:
+        self.community_page = build_community_page(self)
+        self.community_page.on_auth_changed = self._on_auth_changed
+        return self.community_page
+
+    def _apply_auth_visibility(self) -> None:
+        signed_in = self.community_page.is_signed_in()
+        self._set_activity_visible("Community", signed_in)
+        self.signin_button.setText("Sign out" if signed_in else "Sign in")
+
+    def _on_auth_changed(self) -> None:
+        self._apply_auth_visibility()
+
+    def _on_signin_clicked(self) -> None:
+        if self.community_page.is_signed_in():
+            self.community_page.sign_out()
+        else:
+            self.community_page.open_login()
+
+    # ----- updates ------------------------------------------------------------
+
+    def open_update_dialog(self, *, check: bool = False) -> None:
+        from .dialog_update import UpdateDialog
+
+        self._update_dialog = UpdateDialog(
+            self, info=self._update_info, app=self, pending=self._pending_update, check_on_open=check
+        )
+        self._update_dialog.open()
+
+    def note_pending_update(self, pending: Any) -> None:
+        self._pending_update = pending
+        self.update_button.setText("Restart to update")
+        self.update_button.show()
+
+    def note_update_info(self, info: Any) -> None:
+        self._update_info = info
+        if self._pending_update is not None:
+            return  # a staged update outranks a fresh finding
+        if info is None:
+            self.update_button.hide()
+        else:
+            self.update_button.setText(f"Update to {info.version}")
+            self.update_button.show()
+
+    def _startup_update_check(self) -> None:
+        """Silent, Tk order: staged update first, then an opt-out-able check."""
+        from ..update import updater
+
+        pending = updater.pending_update()
+        if pending is not None:
+            self.note_pending_update(pending)
+            return
+        if updater.checks_disabled() or self._load_setting(updater.SETTING_CHECK_ON_STARTUP) is False:
+            return
+        self.run_worker(
+            updater.check_for_update,
+            on_done=self.note_update_info,
+            on_error=lambda _exc: None,  # silent by design; Help menu re-checks loudly
+        )
+
+    def _build_help_dock(self) -> None:
+        # A dock, not a free window (JL): pin the guide beside the work while
+        # learning, toggle it away after.
+        self.help_dock = QDockWidget("User Guide", self)
+        self.help_dock.setObjectName("helpDock")
+        self.help_view = build_help_window(self)
+        self.help_dock.setWidget(self.help_view)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.help_dock)
+        self.help_dock.hide()
+
     def _build_menus(self) -> None:
         # menuBar().addMenu(str) hands the QMenu back with Python ownership; the
         # menus have to be kept alive here or shiboken deletes them.
@@ -772,14 +864,17 @@ class QtMainWindow(QMainWindow):
         history_toggle = self.history_dock.toggleViewAction()
         history_toggle.setText("Classification History")
         self.menus["View"].addAction(history_toggle)
+        help_toggle = self.help_dock.toggleViewAction()
+        help_toggle.setText("User Guide Panel")
+        self.menus["View"].addAction(help_toggle)
 
         self.menus["Help"] = self.menuBar().addMenu("&Help")
         guide = self.menus["Help"].addAction("User Guide")
         guide.setShortcut(QKeySequence.StandardKey.HelpContents)  # F1
         guide.triggered.connect(self.open_help)
+        check = self.menus["Help"].addAction("Check for updates…")
+        check.triggered.connect(lambda: self.open_update_dialog(check=True))
         self.menus["Help"].addSeparator()
-        # TODO(#11): "Check for updates…" goes here — Help menu, per
-        # docs/ui-modernization.md — once increment 11 lands the dialog.
         about = self.menus["Help"].addAction("About")
         about.triggered.connect(self._show_about)
         license_action = self.menus["Help"].addAction("License")
@@ -795,6 +890,8 @@ class QtMainWindow(QMainWindow):
             self._refresh_sort_grid()
         elif name == "Models":
             self.models_page.refresh(announce=True)
+        elif name == "Community":
+            self.community_page.refresh_auth_state()
         elif name == "Train":
             # Headstamps and images change from the Models page, the Tk UI and
             # imports; the counts are read off disk every time, never cached.
