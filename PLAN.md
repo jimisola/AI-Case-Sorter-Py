@@ -199,6 +199,9 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
   MB (~20%) smaller on Linux, negligible on Windows (44.0→43.8 MB) — the fix
   is the point, size a Linux-only side benefit); dev-group additions
   pytest-cov + pytest-timeout.
+- 2026-08-13 — JL: PR body notes the serial monitor is a dock — pops out to
+  a free-floating, resizable window and docks back (Arduino-IDE-style at the
+  bottom); list with the small-improvements section.
 - 2026-08-13 — spend-limit outage killed #21/#16 mid-run; credits restored,
   both resumed from transcript. #16 landed (`1b9da2a`): qtui CI job
   (offscreen, no Xvfb, out-of-matrix rationale in build.yml), 8-test e2e
