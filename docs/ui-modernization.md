@@ -502,6 +502,11 @@ be its own proposal:
 - **Live save-state indicator** on settings pages ("Saved ✓" flash) if the
   save-on-change model wins with Seth — makes the invisible persistence
   visible.
+- **qtui subpackages, maybe, at the end.** Flat-with-prefixes (`settings_*`,
+  `dialog_*`, `*_page`) matches the Tk `ui/` convention and reads fine at
+  ~27 modules; revisit at increment 16 only if a genuinely cohesive cluster
+  (e.g. community/auth) emerges — group by feature if so, never by widget
+  kind. Not worth the import/blame churn mid-port (JL asked 2026-08-13).
 - **Drop the `-100.00%` class of sentinel plumbing**: `api_client` returns
   `-1` confidence for "server sent none"; an `Optional[float]` would kill a
   whole family of display guards.
