@@ -47,12 +47,6 @@ QMainWindow, QWidget {{
     color: {c["text"]};
 }}
 
-#header {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 {c["bg_gradient_a"]}, stop:1 {c["bg_gradient_b"]});
-}}
-#header QLabel {{ background: transparent; }}
-
 #sidebar {{ background-color: {c["bg_surface"]}; }}
 #sidebar QToolButton {{
     background: transparent;

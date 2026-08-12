@@ -84,7 +84,6 @@ from .train_page import build_train_page
 
 PREVIEW_FPS = 20
 CROP_SIZE = 132
-HEADER_HEIGHT = 56
 SIDEBAR_WIDTH = 84
 PLACEHOLDER_TEXT = "Not ported to the Qt spike yet — launch without --qt for the full UI."
 
@@ -128,7 +127,7 @@ class QtMainWindow(QMainWindow):
         self.ensure_torch = TorchGate(self)
         self._help_window: Any | None = None
 
-        self.setWindowTitle(f"AI Case Sorter OSS - v{__version__} (Qt)")
+        self.setWindowTitle(f"AI Case Sorter OSS - v{__version__} (Qt) · GPL-3.0")
         self._build_ui()
         self._apply_theme(self.theme_name)
 
@@ -166,8 +165,6 @@ class QtMainWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addWidget(self._build_header())
-
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
@@ -199,22 +196,6 @@ class QtMainWindow(QMainWindow):
         self._paint_indicators()
         self._apply_mode_visibility()
         self.set_status("Idle.")
-
-    def _build_header(self) -> QWidget:
-        header = QWidget(self)
-        header.setObjectName("header")
-        header.setFixedHeight(HEADER_HEIGHT)
-        row = QHBoxLayout(header)
-        row.setContentsMargins(18, 0, 12, 0)
-        title = QLabel("AI Case Sorter", header)
-        font = title.font()
-        font.setBold(True)
-        font.setPointSize(font.pointSize() + 5)
-        title.setFont(font)
-        row.addWidget(title)
-        row.addWidget(self._muted_label("Open Source Client · GPL-3.0", header))
-        row.addStretch(1)
-        return header
 
     def _muted_label(self, text: str, parent: QWidget | None = None) -> QLabel:
         """A label in the muted role — registered so a theme switch recolors it."""
