@@ -556,9 +556,12 @@ be its own proposal:
   `QApplication.platformName()`; when Wayland loaded where xcb was
   preferred, a one-time package-manager-neutral hint (`libxcb-cursor0` on
   Debian/Ubuntu, `xcb-util-cursor` on Fedora/Arch) pointing at the guide;
-  (2) `start.sh`'s existing apt-only best-effort probe may add it, never
-  blocking; (3) the guide's Linux notes carry the per-family package table
-  (#18 scope).
+  (2) `bootstrap.py`'s existing probe already handles apt/dnf/pacman with a
+  per-manager package map — adding the cursor lib is one row per manager,
+  ask-first and never blocking; (3) the guide's Linux notes carry the
+  per-family package table (#18 scope). Also verify whether headless opencv
+  still dlopens libGL at all — if not, the probe may shrink instead of grow
+  (#16).
 
 ## Decision log
 
