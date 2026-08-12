@@ -26,6 +26,7 @@ _FALLBACK = {
     "text": "#d4d4d4",
     "text_highlight": "#ffffff",
     "text_muted": "#9a9a9a",
+    "text_subtle": "#6f6f6f",
     "text_inverse": "#121212",
     "accent_dim": "#2e2e2e",
     "action": "#22c55e",
@@ -113,11 +114,62 @@ QFrame#slotCard {{
     border: 1px solid {c["border"]};
     border-radius: 6px;
 }}
+/* The whole card is a click target, so it lights up like one. */
+QFrame#slotCard:hover {{ background-color: {c["bg_card_hover"]}; }}
 /* The card's background would otherwise cascade into its labels' own fills. */
 QFrame#slotCard QLabel {{ background: transparent; }}
 QLabel#slotTitle {{ color: {c["text"]}; font-weight: bold; }}
 QLabel#slotCount {{ color: {c["text_highlight"]}; font-size: 22px; font-weight: bold; }}
+QLabel#slotPackage {{ color: {c["text_muted"]}; }}
 QLabel#slotNames {{ color: {c["text_muted"]}; }}
+QLabel#slotEdit {{ color: {c["text_subtle"]}; }}
+
+QLabel#masterCount {{ color: {c["text_highlight"]}; font-size: 20px; font-weight: bold; }}
+QLabel#cropPanel {{
+    background-color: {c["bg_input"]};
+    color: {c["text_muted"]};
+    border: 1px solid {c["border"]};
+}}
+
+QDialog {{ background-color: {c["bg_window"]}; }}
+QLabel#dialogHint, QLabel#rowHint {{ color: {c["text_muted"]}; }}
+QCheckBox, QRadioButton {{ background: transparent; color: {c["text"]}; }}
+QCheckBox:disabled, QRadioButton:disabled {{ color: {c["text_subtle"]}; }}
+QSpinBox, QDoubleSpinBox {{
+    background-color: {c["bg_input"]};
+    color: {c["text"]};
+    border: 1px solid {c["border"]};
+    border-radius: 3px;
+    padding: 3px 4px;
+}}
+QSpinBox:focus, QDoubleSpinBox:focus {{ border-color: {c["border_focus"]}; }}
+
+QLabel#mutedLabel {{ color: {c["text_muted"]}; }}
+
+QGroupBox {{
+    border: 1px solid {c["border"]};
+    border-radius: 4px;
+    margin-top: 10px;
+    color: {c["text"]};
+}}
+QGroupBox::title {{
+    subcontrol-origin: margin;
+    left: 8px;
+    padding: 0 4px;
+    color: {c["text_muted"]};
+}}
+
+QSlider::groove:horizontal {{
+    background-color: {c["bg_input"]};
+    height: 4px;
+    border-radius: 2px;
+}}
+QSlider::handle:horizontal {{
+    background-color: {c["accent"]};
+    width: 14px;
+    margin: -6px 0;
+    border-radius: 7px;
+}}
 
 QSplitter::handle {{ background-color: {c["border"]}; }}
 QSplitter::handle:horizontal {{ width: 3px; }}

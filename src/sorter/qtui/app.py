@@ -34,6 +34,7 @@ from PySide6.QtGui import (  # ty: ignore[unresolved-import]
 from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QApplication,
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QDockWidget,
     QFormLayout,
@@ -45,6 +46,7 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
+    QSpinBox,
     QSplitter,
     QStackedWidget,
     QToolButton,
@@ -68,10 +70,15 @@ from ..ui.theme import (
     resolve_theme,
     theme_names,
 )
+from .dialog_slot_assign import CATCH_ALL_HINT, SlotAssignDialog
+from .dialog_template import EditTemplateDialog, NewTemplateDialog
+from .settings_camera import build_camera_section
+from .settings_imageproc import build_imageproc_section
 from .slot_grid import SlotGrid
 from .theme import build_stylesheet
 
 PREVIEW_FPS = 20
+CROP_SIZE = 132
 HEADER_HEIGHT = 56
 SIDEBAR_WIDTH = 84
 SERIAL_LOG_LINES = 500
@@ -102,21 +109,25 @@ class QtMainWindow(QMainWindow):
         self.broker: Any | None = None
         self.run_controller: RunController | None = None
         self._is_running = False
+        self._master_count = 0
+        self._templates: list[Any] = []
         self._feed_entries: deque[tuple[str, float, bool]] = deque(maxlen=FEED_MAX)
 
         load_custom_themes(self._load_setting(SETTING_CUSTOM_THEMES))
         self.theme_name = resolve_theme(self._load_setting(SETTING_THEME))
         self.palette_colors = THEMES[self.theme_name]
 
-        self.setWindowTitle(f"AI Case Sorter - v{__version__} (Qt spike)")
-        self._build_ui()
-        self._apply_theme(self.theme_name)
-
+        # Before _build_ui: the Camera settings page reads it at construction.
+        # Constructing a Camera does not open the device.
         self.camera = Camera(
             device_index=int(config.camera.get("device_index", 0)),
             width=int(config.camera.get("width", 640)),
             height=int(config.camera.get("height", 480)),
         )
+
+        self.setWindowTitle(f"AI Case Sorter - v{__version__} (Qt spike)")
+        self._build_ui()
+        self._apply_theme(self.theme_name)
 
         self.bus.subscribe("status", self.set_status)
         self.bus.subscribe("serial/rx", lambda line: self._append_serial("<-", line))
@@ -124,14 +135,18 @@ class QtMainWindow(QMainWindow):
         self.bus.subscribe("serial/note", lambda line: self._append_serial("--", line))
         # Run state comes from the controller's own events, never from the
         # button handlers — a run can also end on its own (error, package halt).
-        self.bus.subscribe("run/started", lambda _p: self._set_running(True))
+        self.bus.subscribe("run/started", lambda _p: self._on_run_started())
         self.bus.subscribe("run/stopped", lambda _p: self._set_running(False))
         self.bus.subscribe("run/status", self.set_status)
         self.bus.subscribe("run/error", lambda msg: self.set_status(f"Run error: {msg}"))
         self.bus.subscribe("run/result", self._on_run_result)
         self.bus.subscribe("run/history", self._on_run_history)
         self.bus.subscribe("run/assignment_changed", lambda _p: self.slot_grid.refresh_assignments())
+        self.bus.subscribe("run/package_full", self._on_package_full)
         self.bus.subscribe("run/package_halt", self._on_package_halt)
+        # Headstamps, templates and the Train activity are all scoped to the
+        # active model, so a mode switch re-reads every one of them.
+        self.bus.subscribe("mode/changed", lambda _p: self._on_mode_changed())
         self._bus_timer = QTimer(self)
         self._bus_timer.timeout.connect(lambda: self.bus.drain(max_items=128))
         self._bus_timer.start(50)
@@ -180,6 +195,7 @@ class QtMainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.camera_label)
         self.statusBar().addPermanentWidget(self.serial_label)
         self._paint_indicators()
+        self._apply_mode_visibility()
         self.set_status("Idle.")
 
     def _build_header(self) -> QWidget:
@@ -260,7 +276,24 @@ class QtMainWindow(QMainWindow):
         column = QVBoxLayout(page)
         column.setContentsMargins(12, 12, 12, 12)
         column.setSpacing(10)
+        column.addLayout(self._build_action_row(page))
+        column.addLayout(self._build_template_bar(page))
 
+        splitter = QSplitter(Qt.Orientation.Horizontal, page)
+        splitter.addWidget(self._build_preview_column(splitter))
+        self.slot_grid = SlotGrid(self.config, splitter)
+        self.slot_grid.slot_clicked.connect(lambda slot: self.open_slot_editor(slot))
+        self.slot_grid.slot_reset.connect(lambda slot: self.reset_slot_count(slot))
+        splitter.addWidget(self.slot_grid)
+        splitter.setSizes([600, 400])
+        column.addWidget(splitter, 1)
+
+        self.feed_label = self._muted_label(FEED_EMPTY_TEXT, page)
+        self.feed_label.setTextFormat(Qt.TextFormat.RichText)
+        column.addWidget(self.feed_label)
+        return page
+
+    def _build_action_row(self, page: QWidget) -> QHBoxLayout:
         actions = QHBoxLayout()
         self.action_buttons: dict[str, QPushButton] = {}
         for text, object_name, handler in (
@@ -275,11 +308,58 @@ class QtMainWindow(QMainWindow):
             actions.addWidget(button)
             self.action_buttons[text] = button
         actions.addStretch(1)
-        column.addLayout(actions)
+        actions.addWidget(self._muted_label("Sorted this run", page))
+        self.master_count_label = QLabel("0", page)
+        self.master_count_label.setObjectName("masterCount")
+        actions.addWidget(self.master_count_label)
+        reset = QPushButton("Reset counts", page)
+        reset.clicked.connect(self.reset_counts)
+        actions.addWidget(reset)
         self._update_run_buttons()
+        return actions
 
-        splitter = QSplitter(Qt.Orientation.Horizontal, page)
-        self.preview_label = QLabel("No frame", splitter)
+    def _build_template_bar(self, page: QWidget) -> QHBoxLayout:
+        """The slot layout below is whatever the selected template holds.
+
+        Package mode keeps its own list (its assignments are many-to-many), so
+        the bar re-populates whenever the mode changes.
+        """
+        bar = QHBoxLayout()
+        bar.addWidget(self._muted_label("Sorting template", page))
+        self.template_combo = QComboBox(page)
+        self.template_combo.setMinimumWidth(200)
+        # `activated` is user-only, so repopulating the combo can't look like a switch.
+        self.template_combo.activated.connect(self._on_template_selected)
+        bar.addWidget(self.template_combo)
+        for text, handler in (("+ New", self.new_template), ("✎ Edit", self.edit_template)):
+            button = QPushButton(text, page)
+            button.clicked.connect(handler)
+            bar.addWidget(button)
+        self.template_hint = self._muted_label("", page)
+        bar.addWidget(self.template_hint)
+        bar.addStretch(1)
+
+        self.package_check = QCheckBox("Package mode", page)
+        self.package_check.setChecked(bool(self.config.run_package_mode))
+        self.package_check.toggled.connect(self._on_package_mode_toggled)
+        bar.addWidget(self.package_check)
+        self.batch_caption = self._muted_label("Batch", page)
+        self.batch_spin = QSpinBox(page)
+        self.batch_spin.setRange(1, 999999)
+        self.batch_spin.setValue(int(self.config.run_package_size))
+        self.batch_spin.valueChanged.connect(self._on_batch_size_changed)
+        bar.addWidget(self.batch_caption)
+        bar.addWidget(self.batch_spin)
+        self._apply_package_visibility()
+        self._refresh_templates()
+        return bar
+
+    def _build_preview_column(self, parent: QWidget) -> QWidget:
+        holder = QWidget(parent)
+        column = QVBoxLayout(holder)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(6)
+        self.preview_label = QLabel("No frame", holder)
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         # Ignored + tiny minimum: the label must never report the pixmap as
         # its size hint, or each scaled frame grows the layout that the next
@@ -288,16 +368,20 @@ class QtMainWindow(QMainWindow):
         self.preview_label.setMinimumSize(1, 1)
         # A video letterbox is black in every theme; not chrome, so not themed.
         self.preview_label.setStyleSheet("background-color: #000000; color: #808080;")
-        splitter.addWidget(self.preview_label)
-        self.slot_grid = SlotGrid(self.config, splitter)
-        splitter.addWidget(self.slot_grid)
-        splitter.setSizes([600, 400])
-        column.addWidget(splitter, 1)
+        column.addWidget(self.preview_label, 1)
 
-        self.feed_label = self._muted_label(FEED_EMPTY_TEXT, page)
-        self.feed_label.setTextFormat(Qt.TextFormat.RichText)
-        column.addWidget(self.feed_label)
-        return page
+        crop_row = QHBoxLayout()
+        crop_row.addWidget(self._muted_label("Last cropped", holder))
+        self.crop_label = QLabel("—", holder)
+        self.crop_label.setObjectName("cropPanel")
+        self.crop_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Fixed: the crop is the classifier's actual input, shown at one size
+        # so it never competes with the live preview for space.
+        self.crop_label.setFixedSize(CROP_SIZE, CROP_SIZE)
+        crop_row.addWidget(self.crop_label)
+        crop_row.addStretch(1)
+        column.addLayout(crop_row)
+        return holder
 
     def _build_settings_page(self) -> QWidget:
         page = QWidget()
@@ -307,7 +391,12 @@ class QtMainWindow(QMainWindow):
         self.settings_list = QListWidget(page)
         self.settings_list.setFixedWidth(160)
         self.settings_pages = QStackedWidget(page)
-        builders = {"Theme": self._build_theme_section, "Serial": self._build_serial_section}
+        builders = {
+            "Theme": self._build_theme_section,
+            "Serial": self._build_serial_section,
+            "Camera": lambda: build_camera_section(self),
+            "Image Proc": lambda: build_imageproc_section(self),
+        }
         for name in SETTINGS_SECTIONS:
             self.settings_list.addItem(name)
             build = builders.get(name)
@@ -443,6 +532,146 @@ class QtMainWindow(QMainWindow):
 
     def _append_serial(self, prefix: str, line: Any) -> None:
         self.serial_log.appendPlainText(f"{prefix} {str(line).rstrip()}")
+
+    # ----- sort dashboard: assignments, templates, counters -------------------
+
+    def open_slot_editor(self, slot: int) -> None:
+        """Edit what routes to one slot. The catch-all isn't configurable."""
+        if int(slot) == 0:
+            self.set_status(CATCH_ALL_HINT)
+            return
+        dialog = SlotAssignDialog(self.config, int(slot), self)
+        dialog.changed.connect(self.slot_grid.refresh_assignments)
+        dialog.exec()
+        self.slot_grid.refresh_assignments()
+
+    def _refresh_templates(self) -> None:
+        """Repopulate the combo for the active model + current run mode."""
+        mode = self.config.slot_template_mode()
+        self._templates = self.config.list_slot_templates(mode)
+        active = self.config.active_slot_template(mode)
+        self.template_combo.clear()
+        self.template_combo.addItems([t.name for t in self._templates])
+        for index, template in enumerate(self._templates):
+            if template.id == active.id:
+                self.template_combo.setCurrentIndex(index)
+                break
+        self.template_hint.setText("Package-mode layout" if mode == "package" else "")
+
+    def _template_busy(self) -> bool:
+        """Templates swap the whole layout, so keep them out of a live run."""
+        if not self._is_running:
+            return False
+        self.notify(
+            "Run in progress",
+            "Stop the run before changing sorting templates — switching one reassigns every slot.",
+        )
+        return True
+
+    def _on_template_selected(self, index: int) -> None:
+        if index < 0 or index >= len(self._templates):
+            return
+        target = self._templates[index]
+        if self._template_busy() or self.config.activate_slot_template(target.id) is None:
+            self._refresh_templates()  # snap the combo back to the active one
+            return
+        self._after_template_change(f"Loaded sorting template “{target.name}”.")
+
+    def new_template(self) -> None:
+        if self._template_busy():
+            return
+        mode = self.config.slot_template_mode()
+        dialog = NewTemplateDialog(self.config, mode, self.config.active_slot_template(mode).name, self)
+        if dialog.exec() and dialog.created is not None:
+            self._after_template_change(f"Created sorting template “{dialog.created.name}”.")
+
+    def edit_template(self) -> None:
+        if self._template_busy():
+            return
+        mode = self.config.slot_template_mode()
+        dialog = EditTemplateDialog(
+            self.config,
+            self.config.active_slot_template(mode),
+            can_delete=len(self.config.list_slot_templates(mode)) > 1,
+            parent=self,
+        )
+        if dialog.exec():
+            self._after_template_change("Sorting templates updated.")
+
+    def _after_template_change(self, status: str) -> None:
+        """Counters are per-layout: a slot may hold another headstamp now."""
+        self._refresh_templates()
+        self._clear_counts()
+        self.slot_grid.refresh_assignments()
+        self.set_status(status)
+
+    def _apply_package_visibility(self) -> None:
+        enabled = self.package_check.isChecked()
+        self.batch_caption.setVisible(enabled)
+        self.batch_spin.setVisible(enabled)
+
+    def _on_package_mode_toggled(self, enabled: bool) -> None:
+        self.config.set_run_package_mode(bool(enabled))
+        self._apply_package_visibility()
+        # Counts, assignments and templates are all mode-specific.
+        self._clear_counts()
+        self._refresh_templates()
+        self.slot_grid.refresh_assignments()
+
+    def _on_batch_size_changed(self, value: int) -> None:
+        self.config.set_run_package_size(int(value))
+        self.slot_grid.refresh_assignments()
+
+    def _clear_counts(self) -> None:
+        self.slot_grid.reset_counts()
+        self._master_count = 0
+        self.master_count_label.setText("0")
+
+    def reset_counts(self) -> None:
+        """Zero the dashboard's counters and the run's package batches."""
+        self._clear_counts()
+        reset = getattr(self.run_controller, "reset_package_counts", None)
+        if reset is not None:
+            reset()
+        self.set_status("Counters reset.")
+
+    def reset_slot_count(self, slot: int) -> None:
+        """Package mode: empty one bin and let it refill while the run continues."""
+        reset = getattr(self.run_controller, "reset_package_slot", None)
+        if reset is not None:
+            reset(int(slot))
+        self.slot_grid.reset_slot(int(slot))
+        self.set_status(f"Reset counter for slot {slot}.")
+
+    # ----- active-model mode --------------------------------------------------
+
+    def _active_model(self) -> Any | None:
+        if self.db is None:
+            return None
+        from ..data.repository import ModelRepo, SettingsRepo
+
+        model_id = SettingsRepo(self.db).get_active_model_id()
+        return ModelRepo(self.db).get(model_id) if model_id is not None else None
+
+    def _apply_mode_visibility(self) -> None:
+        """Train is for a local model this user owns — see models.is_trainable."""
+        from ..data.models import is_trainable
+
+        self._set_activity_visible("Train", is_trainable(self._active_model()))
+
+    def _set_activity_visible(self, name: str, visible: bool) -> None:
+        button = self.sidebar_buttons[name]
+        button.setVisible(visible)
+        if not visible and self.pages.currentWidget() is self._pages_by_name[name]:
+            self.sidebar_buttons["Sort"].setChecked(True)
+            self.show_page("Sort")
+
+    def _on_mode_changed(self) -> None:
+        """The active model changed: everything scoped to it is re-read."""
+        self._apply_mode_visibility()
+        self._clear_counts()
+        self._refresh_templates()
+        self.slot_grid.refresh_assignments()
 
     # ----- theme --------------------------------------------------------------
 
@@ -716,8 +945,19 @@ class QtMainWindow(QMainWindow):
         """User-facing warning. Tests patch this — never let a modal open there."""
         QMessageBox.warning(self, title, text)
 
+    def _ai_credentials_missing(self) -> bool:
+        """AI Config mode can't classify without an API key and a model name.
+
+        Scoped to that mode: a local model never touches the HTTP client, so
+        an unset key there is no reason to refuse a run.
+        """
+        if classifier.uses_local_inference(self.db):
+            return False
+        api = self.config.api
+        return not (api.get("api_key") and api.get("model"))
+
     def _ready_to_sort(self) -> RunController | None:
-        """Preflight, in the Tk Run tab's order: board, checkpoint, torch.
+        """Preflight, in the Tk Run tab's order: board, AI config, checkpoint, torch.
 
         Each check is asked of the layer that owns the answer, so the Qt shell
         never re-derives the rule. Returns the controller when a run may start.
@@ -725,6 +965,12 @@ class QtMainWindow(QMainWindow):
         controller = self.run_controller
         if controller is None or self.broker is None:
             self.set_status("Connect to the board first (Settings → Serial).")
+            return None
+        if self._ai_credentials_missing():
+            self.notify(
+                "AI not configured",
+                "Set the endpoint, API key and model on the AI Config page first.",
+            )
             return None
         problem = classifier.checkpoint_problem(self.db)
         if problem is not None:
@@ -754,6 +1000,11 @@ class QtMainWindow(QMainWindow):
         # One cycle blocks on the board; the bus carries the result back.
         self.run_worker(controller.cycle_once)
 
+    def _on_run_started(self) -> None:
+        # Counts survive Stop/Start on purpose (Tk parity): operators stop to
+        # clear a jam and restart mid-tray. Only the explicit resets clear.
+        self._set_running(True)
+
     def _set_running(self, running: bool) -> None:
         self._is_running = running
         self._update_run_buttons()
@@ -770,14 +1021,19 @@ class QtMainWindow(QMainWindow):
             button.setToolTip("" if connected else "Connect to the board first")
 
     def _on_run_result(self, result: Any) -> None:
+        # `run/result` carries a slot even for a failed cycle, so `ok` is what
+        # decides whether a case actually landed anywhere.
         if not isinstance(result, dict) or not result.get("ok"):
             return
         self.slot_grid.increment(int(result.get("slot") or 0))
+        self._master_count += 1
+        self.master_count_label.setText(str(self._master_count))
 
     def _on_run_history(self, payload: Any) -> None:
-        """One classification for the recent-feed strip (newest first)."""
+        """One classification for the recent-feed strip (newest first) + its crop."""
         if not isinstance(payload, dict):
             return
+        self._show_crop(payload.get("image"))
         confidence = float(payload.get("confidence", 0) or 0)
         floor = float(getattr(self.config, "run_confidence_floor", 0) or 0)
         self._feed_entries.appendleft(
@@ -795,9 +1051,42 @@ class QtMainWindow(QMainWindow):
             parts.append(f'{html.escape(label)} <span style="color: {color};">{confidence:.0f}%</span>')
         self.feed_label.setText(" &middot; ".join(parts))
 
+    def _show_crop(self, image: Any) -> None:
+        """The headstamp as the classifier saw it, at a fixed size."""
+        if not isinstance(image, np.ndarray) or image.size == 0:
+            return
+        pixmap = QPixmap.fromImage(self.frame_to_image(image))
+        self.crop_label.setPixmap(
+            pixmap.scaled(
+                self.crop_label.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+
+    def beep(self) -> None:
+        """Non-blocking batch-complete tone. Best-effort — never fails a handler."""
+        try:
+            QApplication.beep()
+        except Exception:
+            pass
+
+    def _on_package_full(self, payload: Any) -> None:
+        data = payload if isinstance(payload, dict) else {}
+        self.beep()
+        self.set_status(f"Slot {data.get('slot')} batch full ({data.get('count')}). Reset it to refill.")
+
     def _on_package_halt(self, payload: Any) -> None:
         label = (payload or {}).get("label") if isinstance(payload, dict) else None
-        self.set_status(f"Run stopped — every slot for “{label or '?'}” is full.")
+        self.beep()
+        message = (
+            f"Run stopped — every slot for “{label or '?'}” is full. "
+            "Empty the bins, reset their counters, then Start again."
+        )
+        self.set_status(message)
+        # Tk shows a dialog here and operators rely on it. Queued single-shot:
+        # a modal straight from a bus handler would re-enter the drain.
+        QTimer.singleShot(0, lambda: self.notify("Package complete", message))
 
     # ----- worker dispatch ----------------------------------------------------
 

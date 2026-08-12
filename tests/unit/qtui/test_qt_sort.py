@@ -39,6 +39,7 @@ class FakeController:
         self.started = 0
         self.stopped = 0
         self.cycles = 0
+        self.package_resets: list[object] = []
 
     def start(self) -> None:
         self.started += 1
@@ -49,6 +50,12 @@ class FakeController:
     def cycle_once(self) -> dict:
         self.cycles += 1
         return {"ok": True, "slot": 0}
+
+    def reset_package_counts(self) -> None:
+        self.package_resets.append("all")
+
+    def reset_package_slot(self, slot: int) -> None:
+        self.package_resets.append(slot)
 
 
 @pytest.fixture
@@ -100,6 +107,26 @@ def test_slot_cards_show_the_active_models_assignments(config, window_factory) -
     assert cards[1].names_label.text() == "45 ACP, 9mm FC"  # case-folded sort
     assert cards[2].names_label.text() == ".223 LC"
     assert cards[3].names_label.text() == EMPTY_HINT
+
+
+def test_a_card_never_shortens_its_headstamp_list(config, window_factory) -> None:
+    # The card is how an operator knows what is in the bin, so the list is
+    # always complete: it wraps and the card grows, never elides.
+    names = [f"Headstamp {i:02d} with a long name" for i in range(12)]
+    seed_model(config, dict.fromkeys(names, 1))
+
+    grid = window_factory(config).slot_grid
+
+    assert grid.cards[1].names_label.text() == ", ".join(names)
+    assert grid.cards[1].names_label.wordWrap()
+    assert grid.cards[1].sizeHint().height() > grid.cards[2].sizeHint().height()
+
+
+def test_cards_advertise_that_they_are_editable(window) -> None:
+    assert window.slot_grid.cards[1].edit_hint.text() == "✎ Click to edit"
+    assert not window.slot_grid.cards[1].edit_hint.isHidden()
+    assert window.slot_grid.cards[0].edit_hint.isHidden()  # the catch-all isn't
+    assert "QFrame#slotCard:hover" in window.styleSheet()
 
 
 def test_slot_cards_follow_ai_config_headstamps(config, window) -> None:
@@ -156,6 +183,109 @@ def test_failed_cycle_is_not_counted(window) -> None:
     window.bus.drain()
 
     assert window.slot_grid.cards[2].count_label.text() == "0"
+
+
+def test_master_counter_tallies_only_sorted_cases(window) -> None:
+    for result in (
+        {"ok": True, "slot": 2},
+        {"ok": True, "slot": 0},
+        {"ok": False, "slot": 3, "error": "Sort timeout"},
+    ):
+        window.bus.post("run/result", result)
+    window.bus.drain()
+
+    assert window.master_count_label.text() == "2"
+
+
+def test_counts_survive_a_stop_start(window) -> None:
+    # Tk parity (JL): operators stop to clear a jam and restart mid-tray;
+    # only the explicit resets clear the counters.
+    window.bus.post("run/result", {"ok": True, "slot": 2})
+    window.bus.drain()
+
+    window.bus.post("run/stopped", None)
+    window.bus.post("run/started", None)
+    window.bus.drain()
+
+    assert window.slot_grid.cards[2].count_label.text() == "1"
+    assert window.master_count_label.text() == "1"
+
+
+def test_reset_counts_clears_the_cards_and_the_batches(window, connected) -> None:
+    window.bus.post("run/result", {"ok": True, "slot": 2})
+    window.bus.drain()
+
+    window.reset_counts()
+
+    assert window.slot_grid.cards[2].count_label.text() == "0"
+    assert window.master_count_label.text() == "0"
+    assert connected.package_resets == ["all"]
+
+
+# ----- package mode ----------------------------------------------------------
+
+
+def test_package_cards_show_the_batch_target(window, config) -> None:
+    config.set_run_package_size(25)
+
+    window.package_check.setChecked(True)
+
+    assert window.slot_grid.cards[1].package_label.text() == "/ 25"
+    # The catch-all is never batched.
+    assert window.slot_grid.cards[0].package_label.isHidden()
+
+
+def test_a_full_batch_rings_and_reports(window, monkeypatch) -> None:
+    beeps = []
+    monkeypatch.setattr(window, "beep", lambda: beeps.append(True))
+
+    window.bus.post("run/package_full", {"slot": 3, "label": "9mm FC", "count": 50})
+    window.bus.drain()
+
+    assert beeps == [True]
+    assert window.statusBar().currentMessage() == "Slot 3 batch full (50). Reset it to refill."
+
+
+def test_a_halted_run_says_how_to_resume(qapp, window, monkeypatch) -> None:
+    monkeypatch.setattr(window, "beep", lambda: None)
+    notices = []
+    window.notify = lambda title, text: notices.append((title, text))
+
+    window.bus.post("run/package_halt", {"label": "9mm FC"})
+    window.bus.drain()
+    qapp.processEvents()  # the dialog is queued out of the drain, Tk-parity
+
+    message = window.statusBar().currentMessage()
+    assert "9mm FC" in message
+    assert "reset their counters" in message
+    assert notices and notices[0][0] == "Package complete"
+
+
+def test_a_cards_reset_button_empties_just_that_bin(window, connected, config) -> None:
+    window.package_check.setChecked(True)
+    for slot in (1, 2):
+        window.bus.post("run/result", {"ok": True, "slot": slot})
+    window.bus.drain()
+
+    window.slot_grid.cards[1].reset_button.click()
+
+    assert window.slot_grid.cards[1].count_label.text() == "0"
+    assert window.slot_grid.cards[2].count_label.text() == "1"
+    assert connected.package_resets == [1]
+
+
+# ----- cropped headstamp -----------------------------------------------------
+
+
+def test_the_last_crop_is_shown_beside_the_preview(window) -> None:
+    assert window.crop_label.pixmap().isNull()
+
+    window.bus.post("run/history", history("9mm FC", 99.0))
+    window.bus.drain()
+
+    pixmap = window.crop_label.pixmap()
+    assert not pixmap.isNull()
+    assert max(pixmap.width(), pixmap.height()) == window.crop_label.width()
 
 
 # ----- recent-classification feed --------------------------------------------
@@ -242,6 +372,30 @@ def test_start_refuses_a_local_model_without_torch(window, connected, monkeypatc
     assert connected.started == 0
 
 
+def test_start_refuses_ai_config_mode_without_credentials(window, connected, config, monkeypatch) -> None:
+    notices = []
+    monkeypatch.setattr(window, "notify", lambda title, text: notices.append(title))
+    config.api["api_key"] = ""
+
+    window.start_run()
+
+    assert notices == ["AI not configured"]
+    assert connected.started == 0
+
+
+def test_a_local_model_does_not_need_ai_credentials(window, connected, config, monkeypatch) -> None:
+    # The HTTP client is never reached, so an unset key is no reason to refuse.
+    monkeypatch.setattr(window, "notify", lambda title, text: pytest.fail(title))
+    monkeypatch.setattr(classifier, "uses_local_inference", lambda _db: True)
+    monkeypatch.setattr(classifier, "checkpoint_problem", lambda _db: None)
+    monkeypatch.setattr(local_inference, "is_installed", lambda: True)
+    config.api["model"] = ""
+
+    window.start_run()
+
+    assert connected.started == 1
+
+
 def test_start_runs_the_controller_in_ai_config_mode(window, connected) -> None:
     # Fresh DB = AI Config mode: nothing local to check, so no notice.
     window.start_run()
@@ -290,6 +444,67 @@ def test_run_error_reaches_the_status_bar(window) -> None:
     window.bus.drain()
 
     assert window.statusBar().currentMessage() == "Run error: Sort timeout"
+
+
+# ----- the active model owns the sidebar -------------------------------------
+
+
+def mode_changed(window) -> None:
+    window.bus.post("mode/changed", None)
+    window.bus.drain()
+
+
+def test_train_is_hidden_in_ai_config_mode(window) -> None:
+    assert window.sidebar_buttons["Train"].isHidden()
+    assert not window.sidebar_buttons["Community"].isHidden()
+
+
+def test_train_appears_for_a_model_this_user_owns(window, config) -> None:
+    seed_model(config, {"9mm FC": 1})
+
+    mode_changed(window)
+
+    assert not window.sidebar_buttons["Train"].isHidden()
+
+
+def test_train_stays_hidden_for_a_community_model(window, config) -> None:
+    from sorter.data.repository import ModelRepo
+
+    repo = ModelRepo(config.db)
+    model = repo.get(seed_model(config, {"9mm FC": 1}))
+    assert model is not None
+    model.model_type = "CommunityManaged"
+    repo.update(model)
+
+    mode_changed(window)
+
+    assert window.sidebar_buttons["Train"].isHidden()
+
+
+def test_hiding_the_current_activity_falls_back_to_sort(window, config) -> None:
+    seed_model(config, {"9mm FC": 1})
+    mode_changed(window)
+    window.sidebar_buttons["Train"].click()
+
+    from sorter.data.repository import SettingsRepo
+
+    SettingsRepo(config.db).clear_active_model()
+    mode_changed(window)
+
+    assert window.pages.currentWidget() is window._pages_by_name["Sort"]
+    assert window.sidebar_buttons["Sort"].isChecked()
+
+
+def test_a_model_switch_re_reads_the_slots_and_templates(window, config) -> None:
+    window.bus.post("run/result", {"ok": True, "slot": 1})
+    window.bus.drain()
+    seed_model(config, {"9mm FC": 1})
+
+    mode_changed(window)
+
+    assert window.slot_grid.cards[1].names_label.text() == "9mm FC"
+    assert window.slot_grid.cards[1].count_label.text() == "0"
+    assert window.template_combo.currentText() == "Default"
 
 
 # ----- Settings → Serial -----------------------------------------------------
