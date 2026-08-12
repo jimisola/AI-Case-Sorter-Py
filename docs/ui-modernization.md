@@ -536,6 +536,16 @@ be its own proposal:
   `-1` confidence for "server sent none"; an `Optional[float]` would kill a
   whole family of display guards.
 
+## Findings for the PR description
+
+- **opencv-python → opencv-python-headless.** The standard wheel bundles its
+  own Qt for `cv2.imshow` (which nothing here calls) and registers its plugin
+  dir on import; those plugins loading against PySide6's Qt libraries caused
+  real rendering corruption (dock float→re-dock artifacts, JL-reproduced).
+  Headless is API-identical, ships no Qt, registers nothing. A launch-site
+  scrub of `QT_QPA_PLATFORM_PLUGIN_PATH` stays as defense for environments
+  with another cv2 on the path.
+
 ## Decision log
 
 | Date | Decision |
