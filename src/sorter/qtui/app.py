@@ -78,6 +78,7 @@ from .settings_imageproc import build_imageproc_section
 from .settings_serial import build_serial_section
 from .slot_grid import SlotGrid
 from .theme import build_stylesheet
+from .torch_gate import TorchGate
 from .train_page import build_train_page
 
 PREVIEW_FPS = 20
@@ -94,11 +95,6 @@ SETTINGS_SECTIONS = ("Camera", "Serial", "Image Proc", "AI Config", "Updates", "
 BAUD_CHOICES = (9600, 19200, 38400, 57600, 115200)
 FEED_MAX = 12
 FEED_EMPTY_TEXT = "Recent classifications will appear here."
-TORCH_NOTICE = (
-    "This model classifies locally, which needs PyTorch.\n\n"
-    "The Qt spike has no installer yet — launch without --qt and press Start "
-    "there once to install it."
-)
 
 
 class QtMainWindow(QMainWindow):
@@ -127,6 +123,9 @@ class QtMainWindow(QMainWindow):
             width=int(config.camera.get("width", 640)),
             height=int(config.camera.get("height", 480)),
         )
+
+        # The one sanctioned front door for anything needing local inference.
+        self.ensure_torch = TorchGate(self)
 
         self.setWindowTitle(f"AI Case Sorter - v{__version__} (Qt spike)")
         self._build_ui()
@@ -975,8 +974,10 @@ class QtMainWindow(QMainWindow):
         if problem is not None:
             self.notify("Model not ready", problem)
             return None
-        if classifier.uses_local_inference(self.db) and not local_inference.is_installed():
-            self.notify("PyTorch required", TORCH_NOTICE)
+        if classifier.uses_local_inference(self.db) and not self.ensure_torch(
+            self.start_run, reason="Sorting needs PyTorch"
+        ):
+            # The gate re-enters start_run after a successful install.
             return None
         return controller
 
