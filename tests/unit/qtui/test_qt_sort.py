@@ -359,17 +359,24 @@ def test_start_refuses_a_model_without_a_checkpoint(window, connected, monkeypat
     assert connected.started == 0
 
 
-def test_start_refuses_a_local_model_without_torch(window, connected, monkeypatch) -> None:
-    notices = []
-    monkeypatch.setattr(window, "notify", lambda title, text: notices.append(title))
+def test_start_routes_a_local_model_without_torch_through_the_gate(window, connected, monkeypatch) -> None:
+    # The install gate replaced the launch-the-Tk-UI notice (#7).
+    gate_calls = []
+    monkeypatch.setattr(
+        window, "ensure_torch", lambda proceed, **kw: gate_calls.append(kw.get("reason")) and False
+    )
     monkeypatch.setattr(classifier, "checkpoint_problem", lambda _db: None)
     monkeypatch.setattr(classifier, "uses_local_inference", lambda _db: True)
-    monkeypatch.setattr(local_inference, "is_installed", lambda: False)
 
     window.start_run()
 
-    assert notices == ["PyTorch required"]
+    assert gate_calls == ["Sorting needs PyTorch"]
     assert connected.started == 0
+
+    # Gate satisfied (torch present) → the run starts.
+    monkeypatch.setattr(window, "ensure_torch", lambda proceed, **kw: True)
+    window.start_run()
+    assert connected.started == 1
 
 
 def test_start_refuses_ai_config_mode_without_credentials(window, connected, config, monkeypatch) -> None:
