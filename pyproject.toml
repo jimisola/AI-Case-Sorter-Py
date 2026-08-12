@@ -27,7 +27,10 @@ classifiers = [
 # against, so exact pins cost nothing in dependency conflicts.
 dependencies = [
     "pyserial==3.5",
-    "opencv-python==5.0.0.93",
+    # headless: same API minus cv2.imshow and, critically, minus the bundled
+    # Qt whose platform plugins otherwise fight PySide6's (both UIs render
+    # frames themselves; nothing calls cv2's GUI).
+    "opencv-python-headless==5.0.0.93",
     "numpy==2.5.2",
     "Pillow==12.3.0",
     "requests==2.34.2",
