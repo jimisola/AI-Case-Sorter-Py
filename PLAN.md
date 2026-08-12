@@ -47,8 +47,8 @@ Status: ☐ todo · ▶ in progress · ✔ done · ✗ blocked
 | 0 | Spikes 1–3: shell, layout, showcase | app shell, run loop core | Opus | ✔ (`2f0711b`…`5de9b58`) |
 | 1 | Sort parity core: slot-assignment editing, sorting-template bar + dialog, master/package counters, package halt+bell, cropped-crop preview, AI-credentials preflight, `mode/changed` (Train visibility + grid refresh) | `tab_run.py`, `dialog_slot_template.py` | Opus | ▶ |
 | 2 | Settings: Camera page (enumerate/resolutions/apply/restart) + Image Proc page (Hough/primer/LED, before-after preview) | `tab_camera.py`, `tab_imageproc.py` | Sonnet | ▶ |
-| 3 | Settings: AI Config page (server config, headstamp manager, single-shot test) | `tab_ai.py` | Opus | ☐ |
-| 4 | Settings: Serial page parity (init settings, disconnect, sort-arm test, airdrop) | `tab_serial.py` | Sonnet | ☐ |
+| 3 | Settings: AI Config page (server config, headstamp manager, single-shot test) | `tab_ai.py` | Opus | ▶ |
+| 4 | Settings: Serial page parity (init settings, disconnect, sort-arm test, airdrop) | `tab_serial.py` | Sonnet | ▶ |
 | 5 | Models activity: library browse/filter/create/edit/activate/delete, import/export ZIP, "Use AI Config" row; model editor dialog | `tab_models.py`, `dialog_model_editor.py` | Opus | ☐ |
 | 6 | Train activity: feed→capture→classify→label→save loop, sort-while-training, training config + progress dialogs, launch/cancel training | `tab_train.py`, `dialog_training_*.py` | Opus | ☐ |
 | 7 | Install-PyTorch dialog (Qt-native, correct threading — do NOT copy the Tk `after()` pattern) + torch gate equivalent | `dialog_install_torch.py`, `torch_gate.py` | Opus | ☐ |
