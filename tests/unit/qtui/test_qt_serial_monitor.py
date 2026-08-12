@@ -22,7 +22,7 @@ from PySide6.QtTest import QTest
 
 from sorter.hardware.serial_emulator import EMULATED_PORT
 from sorter.ml import classifier
-from sorter.qtui.serial_monitor import LINE_ENDINGS, SerialMonitorWidget, build_serial_monitor
+from sorter.qtui.serial_monitor import LINE_ENDINGS, TEXT_FILTER, SerialMonitorWidget, build_serial_monitor
 
 from .conftest import drain_until
 
@@ -147,6 +147,14 @@ def test_pause_holds_and_resume_flushes_in_order(window, monitor) -> None:
 
 
 # ----- save -----------------------------------------------------------------
+
+
+def test_text_filter_label_survives_gnomes_paren_stripping() -> None:
+    # GNOME's portal strips the "(*.txt)" Qt-pattern suffix from the label it
+    # shows, so the human-readable half must carry its own, un-strippable
+    # mention of the extension (JL live-testing).
+    assert "*.txt" in TEXT_FILTER.split("(", 1)[0]
+    assert TEXT_FILTER.endswith("(*.txt)")
 
 
 def test_save_writes_the_filtered_view(window, monitor, tmp_path: Path, monkeypatch) -> None:

@@ -75,6 +75,20 @@ QMainWindow::separator:hover {{ background-color: {c["border_focus"]}; }}
     background-color: {c["bg_card_sel"]};
     color: {c["text_highlight"]};
 }}
+/* The gear read as chrome, not a tab, at the sidebar's default muted color
+   (JL live-testing) — "update" blue ("adjust something installed") makes it
+   easy to spot without reaching for action-green or danger-red. Checked
+   stays identical to every other sidebar button, so activating Settings
+   still reads the same way as activating any other activity. */
+#sidebar QToolButton#settingsButton {{ color: {c["update"]}; }}
+#sidebar QToolButton#settingsButton:hover {{
+    background-color: {c["bg_card_hover"]};
+    color: {c["update_hover"]};
+}}
+#sidebar QToolButton#settingsButton:checked {{
+    background-color: {c["bg_card_sel"]};
+    color: {c["text_highlight"]};
+}}
 
 QMenuBar {{
     background-color: {c["bg_surface"]};

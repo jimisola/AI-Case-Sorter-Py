@@ -21,6 +21,10 @@ import pytest
 pytest.importorskip("PySide6")
 pytest.importorskip("tkinter")  # sorter.ui.theme (the palettes) imports it
 
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QHeaderView
+
 from sorter import paths
 from sorter.data.config import Config
 from sorter.data.models import Model
@@ -33,6 +37,7 @@ from sorter.qtui.models_page import (
     COLUMNS,
     FILTER_TYPE_COMMUNITY,
     FOREIGN_NOTICE,
+    ZIP_FILTER,
 )
 
 from .conftest import drain_until, seed_model
@@ -110,8 +115,8 @@ def select_name(page: Any, name: str) -> None:
 
 
 def make_model(config: Any, name: str, **fields: Any) -> Model:
-    cartridge = CartridgeRepo(config.db).list()[0]
-    return ModelRepo(config.db).create(Model(name=name, cartridge_id=cartridge.id, **fields))
+    fields.setdefault("cartridge_id", CartridgeRepo(config.db).list()[0].id)
+    return ModelRepo(config.db).create(Model(name=name, **fields))
 
 
 def get_model(config: Any, model_id: int | None) -> Model:
@@ -150,6 +155,22 @@ def test_rows_carry_the_facts_the_tk_cards_showed(page, config) -> None:
     assert cell(page, row, "Mode") == "convnext_small"
     assert cell(page, row, "Images") == "0"
     assert cell(page, row, "Trained") == "no"
+
+
+def test_last_trained_renders_in_the_os_regional_format(page, config, monkeypatch) -> None:
+    from PySide6.QtCore import QLocale
+
+    from sorter.qtui import formatting
+
+    monkeypatch.setattr(formatting, "_locale", lambda: QLocale("sv_SE"))
+    make_model(config, "Range brass", last_training_date="2026-08-01 09:30")
+    page.refresh()
+
+    row = names(page).index("Range brass")
+    # sv_SE's short format is exactly ISO/24h; a US-locale machine would
+    # render "8/1/26 9:30 AM" for the same stored value — see
+    # test_qt_formatting.py for that side of the contract.
+    assert cell(page, row, "Last trained") == "2026-08-01 09:30"
 
 
 def test_image_count_comes_off_disk(page, config) -> None:
@@ -204,6 +225,222 @@ def test_cartridge_filter(page, config) -> None:
     # The AI row isn't a cartridge's model, so only the type filter hides it —
     # same rule as the Tk tab.
     assert names(page) == [AI_CONFIG_NAME, "Rifle"]
+
+
+def test_zip_filter_label_survives_gnomes_paren_stripping() -> None:
+    # GNOME's portal strips the "(*.zip)" Qt-pattern suffix from the label it
+    # shows, so the human-readable half must carry its own, un-strippable
+    # mention of the extension (JL live-testing).
+    assert "*.zip" in ZIP_FILTER.split("(", 1)[0]
+    assert ZIP_FILTER.endswith("(*.zip)")
+
+
+# ----- column sorting ---------------------------------------------------------
+
+
+def click_header(page: Any, column_name: str, window: Any = None) -> None:
+    """A genuine mouse click on the header section, not ``.emit()`` on the
+    signal — this is what proves click *delivery* (geometry, clickability)
+    actually reaches the handler the way a real user's click does, not just
+    that the handler is correct once invoked.
+
+    Offscreen and unshown, a ``QHeaderView``'s section geometry
+    (``sectionViewportPosition``) is occasionally stale on the first click
+    a particular column receives — a real, shown app never has this
+    problem, since painting the header at least once is unavoidable before
+    a user can click it at all. Rather than a fragile "click every column
+    in some order first" workaround, this verifies the click actually
+    landed (against the page's own ``_sort_column``/``_sort_order`` —
+    exactly what a click is supposed to change) and retries a bounded
+    number of times against real state, so a genuine delivery failure still
+    fails the test instead of being silently papered over.
+    """
+    if window is not None and window.pages.currentWidget() is not page and not window.isVisible():
+        window.show()
+        window.show_page("Models")
+        QTest.qWait(0)
+    header = page.tree.header()
+    column = COLUMNS.index(column_name)
+
+    def click_column(index: int) -> None:
+        x = header.sectionViewportPosition(index) + header.sectionSize(index) // 2
+        QTest.mouseClick(
+            header.viewport(),
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+            QPoint(x, header.height() // 2),
+        )
+
+    prev_column, prev_order = page._sort_column, page._sort_order
+    if column == prev_column:
+        expected_order = (
+            Qt.SortOrder.DescendingOrder if prev_order == Qt.SortOrder.AscendingOrder else Qt.SortOrder.AscendingOrder
+        )
+    else:
+        expected_order = Qt.SortOrder.AscendingOrder
+
+    attempts = 6
+    for _attempt in range(attempts):
+        click_column(column)
+        if page._sort_column == column and page._sort_order == expected_order:
+            return
+        # A neighbor click nudges the header into recomputing section
+        # geometry before the retry.
+        click_column(column - 1 if column else min(column + 1, len(COLUMNS) - 1))
+    raise AssertionError(f"header click on {column_name!r} never registered after {attempts} attempts")
+
+
+def synthetic_order(page: Any, wanted: tuple[str, ...]) -> list[str]:
+    """The relative order of just the given model names among all rows."""
+    shown = names(page)
+    return [n for n in shown if n in wanted]
+
+
+def test_images_column_sorts_numerically_not_lexically(page, window, config) -> None:
+    # Lexical order would read "10" < "2" < "3"; numeric order must not.
+    make_model(config, "Ten", trained_image_count=10)
+    make_model(config, "Two", trained_image_count=2)
+    make_model(config, "Three", trained_image_count=3)
+    page.refresh()
+
+    click_header(page, "Images", window)
+
+    # Row 0 is the pinned AI row (blank Images cell); the rest sort numerically.
+    values = [cell(page, row, "Images") for row in range(page.tree.topLevelItemCount())]
+    assert values[0] == ""
+    assert values[1:] == ["0", "2", "3", "10"]
+
+
+def test_last_trained_column_sorts_chronologically(page, window, config) -> None:
+    # The displayed text is locale-formatted (qtui.formatting), which
+    # doesn't sort chronologically in general — the typed sort key must be
+    # the raw stored date instead.
+    make_model(config, "Newer", last_training_date="2026-08-10 09:00")
+    make_model(config, "Older", last_training_date="2025-01-05 09:00")
+    page.refresh()
+
+    click_header(page, "Last trained", window)
+
+    order = names(page)
+    assert order.index("Older") < order.index("Newer")
+
+
+def test_the_ai_row_stays_pinned_first_under_every_sort(page, window, config) -> None:
+    make_model(config, "Zed model")
+    make_model(config, "Alpha model")
+    page.refresh()
+
+    for column_name in COLUMNS:
+        click_header(page, column_name, window)
+        assert names(page)[0] == AI_CONFIG_NAME, f"AI row wasn't first after sorting by {column_name!r}"
+        # Click again to flip to descending, same assertion.
+        click_header(page, column_name, window)
+        assert names(page)[0] == AI_CONFIG_NAME, f"AI row wasn't first descending-sorted by {column_name!r}"
+
+
+def test_every_column_sorts_and_toggles_on_a_real_header_click(page, window, config) -> None:
+    """EVERY column, via genuine mouse clicks (not signal.emit()): a first
+    click sorts ascending, a second click on the same header reverses it.
+
+    Three rows, each column given genuinely distinct values, so a column
+    that silently didn't sort (or only "Model" secretly worked, as JL's
+    live-testing once suggested) can't hide behind ties or coincidental
+    build order.
+    """
+    # Three distinct cartridges, not just Bravo's — CartridgeRepo.list() (and
+    # so make_model's default) orders alphabetically, and "223" sorts before
+    # the seeded "9mm", so leaving Alpha/Charlie on the "default" cartridge
+    # here would tie them with Bravo instead of splitting from it.
+    cart_a = CartridgeRepo(config.db).create("223")
+    cart_b = CartridgeRepo(config.db).create("22-250")
+    cart_c = CartridgeRepo(config.db).create("6.5 CM")
+    make_model(
+        config,
+        "Bravo",
+        cartridge_id=cart_a.id,
+        model_mode="convnext_tiny",
+        trained_image_count=5,
+        last_training_date="2025-06-01 08:00",
+    )
+    alpha = make_model(
+        config,
+        "Alpha",
+        cartridge_id=cart_b.id,
+        community_model_uid="uid-x",
+        model_mode="convnext_small",
+        trained_image_count=20,
+        last_training_date="2026-01-01 08:00",
+        model_path="/fake/checkpoint.pth",
+    )
+    make_model(
+        config,
+        "Charlie",
+        cartridge_id=cart_c.id,
+        model_type="ReadOnly",
+        model_mode="convnext_base",
+        trained_image_count=1,
+        last_training_date="2024-01-01 08:00",
+    )
+    SettingsRepo(config.db).set_active_model_id(alpha.id)
+    page.refresh()
+
+    wanted = ("Bravo", "Alpha", "Charlie")
+    # Distinct across all three: Model/Cartridge/Type/Mode/Images/Last trained.
+    for column_name in ("Model", "Cartridge", "Type", "Mode", "Images", "Last trained"):
+        click_header(page, column_name, window)
+        ascending = synthetic_order(page, wanted)
+        assert len(ascending) == 3, f"{column_name!r}: a synthetic row went missing after sorting"
+
+        click_header(page, column_name, window)
+        descending = synthetic_order(page, wanted)
+        assert descending == list(reversed(ascending)), (
+            f"{column_name!r} didn't reverse on a second (real) click: {ascending} -> {descending}"
+        )
+
+    # Active/Trained are inherently binary (only Alpha is active/trained),
+    # so a full reversal isn't meaningful — assert the click groups the
+    # lone true row to one end, and flips ends on the second click.
+    for column_name in ("Active", "Trained"):
+        click_header(page, column_name, window)
+        first_click = synthetic_order(page, wanted)
+        click_header(page, column_name, window)
+        second_click = synthetic_order(page, wanted)
+        assert "Alpha" in (first_click[0], first_click[-1]), f"{column_name!r} didn't group Alpha to an end"
+        assert "Alpha" in (second_click[0], second_click[-1]), f"{column_name!r} didn't group Alpha to an end"
+        assert (first_click[0] == "Alpha") != (second_click[0] == "Alpha"), (
+            f"{column_name!r} didn't flip ends on the second click"
+        )
+
+
+def test_default_order_is_unchanged_until_a_header_is_clicked(page, config) -> None:
+    seeded = ModelRepo(config.db).list()[0].name
+    make_model(config, "Zed model")
+    make_model(config, "Alpha model")
+
+    page.refresh()
+
+    # Same order `_filtered()` builds (cartridge, then case-insensitive name)
+    # — no sort has been requested yet.
+    assert names(page) == [AI_CONFIG_NAME, "Alpha model", seeded, "Zed model"]
+
+
+def test_selection_survives_a_header_click_sort(page, window, config) -> None:
+    target = make_model(config, "Zed model")
+    make_model(config, "Alpha model")
+    page.refresh()
+    select(page, target.id)
+
+    click_header(page, "Model", window)
+
+    assert page.selected_id() == target.id
+
+
+def test_column_resizing_stays_interactive_after_sorting_is_wired(page, window) -> None:
+    header = page.tree.header()
+    click_header(page, "Model", window)
+
+    for column in range(len(COLUMNS)):
+        assert header.sectionResizeMode(column) == QHeaderView.ResizeMode.Interactive
 
 
 # ----- activation ------------------------------------------------------------

@@ -96,7 +96,7 @@ PLACEHOLDER_TEXT = "Not ported to the Qt spike yet — launch without --qt for t
 # Sidebar: (glyph, page name). Settings is pinned to the bottom, below the stretch.
 ACTIVITIES = (("▶", "Sort"), ("🎓", "Train"), ("📦", "Models"), ("🌐", "Community"))
 SETTINGS_ACTIVITY = ("⚙", "Settings")
-SETTINGS_SECTIONS = ("Camera", "Serial", "Image Processing", "AI Config", "Updates", "Theme")
+SETTINGS_SECTIONS = ("Camera", "Serial", "Image Processing", "AI Config", "Theme")
 BAUD_CHOICES = (9600, 19200, 38400, 57600, 115200)
 FEED_MAX = 12
 FEED_EMPTY_TEXT = "Recent classifications will appear here."
@@ -261,6 +261,14 @@ class QtMainWindow(QMainWindow):
         self.update_button.clicked.connect(lambda: self.open_update_dialog())
         self.update_button.hide()
         self.statusBar().addPermanentWidget(self.update_button)
+        # Community identity — the only surface for it now (JL): the
+        # Community page used to carry its own "Signed in as ... [Sign out]"
+        # row, which duplicated this button and wasted a row for nothing else
+        # the page needed. Hidden until signed in; text/tooltip filled by
+        # _apply_auth_visibility.
+        self.identity_label = self._muted_label("", self)
+        self.identity_label.hide()
+        self.statusBar().addPermanentWidget(self.identity_label)
         self.signin_button = QPushButton("Sign in", self)
         self.signin_button.clicked.connect(self._on_signin_clicked)
         self.statusBar().addPermanentWidget(self.signin_button)
@@ -303,6 +311,11 @@ class QtMainWindow(QMainWindow):
             column.addWidget(self._activity_button(sidebar, glyph, name))
         column.addStretch(1)
         column.addWidget(self._activity_button(sidebar, *SETTINGS_ACTIVITY))
+        # The gear was easy to miss at the sidebar's default muted color (JL
+        # live-testing) — theme.py colors this objectName with the palette's
+        # "update" blue ("adjust something installed"), not action-green or
+        # danger-red.
+        self.sidebar_buttons["Settings"].setObjectName("settingsButton")
 
         # Width follows the widest label's font metrics, not a constant — a
         # fixed pixel width clips "Community" on fonts wider than the dev box.
@@ -332,14 +345,10 @@ class QtMainWindow(QMainWindow):
         column.setSpacing(10)
         column.addLayout(self._build_action_row(page))
         column.addLayout(self._build_template_bar(page))
-        column.addLayout(self._build_run_options_bar(page))
 
         splitter = QSplitter(Qt.Orientation.Horizontal, page)
         splitter.addWidget(self._build_preview_column(splitter))
-        self.slot_grid = SlotGrid(self.config, splitter)
-        self.slot_grid.slot_clicked.connect(lambda slot: self.open_slot_editor(slot))
-        self.slot_grid.slot_reset.connect(lambda slot: self.reset_slot_count(slot))
-        splitter.addWidget(self.slot_grid)
+        splitter.addWidget(self._build_grid_column(splitter))
         splitter.setSizes([600, 400])
 
         # Index 0 is the working dashboard, 1 the first-run guided panel — see
@@ -354,6 +363,36 @@ class QtMainWindow(QMainWindow):
         self.feed_label.setTextFormat(Qt.TextFormat.RichText)
         column.addWidget(self.feed_label)
         return page
+
+    def _build_grid_column(self, parent: QWidget) -> QWidget:
+        """The slot grid, with the run counter/reset anchored above it.
+
+        JL (follow-up to the run-options move): the counter and reset button
+        felt orphaned floating on the action row — they belong with what
+        they count, not with Start/Stop/Manual feed.
+        """
+        holder = QWidget(parent)
+        column = QVBoxLayout(holder)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(6)
+
+        header = QHBoxLayout()
+        header.addWidget(self._muted_label("Slots", holder))
+        header.addStretch(1)
+        header.addWidget(self._muted_label("Sorted this run", holder))
+        self.master_count_label = QLabel("0", holder)
+        self.master_count_label.setObjectName("masterCount")
+        header.addWidget(self.master_count_label)
+        reset = QPushButton("Reset counts", holder)
+        reset.clicked.connect(self.reset_counts)
+        header.addWidget(reset)
+        column.addLayout(header)
+
+        self.slot_grid = SlotGrid(self.config, holder)
+        self.slot_grid.slot_clicked.connect(lambda slot: self.open_slot_editor(slot))
+        self.slot_grid.slot_reset.connect(lambda slot: self.reset_slot_count(slot))
+        column.addWidget(self.slot_grid, 1)
+        return holder
 
     def _build_empty_state_panel(self, page: QWidget) -> QWidget:
         """First-run guidance in place of a grid nothing has configured yet."""
@@ -417,13 +456,11 @@ class QtMainWindow(QMainWindow):
             actions.addWidget(button)
             self.action_buttons[text] = button
         actions.addStretch(1)
-        actions.addWidget(self._muted_label("Sorted this run", page))
-        self.master_count_label = QLabel("0", page)
-        self.master_count_label.setObjectName("masterCount")
-        actions.addWidget(self.master_count_label)
-        reset = QPushButton("Reset counts", page)
-        reset.clicked.connect(self.reset_counts)
-        actions.addWidget(reset)
+        # No dedicated row for this (JL) — was its own bar under the
+        # template row. The run counter/reset live with the grid instead
+        # (see `_build_grid_column`), not here.
+        self.run_options_button = self._build_run_options_button(page)
+        actions.addWidget(self.run_options_button)
         self._update_run_buttons()
         return actions
 
@@ -449,12 +486,6 @@ class QtMainWindow(QMainWindow):
         bar.addWidget(self.template_hint)
         bar.addStretch(1)
         self._refresh_templates()
-        return bar
-
-    def _build_run_options_bar(self, page: QWidget) -> QHBoxLayout:
-        bar = QHBoxLayout()
-        bar.addWidget(self._build_run_options_button(page))
-        bar.addStretch(1)
         return bar
 
     def _build_run_options_button(self, page: QWidget) -> QToolButton:
@@ -784,6 +815,32 @@ class QtMainWindow(QMainWindow):
         signed_in = self.community_page.is_signed_in()
         self._set_activity_visible("Community", signed_in)
         self.signin_button.setText("Sign out" if signed_in else "Sign in")
+        self._update_identity_label(signed_in)
+
+    def _update_identity_label(self, signed_in: bool) -> None:
+        """Display name (or email) next to the Sign out button, display-only.
+
+        Read straight off the auth object's decoded claims — same source the
+        removed Community-page banner used, not the community server's
+        profile metadata, so this never blocks on a network call.
+        ``existing_auth_manager()`` never constructs one (CLAUDE.md: building
+        must not touch MSAL) — if ``signed_in`` is True one already exists.
+        """
+        if not signed_in:
+            self.identity_label.hide()
+            self.identity_label.setText("")
+            self.identity_label.setToolTip("")
+            return
+        auth = self.community_page.existing_auth_manager()
+        try:
+            name, email = auth.identity() if auth is not None else (None, None)
+        except Exception:
+            name, email = None, None
+        name = (name or "").strip()
+        email = (email or "").strip()
+        self.identity_label.setText(name or email or "(unknown)")
+        self.identity_label.setToolTip(email)
+        self.identity_label.show()
 
     def _on_auth_changed(self) -> None:
         self._apply_auth_visibility()

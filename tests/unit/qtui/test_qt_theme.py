@@ -29,3 +29,12 @@ def test_stylesheet_is_well_formed(name: str) -> None:
     assert qss.count("{") == qss.count("}")
     assert "{bg_" not in qss and "{c[" not in qss, "unsubstituted format placeholder"
     assert "None" not in qss
+
+
+@pytest.mark.parametrize("name", list(BUILTIN_THEMES))
+def test_settings_button_uses_the_update_role_not_action_or_danger(name: str) -> None:
+    palette = BUILTIN_THEMES[name]
+    qss = build_stylesheet(palette)
+
+    assert f"#settingsButton {{ color: {palette['update']}; }}" in qss
+    assert palette["update"] not in (palette["action"], palette["danger"])

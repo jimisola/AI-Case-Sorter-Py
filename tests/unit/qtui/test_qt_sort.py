@@ -476,6 +476,38 @@ def test_community_follows_auth_state(window) -> None:
     assert window.signin_button.text() == "Sign out"
 
 
+def test_identity_label_shows_the_display_name_next_to_sign_out(window) -> None:
+    # The Community page used to carry its own "Signed in as ... [Sign out]"
+    # row; identity now lives only in the status bar (JL live-testing).
+    window.auth = types.SimpleNamespace(identity=lambda: ("Ada Lovelace", "ada@example.com"))
+    window.community_page.is_signed_in = lambda: True
+
+    window._apply_auth_visibility()
+
+    assert not window.identity_label.isHidden()
+    assert window.identity_label.text() == "Ada Lovelace"
+    assert window.identity_label.toolTip() == "ada@example.com"
+
+
+def test_identity_label_falls_back_to_email_with_no_name_claim(window) -> None:
+    window.auth = types.SimpleNamespace(identity=lambda: (None, "ada@example.com"))
+    window.community_page.is_signed_in = lambda: True
+
+    window._apply_auth_visibility()
+
+    assert window.identity_label.text() == "ada@example.com"
+
+
+def test_identity_label_is_hidden_when_signed_out(window) -> None:
+    window.auth = types.SimpleNamespace(identity=lambda: ("Ada Lovelace", "ada@example.com"))
+    window.community_page.is_signed_in = lambda: False
+
+    window._apply_auth_visibility()
+
+    assert window.identity_label.isHidden()
+    assert window.identity_label.text() == ""
+
+
 def test_train_appears_for_a_model_this_user_owns(window, config) -> None:
     seed_model(config, {"9mm FC": 1})
 

@@ -59,6 +59,7 @@ from .. import paths
 from ..data.models import Model
 from ..data.repository import CartridgeRepo, HeadstampRepo, SettingsRepo
 from ..ml import eval_report, evaluator
+from . import formatting
 from .dialog_image_preview import ImagePreviewDialog, bgr_to_pixmap
 
 MATCH_LABELS = {"match": "Match", "mismatch": "Mismatch", "unknown": "—"}
@@ -751,8 +752,11 @@ class ModelEvaluatorDialog(QDialog):
     def refresh_history(self, select_path: str | None = None) -> None:
         self.history_tree.clear()
         for path in self.report_paths():
-            created = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-            item = _SortableItem((path.name, created), (path.name.casefold(), created), payload=path)
+            mtime = path.stat().st_mtime
+            # Display in the OS's regional format; sort on the raw mtime — a
+            # locale-formatted string doesn't sort chronologically in general.
+            created = formatting.format_datetime(datetime.fromtimestamp(mtime))
+            item = _SortableItem((path.name, created), (path.name.casefold(), mtime), payload=path)
             self.history_tree.addTopLevelItem(item)
             if select_path is not None and str(path) == str(select_path):
                 self.history_tree.setCurrentItem(item)

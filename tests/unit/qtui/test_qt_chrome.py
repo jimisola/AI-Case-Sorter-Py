@@ -180,6 +180,17 @@ def test_empty_state_panel_links_to_settings_serial_and_camera(window) -> None:
     assert window.settings_list.currentItem().text() == "Camera"
 
 
+# ----- sidebar branding -------------------------------------------------------
+
+
+def test_the_settings_button_carries_its_own_object_name(window) -> None:
+    # theme.py colors #settingsButton with the palette's "update" role — see
+    # test_qt_theme.py for the stylesheet side of this contract.
+    assert window.sidebar_buttons["Settings"].objectName() == "settingsButton"
+    for name in ("Sort", "Train", "Models", "Community"):
+        assert window.sidebar_buttons[name].objectName() != "settingsButton"
+
+
 # ----- window/session polish --------------------------------------------------
 
 

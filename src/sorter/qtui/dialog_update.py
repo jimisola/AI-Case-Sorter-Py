@@ -68,6 +68,7 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
 
 from ..update import updater
 from ..update.updater import PendingUpdate, UpdateError, UpdateInfo
+from . import formatting
 
 DRAIN_MS = 50
 
@@ -406,7 +407,8 @@ class UpdateDialog(QDialog):
     # ----- version picker -------------------------------------------------------
 
     def release_label(self, info: UpdateInfo) -> str:
-        date = info.published_at.split("T", 1)[0] if info.published_at else ""
+        # OS-regional format, not the raw ISO date GitHub returns.
+        date = formatting.format_date(info.published_at) if info.published_at else ""
         suffix = " (current)" if info.version == updater.current_version() else ""
         return f"{info.tag}  {date}{suffix}".strip()
 

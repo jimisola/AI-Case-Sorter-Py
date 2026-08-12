@@ -28,7 +28,8 @@ from __future__ import annotations
 
 import tempfile
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +53,7 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
 from ..community.community_api import CartridgeInfo, CommunityApi, ModelInfo
 from ..data.model_io import import_model
 from ..data.repository import ModelRepo
+from . import formatting
 
 COLUMNS = ("Model", "Cartridge", "Version", "Includes", "Headstamps", "Images", "Size", "Published", "Author", "State")
 
@@ -77,6 +79,10 @@ ACTION_LABELS = {
     STATE_UPDATE: "Update model",
     STATE_INSTALLED: "Already installed",
 }
+# Sort order for the State column: needs-action states first, "nothing to do"
+# last — alphabetizing the labels ("Available", "Installed", "Update
+# available") would not read as a sane order.
+_STATE_SORT_RANK = {STATE_DOWNLOAD: 0, STATE_UPDATE: 1, STATE_INSTALLED: 2}
 
 EMPTY_VALUE = "—"
 SELECT_HINT = "Select a model to see its description and install it."
@@ -101,33 +107,13 @@ def format_size(n: int) -> str:
 
 
 def format_date(iso: str) -> str:
-    """ISO-ish → ``M/D/YYYY`` (the legacy look), or the raw string.
+    """Publish date, in the user's OS regional format (``qtui.formatting``).
 
-    Assembled from the fields rather than ``strftime("%-m/…")``, which is
-    glibc-only and raises on Windows. The prefix width is the format's, not
-    ``len(fmt)`` — Tk measures the directives instead of the text and so
-    renders a plain ``2026-01-09`` publish date unformatted.
+    Thin wrapper kept for the module's existing call site and import; this
+    used to hand-roll ``M/D/YYYY`` (the Tk look) — see ``qtui/formatting.py``
+    for why that hardcoded policy was replaced (JL live-testing).
     """
-    from datetime import datetime
-
-    if not iso:
-        return ""
-    text = iso.strip().rstrip("Z")
-    for fmt, width in (("%Y-%m-%dT%H:%M:%S", 19), ("%Y-%m-%d %H:%M:%S", 19), ("%Y-%m-%d", 10)):
-        try:
-            parsed = datetime.strptime(text[:width], fmt)
-        except (ValueError, OSError):
-            continue
-        return f"{parsed.month}/{parsed.day}/{parsed.year}"
-    return iso
-
-
-def format_identity(name: str | None, email: str | None) -> str:
-    name = (name or "").strip()
-    email = (email or "").strip()
-    if name and email:
-        return f"{name} ({email})"
-    return name or email or "(unknown)"
+    return formatting.format_date(iso)
 
 
 class ApiWorker(QThread):
@@ -175,6 +161,30 @@ def start_worker(worker: ApiWorker) -> ApiWorker:
     return worker
 
 
+class _SortableItem(QTreeWidgetItem):
+    """Row that sorts on typed values rather than its displayed text.
+
+    Same pattern as ``dialog_model_evaluator._SortableItem`` (duplicated
+    rather than shared — each qtui page/dialog stays self-contained). Lets
+    "Version"/"Headstamps"/"Images"/"Size" sort numerically, "Published"
+    sort chronologically on the parsed date rather than the locale-rendered
+    text, and "State" sort by actionability rather than alphabetically.
+    """
+
+    def __init__(self, texts: Sequence[str], sort_values: Sequence[Any], uid: str) -> None:
+        super().__init__(list(texts))
+        self.sort_values = list(sort_values)
+        self.setData(0, Qt.ItemDataRole.UserRole, uid)
+
+    def __lt__(self, other: Any) -> bool:
+        tree = self.treeWidget()
+        column = tree.sortColumn() if tree is not None else 0
+        try:
+            return bool(self.sort_values[column] < other.sort_values[column])
+        except (AttributeError, IndexError, TypeError):
+            return super().__lt__(other)
+
+
 class CommunityPage(QWidget):
     """The catalogue table, its filters, and the signed-out panel in front of them."""
 
@@ -188,6 +198,10 @@ class CommunityPage(QWidget):
         self._loaded = False
         self._busy = False
         self._columns_sized = False
+        # No column clicked yet means the server's own result order stands,
+        # unchanged, until the first header click — same contract as Models.
+        self._sort_column: int | None = None
+        self._sort_order: Qt.SortOrder = Qt.SortOrder.AscendingOrder
         self.community_username = ""
         self.can_contribute = False
 
@@ -242,7 +256,6 @@ class CommunityPage(QWidget):
         column = QVBoxLayout(page)
         column.setContentsMargins(12, 12, 12, 12)
         column.setSpacing(8)
-        column.addLayout(self._build_toolbar(page))
         column.addLayout(self._build_filter_bar(page))
         column.addWidget(self._build_table(page), 1)
         self.hint_label = QLabel(SELECT_HINT, page)
@@ -255,27 +268,6 @@ class CommunityPage(QWidget):
         self.status_label.setWordWrap(True)
         column.addWidget(self.status_label)
         return page
-
-    def _build_toolbar(self, page: QWidget) -> QHBoxLayout:
-        bar = QHBoxLayout()
-        # Sharing needs the Contribute role on the community server; the button
-        # stays hidden until the role check answers, so a non-contributor never
-        # sees an action they can't complete (Tk does the same).
-        self.share_button = QPushButton("Share a model…", page)
-        self.share_button.clicked.connect(lambda: self.open_share())
-        self.share_button.setVisible(False)
-        bar.addWidget(self.share_button)
-        bar.addStretch(1)
-        caption = QLabel("Signed in as", page)
-        caption.setObjectName("mutedLabel")
-        bar.addWidget(caption)
-        # Resolved asynchronously — identity() can do a silent token read.
-        self.identity_label = QLabel("…", page)
-        bar.addWidget(self.identity_label)
-        self.sign_out_button = QPushButton("Sign out", page)
-        self.sign_out_button.clicked.connect(self.sign_out)
-        bar.addWidget(self.sign_out_button)
-        return bar
 
     def _build_filter_bar(self, page: QWidget) -> QHBoxLayout:
         bar = QHBoxLayout()
@@ -319,8 +311,33 @@ class CommunityPage(QWidget):
         header = self.tree.header()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setStretchLastSection(True)
+        # Sorting is driven by hand, not `setSortingEnabled(True)`: that flag
+        # re-sorts on every insert using whatever column/order the header
+        # defaults to (column 0 descending), which would sort the table
+        # before the user ever clicked anything — see models_page.py's
+        # `_build_table` for the same reasoning.
+        header.setSortIndicatorShown(True)
+        header.setSectionsClickable(True)
+        header.sectionClicked.connect(self._on_header_clicked)
         self.tree.currentItemChanged.connect(lambda _cur, _prev: self._update_actions())
         return self.tree
+
+    def _on_header_clicked(self, column: int) -> None:
+        if self._sort_column == column:
+            self._sort_order = (
+                Qt.SortOrder.DescendingOrder
+                if self._sort_order == Qt.SortOrder.AscendingOrder
+                else Qt.SortOrder.AscendingOrder
+            )
+        else:
+            self._sort_column = column
+            self._sort_order = Qt.SortOrder.AscendingOrder
+        self.tree.header().setSortIndicator(self._sort_column, self._sort_order)
+        self._apply_sort()
+
+    def _apply_sort(self) -> None:
+        if self._sort_column is not None:
+            self.tree.sortItems(self._sort_column, self._sort_order)
 
     def _build_action_row(self, page: QWidget) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -329,13 +346,31 @@ class CommunityPage(QWidget):
         self.download_button.clicked.connect(self.download_selected)
         row.addWidget(self.download_button)
         row.addStretch(1)
+        # Sharing needs the Contribute role on the community server; the
+        # button stays hidden until the role check answers, so a
+        # non-contributor never sees an action they can't complete. Lives
+        # here now (JL) — the identity/sign-out row above it was removed as
+        # a duplicate of the status bar's own sign-out affordance.
+        self.share_button = QPushButton("Share a model…", page)
+        self.share_button.clicked.connect(lambda: self.open_share())
+        self.share_button.setVisible(False)
+        row.addWidget(self.share_button)
         return row
 
     # ----- auth ---------------------------------------------------------------
 
+    def existing_auth_manager(self) -> Any | None:
+        """The auth manager if one already exists — never constructs one.
+
+        For read-only, display-only uses (the status bar's identity label)
+        that must not risk touching MSAL when nothing is signed in yet. See
+        ``auth_manager()`` for the constructing counterpart.
+        """
+        return getattr(self._win, "auth", None) or self._auth
+
     def is_signed_in(self) -> bool:
         """Whether there is an account — asked without ever creating a manager."""
-        auth = getattr(self._win, "auth", None) or self._auth
+        auth = self.existing_auth_manager()
         if auth is None:
             return False
         try:
@@ -381,7 +416,6 @@ class CommunityPage(QWidget):
             return
         if not self._loaded:
             self._loaded = True
-            self.identity_label.setText("…")
             self.load_identity()
             self.load_cartridges()
             self.refresh()
@@ -417,13 +451,15 @@ class CommunityPage(QWidget):
             self.on_auth_changed()
 
     def load_identity(self) -> None:
-        """Resolve the display name, the community handle and the Contribute role.
+        """Resolve the community handle and the Contribute role.
 
-        ``identity()`` can do a silent token read and ``get_user_metadata()``
-        always hits the network, so both run on a worker.
+        ``get_user_metadata()`` always hits the network, so this runs on a
+        worker. Display identity itself lives in the status bar now
+        (app.py reads ``auth.identity()`` directly) — this page only needs
+        the Contribute role (for the Share button) and the community handle.
         """
 
-        def work() -> tuple[str, bool, str]:
+        def work() -> tuple[bool, str]:
             auth = self.auth_manager()
             name, email = auth.identity()
             try:
@@ -433,20 +469,16 @@ class CommunityPage(QWidget):
             profile = (meta.profile_name if meta else "") or ""
             # The B2C token can carry no name claim; the community handle is
             # then the only human-readable thing to show beside the email.
-            if not name and profile:
-                name = profile
             username = profile or name or (email.split("@")[0] if email else "")
-            return format_identity(name, email), bool(meta and meta.can_contribute()), username
+            return bool(meta and meta.can_contribute()), username
 
-        def done(payload: tuple[str, bool, str]) -> None:
-            display, can_contribute, username = payload
-            self.identity_label.setText(display)
+        def done(payload: tuple[bool, str]) -> None:
+            can_contribute, username = payload
             self.community_username = username
             self.can_contribute = can_contribute
             self.share_button.setVisible(can_contribute)
 
         def failed(_exc: Exception) -> None:
-            self.identity_label.setText("(unknown)")
             self.can_contribute = False
             self.share_button.setVisible(False)
 
@@ -504,24 +536,44 @@ class CommunityPage(QWidget):
         self.tree.clear()
         for info in models:
             state = self.installed_state(info)
-            item = QTreeWidgetItem(
-                self.tree,
+            cartridge = info.cartridge_name or EMPTY_VALUE
+            export_mode = info.export_mode or EMPTY_VALUE
+            author = info.author or EMPTY_VALUE
+            # Sort on the underlying date, not the locale-formatted text
+            # displayed below — a locale format doesn't sort chronologically
+            # in general (e.g. US "9/1/26" vs "12/1/25").
+            published_key = formatting.parse(info.publish_date) or datetime.min
+            item = _SortableItem(
                 [
                     info.model_name,
-                    info.cartridge_name or EMPTY_VALUE,
+                    cartridge,
                     f"v{info.model_version}",
-                    info.export_mode or EMPTY_VALUE,
+                    export_mode,
                     str(info.headstamp_count),
                     str(info.image_count),
                     format_size(info.download_size),
                     format_date(info.publish_date),
-                    info.author or EMPTY_VALUE,
+                    author,
                     STATE_LABELS[state],
                 ],
+                [
+                    info.model_name.casefold(),
+                    cartridge.casefold(),
+                    int(info.model_version),
+                    export_mode.casefold(),
+                    int(info.headstamp_count),
+                    int(info.image_count),
+                    int(info.download_size),
+                    published_key,
+                    author.casefold(),
+                    _STATE_SORT_RANK[state],
+                ],
+                info.model_uid,
             )
-            item.setData(0, Qt.ItemDataRole.UserRole, info.model_uid)
+            self.tree.addTopLevelItem(item)
             if info.model_description:
                 item.setToolTip(0, info.model_description)
+        self._apply_sort()
         self._restore_selection(selected)
         self._autosize_columns()
         self._update_actions()

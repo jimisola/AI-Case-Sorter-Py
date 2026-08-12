@@ -48,6 +48,11 @@ from ..ui.serial_monitor import BAUD_RATES, DEFAULT_BAUD, DEFAULT_LINE_ENDING, L
 
 MAX_LINES = 4000  # scrollback cap; the oldest are dropped, not the newest — matches Tk
 MAX_HISTORY = 100
+# GNOME's file-chooser portal strips the parenthesized "(*.txt)" from the
+# label it shows, leaving no visible pattern (JL live-testing). The
+# Qt-parsed pattern in parens still has to stay for the picker to actually
+# filter — see models_page.ZIP_FILTER for the same fix.
+TEXT_FILTER = "Text files — *.txt (*.txt)"
 # Typing in the filter box re-renders the whole scrollback, so coalesce
 # keystrokes instead of doing it per character.
 FILTER_DEBOUNCE_MS = 120
@@ -398,7 +403,7 @@ class SerialMonitorWidget(QWidget):
 
     def _choose_save_path(self) -> str:
         """Broken out so tests can patch it instead of driving a real file dialog."""
-        path, _filter = QFileDialog.getSaveFileName(self, "Save serial log", "", "Text files (*.txt);;All files (*.*)")
+        path, _filter = QFileDialog.getSaveFileName(self, "Save serial log", "", f"{TEXT_FILTER};;All files (*.*)")
         return path
 
     def save_to_file(self) -> None:

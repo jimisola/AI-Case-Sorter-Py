@@ -240,7 +240,14 @@ def _picker_dialog(make_dialog, releases_by_flag: dict[bool, list[UpdateInfo]], 
     return dialog
 
 
-def test_picker_populates_and_prereleases_refetch(qapp, make_dialog):
+def test_picker_populates_and_prereleases_refetch(qapp, make_dialog, monkeypatch):
+    from PySide6.QtCore import QLocale
+
+    from sorter.qtui import formatting
+
+    # The release date renders in the OS's regional format now; pin it so
+    # the assertion doesn't depend on the machine running the suite.
+    monkeypatch.setattr(formatting, "_locale", lambda: QLocale("sv_SE"))
     stable = [info("2.0.0"), info("1.5.0"), info("1.0.0")]
     with_pre = [info("2.1.0rc1"), *stable]
     calls: list[bool] = []

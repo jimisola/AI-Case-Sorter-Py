@@ -29,7 +29,7 @@ native dialog.
 from __future__ import annotations
 
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +60,7 @@ from ..data.repository import (
     ModelRepo,
     SettingsRepo,
 )
+from . import formatting
 from .dialog_model_editor import ModelEditorDialog
 
 FILTER_TYPE_ALL = "All"
@@ -76,7 +77,12 @@ AI_CONFIG_HINT = "Route classification through the AI Config page (HTTP server).
 COLUMNS = ("Model", "Active", "Cartridge", "Type", "Mode", "Images", "Trained", "Last trained")
 ACTIVE_MARK = "● ACTIVE"
 EMPTY_VALUE = "—"
-ZIP_FILTER = "Model archives (*.zip)"
+# GNOME's file-chooser portal strips the parenthesized "(*.zip)" from the
+# label it shows, leaving just "Model archives" with no visible pattern (JL
+# live-testing). The Qt-parsed pattern in parens still has to stay — it's
+# what actually restricts the picker — so the human-readable copy carries its
+# own, un-strippable mention of the extension.
+ZIP_FILTER = "Model archives — *.zip (*.zip)"
 
 IMPORT_SECURITY_TITLE = "Import model — security notice"
 IMPORT_SECURITY_TEXT = (
@@ -129,6 +135,29 @@ def image_counts() -> dict[int, int]:
     return counts
 
 
+class _SortableItem(QTreeWidgetItem):
+    """Row that sorts on typed values rather than its displayed text.
+
+    Same pattern as ``dialog_model_evaluator._SortableItem`` (duplicated
+    rather than shared — each qtui page/dialog stays self-contained). Lets
+    "Images" sort numerically and "Last trained" sort chronologically on the
+    raw stored date, independent of what the cell actually displays.
+    """
+
+    def __init__(self, texts: Sequence[str], sort_values: Sequence[Any], model_id: int) -> None:
+        super().__init__(list(texts))
+        self.sort_values = list(sort_values)
+        self.setData(0, Qt.ItemDataRole.UserRole, model_id)
+
+    def __lt__(self, other: Any) -> bool:
+        tree = self.treeWidget()
+        column = tree.sortColumn() if tree is not None else 0
+        try:
+            return bool(self.sort_values[column] < other.sort_values[column])
+        except (AttributeError, IndexError, TypeError):
+            return super().__lt__(other)
+
+
 class ModelsPage(QWidget):
     """The library table plus its toolbar and selection-driven actions."""
 
@@ -140,10 +169,15 @@ class ModelsPage(QWidget):
         self.models = ModelRepo(self.db)
         self.headstamps = HeadstampRepo(self.db)
         self.settings = SettingsRepo(self.db)
-        # Rows currently shown, in table order: (id, Model | None).
+        # Rows currently shown, in build order (before any sort/pin is
+        # applied — see `_add_row`): (id, Model | None).
         self._rows: list[tuple[int, Model | None]] = []
         self._columns_sized = False
         self._busy = False
+        # User sort state: no column clicked yet means the filtered build
+        # order stands, unchanged, until the first header click.
+        self._sort_column: int | None = None
+        self._sort_order: Qt.SortOrder = Qt.SortOrder.AscendingOrder
 
         # The training-image browser is increment 8's; until it attaches its
         # hook (`set_images_hook`) the button it drives isn't shown at all.
@@ -217,8 +251,62 @@ class ModelsPage(QWidget):
         header = self.tree.header()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setStretchLastSection(True)
+        # Sorting is driven by hand (`_on_header_clicked`), not
+        # `setSortingEnabled(True)`: that flag re-sorts on every insert using
+        # whatever column/order the header defaults to (column 0 descending),
+        # which would sort the table before the user ever clicked anything.
+        # Doing it manually keeps the build order as the default and lets us
+        # decide what happens to the pinned AI row after every sort.
+        header.setSortIndicatorShown(True)
+        header.setSectionsClickable(True)
+        header.sectionClicked.connect(self._on_header_clicked)
         self.tree.currentItemChanged.connect(lambda _cur, _prev: self._update_actions())
         return self.tree
+
+    def _on_header_clicked(self, column: int) -> None:
+        if self._sort_column == column:
+            self._sort_order = (
+                Qt.SortOrder.DescendingOrder
+                if self._sort_order == Qt.SortOrder.AscendingOrder
+                else Qt.SortOrder.AscendingOrder
+            )
+        else:
+            self._sort_column = column
+            self._sort_order = Qt.SortOrder.AscendingOrder
+        self.tree.header().setSortIndicator(self._sort_column, self._sort_order)
+        self._apply_sort()
+
+    def _apply_sort(self) -> None:
+        """(Re-)apply the current sort choice, then re-pin the AI row.
+
+        ``sortItems`` uses ``_SortableItem.__lt__``'s typed comparison, so
+        "Images" sorts numerically and "Last trained" sorts on the raw
+        stored date rather than the locale-formatted text the cell shows.
+        """
+        if self._sort_column is not None:
+            self.tree.sortItems(self._sort_column, self._sort_order)
+        self._pin_ai_row()
+
+    def _pin_ai_row(self) -> None:
+        """Keep the synthetic "Use AI Config" row first, regardless of sort.
+
+        Mechanism: let Qt sort every row natively, then pull the AI row out
+        and reinsert it at index 0. A sort-key prefix ("always sorts least")
+        was considered and rejected — Qt's descending order inverts the
+        whole comparison, which would flip an "always least" row to "always
+        last" on a descending click. Reinserting after the fact works the
+        same regardless of which column or direction was clicked.
+        """
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            if item is not None and item.data(0, Qt.ItemDataRole.UserRole) == AI_CONFIG_SENTINEL_ID:
+                if i != 0:
+                    was_current = self.tree.currentItem() is item
+                    self.tree.takeTopLevelItem(i)
+                    self.tree.insertTopLevelItem(0, item)
+                    if was_current:
+                        self.tree.setCurrentItem(item)
+                break
 
     # ----- column persistence (app.py: saveState-style window/session state) -
 
@@ -310,6 +398,7 @@ class ModelsPage(QWidget):
         for model in self._filtered(self.models.list(), cart_by_id):
             self._add_model_row(model, cart_by_id, counts, active=model.id == active_id)
 
+        self._apply_sort()
         self._restore_selection(selected)
         self._autosize_columns()
         self._update_actions()
@@ -360,15 +449,31 @@ class ModelsPage(QWidget):
         out.sort(key=lambda m: (cart_by_id.get(m.cartridge_id, ""), m.name.lower()))
         return out
 
-    def _add_row(self, values: list[str], model_id: int, model: Model | None) -> QTreeWidgetItem:
-        item = QTreeWidgetItem(self.tree, values)
-        item.setData(0, Qt.ItemDataRole.UserRole, model_id)
+    def _add_row(
+        self, values: list[str], sort_values: list[Any], model_id: int, model: Model | None
+    ) -> QTreeWidgetItem:
+        item = _SortableItem(values, sort_values, model_id)
+        self.tree.addTopLevelItem(item)
         self._rows.append((model_id, model))
         return item
 
     def _add_ai_row(self, active: bool) -> None:
         item = self._add_row(
             [AI_CONFIG_NAME, ACTIVE_MARK if active else "", EMPTY_VALUE, "AI Config", "HTTP", "", "", ""],
+            # Typed to match each column's real-row sort values (str.casefold
+            # or int) — irrelevant to where this row ends up, since `_pin_ai_row`
+            # always pulls it back to index 0 after any sort, but a mismatched
+            # type would otherwise trip `_SortableItem.__lt__`'s comparison.
+            [
+                AI_CONFIG_NAME.casefold(),
+                ACTIVE_MARK if active else "",
+                EMPTY_VALUE.casefold(),
+                "ai config",
+                "http",
+                0,
+                "",
+                "",
+            ],
             AI_CONFIG_SENTINEL_ID,
             None,
         )
@@ -382,16 +487,32 @@ class ModelsPage(QWidget):
         *,
         active: bool,
     ) -> None:
+        cartridge_name = cart_by_id.get(model.cartridge_id, EMPTY_VALUE)
+        image_count = int(counts.get(model.id, model.trained_image_count))
+        trained = "yes" if model.model_path else "no"
         self._add_row(
             [
                 model.name,
                 ACTIVE_MARK if active else "",
-                cart_by_id.get(model.cartridge_id, EMPTY_VALUE),
+                cartridge_name,
                 describe_type(model),
                 model.model_mode,
-                str(counts.get(model.id, model.trained_image_count)),
-                "yes" if model.model_path else "no",
-                model.last_training_date or EMPTY_VALUE,
+                str(image_count),
+                trained,
+                formatting.format_datetime(model.last_training_date),
+            ],
+            [
+                model.name.casefold(),
+                ACTIVE_MARK if active else "",
+                cartridge_name.casefold(),
+                describe_type(model).casefold(),
+                model.model_mode.casefold(),
+                image_count,
+                trained,
+                # Sort on the raw stored date, not the locale-formatted
+                # display text above — a locale format doesn't sort
+                # chronologically in general (e.g. US "9/1/26" vs "12/1/25").
+                model.last_training_date or "",
             ],
             model.id,
             model,
@@ -399,10 +520,14 @@ class ModelsPage(QWidget):
 
     def _restore_selection(self, model_id: int | None) -> None:
         target = model_id if model_id is not None else AI_CONFIG_SENTINEL_ID
-        index = next((i for i, (row_id, _m) in enumerate(self._rows) if row_id == target), 0)
-        item = self.tree.topLevelItem(index)
-        if item is not None:
-            self.tree.setCurrentItem(item)
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            if item is not None and int(item.data(0, Qt.ItemDataRole.UserRole)) == target:
+                self.tree.setCurrentItem(item)
+                return
+        first = self.tree.topLevelItem(0)
+        if first is not None:
+            self.tree.setCurrentItem(first)
 
     # ----- selection ----------------------------------------------------------
 

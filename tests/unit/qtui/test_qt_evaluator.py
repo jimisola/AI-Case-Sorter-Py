@@ -570,6 +570,31 @@ def test_history_lists_existing_reports_newest_first(dialog, model) -> None:
     assert dialog.selected_report() == reports_dir / "modelreport_new.html"
 
 
+def test_history_created_column_sorts_on_raw_mtime_not_locale_text(dialog, model) -> None:
+    """A locale-formatted date string doesn't sort lexically the way a raw
+    timestamp does (e.g. US ``9/1/26`` vs. ``12/1/25``) — the sort key must
+    be the raw mtime, not the displayed text. Filenames are picked so name
+    order and mtime order disagree, ruling out a name-based sort as a
+    false positive."""
+    from PySide6.QtCore import Qt
+
+    reports_dir = paths.model_reports_dir(model.id)
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    import os
+
+    newest_named_first = reports_dir / "modelreport_a.html"
+    oldest_named_last = reports_dir / "modelreport_b.html"
+    newest_named_first.write_text("<html></html>", encoding="utf-8")
+    oldest_named_last.write_text("<html></html>", encoding="utf-8")
+    os.utime(newest_named_first, (1_800_000_000, 1_800_000_000))
+    os.utime(oldest_named_last, (1_700_000_000, 1_700_000_000))
+
+    dialog.refresh_history()
+    dialog.history_tree.sortItems(1, Qt.SortOrder.AscendingOrder)
+
+    assert _column(dialog.history_tree, 0) == ["modelreport_b.html", "modelreport_a.html"]
+
+
 def test_opening_a_report_when_there_are_none_says_so(dialog) -> None:
     dialog.open_selected_report()
 

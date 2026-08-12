@@ -30,6 +30,8 @@ import pytest
 pytest.importorskip("PySide6")
 pytest.importorskip("tkinter")  # sorter.ui.theme (the palettes) imports it
 
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QDialog
 
 from sorter import paths
@@ -388,7 +390,12 @@ def test_signing_in_switches_the_page_and_tells_the_window(window, api) -> None:
 # ----- the catalogue -----------------------------------------------------------
 
 
-def test_the_list_carries_the_facts_the_tk_cards_showed(window, api) -> None:
+def test_the_list_carries_the_facts_the_tk_cards_showed(window, api, monkeypatch) -> None:
+    from PySide6.QtCore import QLocale
+
+    from sorter.qtui import formatting
+
+    monkeypatch.setattr(formatting, "_locale", lambda: QLocale("sv_SE"))
     api.models = [info(description="Mixed range pickup", size=5 * 1024 * 1024)]
     page = build_page(window, api, auth=FakeAuth())
     page.refresh_auth_state()
@@ -401,7 +408,9 @@ def test_the_list_carries_the_facts_the_tk_cards_showed(window, api) -> None:
     assert cell(page, 0, "Headstamps") == "3"
     assert cell(page, 0, "Images") == "12"
     assert cell(page, 0, "Size") == "5.00 MB"
-    assert cell(page, 0, "Published") == "3/4/2026"
+    # Published date renders in the OS's regional format (qtui.formatting),
+    # pinned to sv_SE here rather than the CI machine's real locale.
+    assert cell(page, 0, "Published") == "2026-03-04"
     assert cell(page, 0, "Author") == "publisher"
     assert cell(page, 0, "State") == STATE_LABELS[STATE_DOWNLOAD]
     # The description follows the selection rather than repeating per row.
@@ -409,13 +418,232 @@ def test_the_list_carries_the_facts_the_tk_cards_showed(window, api) -> None:
     assert page.hint_label.text() == "Mixed range pickup"
 
 
-def test_size_and_date_formatting_degrade_gracefully() -> None:
+def test_size_and_date_formatting_degrade_gracefully(monkeypatch) -> None:
+    from PySide6.QtCore import QLocale
+
+    from sorter.qtui import formatting
+
+    monkeypatch.setattr(formatting, "_locale", lambda: QLocale("sv_SE"))
     assert format_size(0) == "—"
     assert format_size(900) == "900 B"
     assert format_size(1536) == "1.50 KB"
-    assert format_date("") == ""
-    assert format_date("not a date") == "not a date"
-    assert format_date("2026-01-09") == "1/9/2026"
+    # ``format_date`` is now a thin wrapper over ``qtui.formatting`` — see
+    # that module's own tests for the locale-formatting behavior itself.
+    assert format_date("") == "—"
+    assert format_date("not a date") == "—"
+    assert format_date("2026-01-09") == "2026-01-09"
+
+
+# ----- column sorting -----------------------------------------------------------
+
+
+def click_header(page: Any, column_name: str) -> None:
+    """A genuine mouse click on the header section, not ``.emit()`` on the
+    signal — this is what proves click *delivery* (geometry, clickability)
+    actually reaches the handler the way a real user's click does, not just
+    that the handler is correct once invoked. See models_page's test module
+    for the full offscreen-quirk rationale this mirrors: the page here is a
+    standalone top-level widget in these tests (never inserted into a real
+    window's ``QStackedWidget``), so showing it directly is enough to make
+    its header paintable — no page navigation needed, unlike Models.
+    """
+    if not page.isVisible():
+        page.resize(1000, 400)
+        page.show()
+        QTest.qWait(0)
+    header = page.tree.header()
+    column = COLUMNS.index(column_name)
+
+    def click_column(index: int) -> None:
+        x = header.sectionViewportPosition(index) + header.sectionSize(index) // 2
+        QTest.mouseClick(
+            header.viewport(),
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+            QPoint(x, header.height() // 2),
+        )
+
+    prev_column, prev_order = page._sort_column, page._sort_order
+    if column == prev_column:
+        expected_order = (
+            Qt.SortOrder.DescendingOrder if prev_order == Qt.SortOrder.AscendingOrder else Qt.SortOrder.AscendingOrder
+        )
+    else:
+        expected_order = Qt.SortOrder.AscendingOrder
+
+    attempts = 6
+    for _attempt in range(attempts):
+        click_column(column)
+        if page._sort_column == column and page._sort_order == expected_order:
+            return
+        click_column(column - 1 if column else min(column + 1, len(COLUMNS) - 1))
+    raise AssertionError(f"header click on {column_name!r} never registered after {attempts} attempts")
+
+
+def synthetic_order(page: Any, wanted: tuple[str, ...]) -> list[str]:
+    """The relative order of just the given model names among all rows."""
+    shown = names(page)
+    return [n for n in shown if n in wanted]
+
+
+def test_images_column_sorts_numerically_not_lexically(window, api) -> None:
+    # Lexical order would read "10" < "2" < "3"; numeric order must not.
+    api.models = [
+        info(uid="ten", name="Ten", images=10),
+        info(uid="two", name="Two", images=2),
+        info(uid="three", name="Three", images=3),
+    ]
+    page = build_page(window, api, auth=FakeAuth())
+    page.refresh_auth_state()
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 3)
+
+    click_header(page, "Images")
+
+    assert [cell(page, row, "Images") for row in range(3)] == ["2", "3", "10"]
+
+
+def test_published_column_sorts_chronologically_not_by_locale_text(window, api) -> None:
+    # The displayed text is locale-formatted (qtui.formatting), which
+    # doesn't sort chronologically in general — the typed sort key must be
+    # the underlying date instead.
+    api.models = [
+        info(uid="newer", name="Newer", published="2026-08-10T09:00:00"),
+        info(uid="older", name="Older", published="2025-01-05T09:00:00"),
+    ]
+    page = build_page(window, api, auth=FakeAuth())
+    page.refresh_auth_state()
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 2)
+
+    click_header(page, "Published")
+
+    assert names(page) == ["Older", "Newer"]
+
+
+def test_state_column_sorts_by_actionability_not_alphabetically(window, api, config) -> None:
+    # Alphabetizing the labels ("Available", "Installed", "Update available")
+    # would not read as a sane order — "needs action" belongs first.
+    installed = info(uid="already-installed", name="Already installed")
+    ModelRepo(config.db).create(
+        Model(
+            name="Already installed",
+            cartridge_id=CartridgeRepo(config.db).list()[0].id,
+            community_model_uid="already-installed",
+            model_version=installed.model_version,
+        )
+    )
+    api.models = [installed, info(uid="brand-new", name="Brand new")]
+    page = build_page(window, api, auth=FakeAuth())
+    page.refresh_auth_state()
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 2)
+
+    click_header(page, "State")
+
+    assert names(page) == ["Brand new", "Already installed"]
+
+
+def test_every_column_sorts_and_toggles_on_a_real_header_click(window, api) -> None:
+    """EVERY column, via genuine mouse clicks (not signal.emit()): a first
+    click sorts ascending, a second click on the same header reverses it.
+
+    Three rows, each column given genuinely distinct values, so a column
+    that silently didn't sort can't hide behind ties or coincidental order.
+    """
+    api.models = [
+        info(
+            uid="bravo",
+            name="Bravo",
+            cartridge=".223",
+            version=5,
+            export_mode="ModelOnly",
+            headstamps=2,
+            images=5,
+            size=1000,
+            published="2025-06-01T08:00:00",
+            author="zoe",
+        ),
+        info(
+            uid="alpha",
+            name="Alpha",
+            cartridge="22-250",
+            version=20,
+            export_mode="ImagesOnly",
+            headstamps=9,
+            images=20,
+            size=2_000_000,
+            published="2026-01-01T08:00:00",
+            author="amy",
+        ),
+        info(
+            uid="charlie",
+            name="Charlie",
+            cartridge="6.5 CM",
+            version=1,
+            export_mode="ModelAndImages",
+            headstamps=1,
+            images=1,
+            size=500,
+            published="2024-01-01T08:00:00",
+            author="mo",
+        ),
+    ]
+    page = build_page(window, api, auth=FakeAuth())
+    page.refresh_auth_state()
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 3)
+
+    wanted = ("Bravo", "Alpha", "Charlie")
+    for column_name in (
+        "Model",
+        "Cartridge",
+        "Version",
+        "Includes",
+        "Headstamps",
+        "Images",
+        "Size",
+        "Published",
+        "Author",
+    ):
+        click_header(page, column_name)
+        ascending = synthetic_order(page, wanted)
+        assert len(ascending) == 3, f"{column_name!r}: a synthetic row went missing after sorting"
+
+        click_header(page, column_name)
+        descending = synthetic_order(page, wanted)
+        assert descending == list(reversed(ascending)), (
+            f"{column_name!r} didn't reverse on a second (real) click: {ascending} -> {descending}"
+        )
+
+
+def test_default_order_is_unchanged_until_a_header_is_clicked(window, api) -> None:
+    api.models = [info(uid="z", name="Zed"), info(uid="a", name="Alpha")]
+    page = build_page(window, api, auth=FakeAuth())
+    page.refresh_auth_state()
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 2)
+
+    # The server's own result order stands — no sort has been requested yet.
+    assert names(page) == ["Zed", "Alpha"]
+
+
+def test_selection_survives_a_header_click_sort(window, api) -> None:
+    api.models = [info(uid="z", name="Zed"), info(uid="a", name="Alpha")]
+    page = build_page(window, api, auth=FakeAuth())
+    page.refresh_auth_state()
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 2)
+    select_row(page, 0)
+    assert page.selected_uid() == "z"
+
+    click_header(page, "Model")
+
+    assert page.selected_uid() == "z"
+
+
+def test_column_resizing_stays_interactive_after_sorting_is_wired(page) -> None:
+    from PySide6.QtWidgets import QHeaderView
+
+    header = page.tree.header()
+    click_header(page, "Model")
+
+    for column in range(len(COLUMNS)):
+        assert header.sectionResizeMode(column) == QHeaderView.ResizeMode.Interactive
 
 
 def test_the_filters_are_what_the_server_is_asked_for(page, window, api) -> None:
@@ -503,15 +731,17 @@ def test_the_state_column_and_action_follow_the_local_library(window, api, confi
     assert page.download_button.objectName() == "action"
 
 
-# ----- identity, share gating, sign-out ----------------------------------------
+# ----- share gating, sign-out ---------------------------------------------------
+# Identity display moved to the status bar (JL): the page used to carry its own
+# "Signed in as ... [Sign out]" row, duplicating the status bar's Sign out
+# button — see test_qt_chrome.py for the status-bar identity_label coverage.
 
 
-def test_the_identity_line_and_share_gating_follow_the_role(window, api) -> None:
+def test_read_only_role_never_shows_the_share_button(window, api) -> None:
     page = build_page(window, api, auth=FakeAuth())
     page.refresh_auth_state()
 
-    assert drain_until(window, lambda: page.identity_label.text() == "Ada Lovelace (ada@example.com)")
-    # Read-only role: the Share button never appears.
+    assert drain_until(window, lambda: page.community_username != "")
     assert not page.can_contribute
     assert page.share_button.isHidden()
 
@@ -531,7 +761,7 @@ def test_the_community_handle_stands_in_for_a_missing_name(window, api) -> None:
     page = build_page(window, api, auth=FakeAuth(name=None))
     page.refresh_auth_state()
 
-    assert drain_until(window, lambda: page.identity_label.text() == "ada (ada@example.com)")
+    assert drain_until(window, lambda: page.community_username == "ada")
 
 
 def test_sign_out_needs_confirmation(page, window) -> None:
