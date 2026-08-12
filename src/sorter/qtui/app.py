@@ -22,16 +22,30 @@ from collections.abc import Callable
 from typing import Any
 
 import numpy as np
-from PySide6.QtCore import Qt, QTimer  # ty: ignore[unresolved-import]
-from PySide6.QtGui import QImage, QPixmap  # ty: ignore[unresolved-import]
+from PySide6.QtCore import Qt, QTimer, QUrl  # ty: ignore[unresolved-import]
+from PySide6.QtGui import (  # ty: ignore[unresolved-import]
+    QDesktopServices,
+    QFontDatabase,
+    QImage,
+    QKeySequence,
+    QPixmap,
+)
 from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QApplication,
+    QButtonGroup,
     QComboBox,
+    QDockWidget,
     QHBoxLayout,
     QLabel,
+    QListWidget,
     QMainWindow,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
     QSizePolicy,
-    QTabWidget,
+    QSplitter,
+    QStackedWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -41,6 +55,7 @@ from ..control.events import EventBus
 from ..hardware import serial_broker
 from ..hardware.camera import Camera
 from ..hardware.serial_emulator import EMULATED_PORT, EmulatorBroker
+from ..paths import app_data_dir
 from ..ui.theme import (
     SETTING_CUSTOM_THEMES,
     SETTING_THEME,
@@ -53,7 +68,15 @@ from .theme import build_stylesheet
 
 PREVIEW_FPS = 20
 HEADER_HEIGHT = 56
+SIDEBAR_WIDTH = 84
+SERIAL_LOG_LINES = 500
 PLACEHOLDER_TEXT = "Not ported to the Qt spike yet — launch without --qt for the full UI."
+NOT_PORTED_TOOLTIP = "Not ported in the spike"
+
+# Sidebar: (glyph, page name). Settings is pinned to the bottom, below the stretch.
+ACTIVITIES = (("▶", "Sort"), ("🎓", "Train"), ("📦", "Models"), ("🌐", "Community"))
+SETTINGS_ACTIVITY = ("⚙", "Settings")
+SETTINGS_SECTIONS = ("Camera", "Serial", "Image Proc", "AI Config", "Updates", "Theme")
 
 
 class QtMainWindow(QMainWindow):
@@ -62,6 +85,7 @@ class QtMainWindow(QMainWindow):
         self.config = config
         self.db = getattr(config, "db", None)
         self.bus = EventBus()
+        self._muted_labels: list[QLabel] = []
 
         load_custom_themes(self._load_setting(SETTING_CUSTOM_THEMES))
         self.theme_name = resolve_theme(self._load_setting(SETTING_THEME))
@@ -79,6 +103,9 @@ class QtMainWindow(QMainWindow):
         )
 
         self.bus.subscribe("status", self.set_status)
+        self.bus.subscribe("serial/rx", lambda line: self._append_serial("<-", line))
+        self.bus.subscribe("serial/tx", lambda line: self._append_serial("->", line))
+        self.bus.subscribe("serial/note", lambda line: self._append_serial("--", line))
         self._bus_timer = QTimer(self)
         self._bus_timer.timeout.connect(lambda: self.bus.drain(max_items=128))
         self._bus_timer.start(50)
@@ -100,25 +127,23 @@ class QtMainWindow(QMainWindow):
         layout.setSpacing(0)
         layout.addWidget(self._build_header())
 
-        self.tabs = QTabWidget(central)
-        self.preview_label = QLabel("No frame", self.tabs)
-        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        # Ignored + tiny minimum: the label must never report the pixmap as
-        # its size hint, or each scaled frame grows the layout that the next
-        # frame is scaled to — the window ratchets larger on every repaint.
-        self.preview_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-        self.preview_label.setMinimumSize(1, 1)
-        # A video letterbox is black in every theme; not chrome, so not themed.
-        self.preview_label.setStyleSheet("background-color: #000000; color: #808080;")
-        camera_tab = QWidget(self.tabs)
-        camera_layout = QVBoxLayout(camera_tab)
-        camera_layout.setContentsMargins(8, 8, 8, 8)
-        camera_layout.addWidget(self.preview_label)
-        self.tabs.addTab(self._placeholder_tab(), "Run")
-        self.tabs.addTab(camera_tab, "Camera")
-        self.tabs.addTab(self._placeholder_tab(), "Serial")
-        layout.addWidget(self.tabs, 1)
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        self.pages = QStackedWidget(central)
+        self._pages_by_name: dict[str, QWidget] = {}
+        self._add_page("Sort", self._build_sort_page())
+        for name in ("Train", "Models", "Community"):
+            self._add_page(name, self._placeholder_page())
+        self._add_page("Settings", self._build_settings_page())
+        body.addWidget(self._build_sidebar())
+        body.addWidget(self.pages, 1)
+        layout.addLayout(body, 1)
         self.setCentralWidget(central)
+
+        # The dock is built before the menus: View hosts its toggle action.
+        self._build_serial_dock()
+        self._build_menus()
 
         self._camera_state = ("Camera: disconnected", False)
         self._serial_state = ("Serial: disconnected", False)
@@ -143,27 +168,186 @@ class QtMainWindow(QMainWindow):
         font.setPointSize(font.pointSize() + 5)
         title.setFont(font)
         row.addWidget(title)
-        subtitle = QLabel("Open Source Client", header)
-        subtitle.setStyleSheet(f"color: {self.palette_colors['text_muted']};")
-        self._subtitle = subtitle
-        row.addWidget(subtitle)
+        row.addWidget(self._muted_label("Open Source Client", header))
         row.addStretch(1)
-        self.theme_combo = QComboBox(header)
-        self.theme_combo.addItems(theme_names())
-        self.theme_combo.setCurrentText(self.theme_name)
-        self.theme_combo.currentTextChanged.connect(self.set_theme)
-        row.addWidget(self.theme_combo)
         return header
 
-    def _placeholder_tab(self) -> QWidget:
-        page = QWidget(self.tabs)
-        layout = QVBoxLayout(page)
-        label = QLabel(PLACEHOLDER_TEXT, page)
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    def _muted_label(self, text: str, parent: QWidget | None = None) -> QLabel:
+        """A label in the muted role — registered so a theme switch recolors it."""
+        label = QLabel(text, parent)
         label.setStyleSheet(f"color: {self.palette_colors['text_muted']};")
-        self._placeholder_labels = [*getattr(self, "_placeholder_labels", []), label]
+        self._muted_labels.append(label)
+        return label
+
+    def _placeholder_page(self, text: str = PLACEHOLDER_TEXT) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        label = self._muted_label(text, page)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setWordWrap(True)
         layout.addWidget(label)
         return page
+
+    def _add_page(self, name: str, page: QWidget) -> None:
+        self._pages_by_name[name] = page
+        self.pages.addWidget(page)
+
+    def _build_sidebar(self) -> QWidget:
+        sidebar = QWidget(self)
+        sidebar.setObjectName("sidebar")
+        sidebar.setFixedWidth(SIDEBAR_WIDTH)
+        column = QVBoxLayout(sidebar)
+        column.setContentsMargins(6, 8, 6, 8)
+        column.setSpacing(4)
+
+        self.sidebar_buttons: dict[str, QToolButton] = {}
+        # The group owns exclusivity; keep the reference or it is collected.
+        self._sidebar_group = QButtonGroup(self)
+        self._sidebar_group.setExclusive(True)
+        for glyph, name in ACTIVITIES:
+            column.addWidget(self._activity_button(sidebar, glyph, name))
+        column.addStretch(1)
+        column.addWidget(self._activity_button(sidebar, *SETTINGS_ACTIVITY))
+
+        self.sidebar_buttons["Sort"].setChecked(True)
+        self.show_page("Sort")
+        return sidebar
+
+    def _activity_button(self, parent: QWidget, glyph: str, name: str) -> QToolButton:
+        button = QToolButton(parent)
+        button.setText(f"{glyph}\n{name}")
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        button.setCheckable(True)
+        button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        button.clicked.connect(lambda _checked=False, page=name: self.show_page(page))
+        self._sidebar_group.addButton(button)
+        self.sidebar_buttons[name] = button
+        return button
+
+    def _build_sort_page(self) -> QWidget:
+        page = QWidget()
+        column = QVBoxLayout(page)
+        column.setContentsMargins(12, 12, 12, 12)
+        column.setSpacing(10)
+
+        actions = QHBoxLayout()
+        self.action_buttons: dict[str, QPushButton] = {}
+        for text, object_name in (("Start", "action"), ("Stop", "danger"), ("Manual feed", "")):
+            button = QPushButton(text, page)
+            if object_name:
+                button.setObjectName(object_name)
+            # The run controller isn't wired in the spike; the row is chrome only.
+            button.setEnabled(False)
+            button.setToolTip(NOT_PORTED_TOOLTIP)
+            actions.addWidget(button)
+            self.action_buttons[text] = button
+        actions.addStretch(1)
+        column.addLayout(actions)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal, page)
+        self.preview_label = QLabel("No frame", splitter)
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Ignored + tiny minimum: the label must never report the pixmap as
+        # its size hint, or each scaled frame grows the layout that the next
+        # frame is scaled to — the window ratchets larger on every repaint.
+        self.preview_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.preview_label.setMinimumSize(1, 1)
+        # A video letterbox is black in every theme; not chrome, so not themed.
+        self.preview_label.setStyleSheet("background-color: #000000; color: #808080;")
+        splitter.addWidget(self.preview_label)
+        splitter.addWidget(self._placeholder_page("Slot grid not ported to the Qt spike yet."))
+        splitter.setSizes([600, 400])
+        column.addWidget(splitter, 1)
+
+        self.feed_label = self._muted_label("Recent classifications will appear here.", page)
+        column.addWidget(self.feed_label)
+        return page
+
+    def _build_settings_page(self) -> QWidget:
+        page = QWidget()
+        row = QHBoxLayout(page)
+        row.setContentsMargins(12, 12, 12, 12)
+        row.setSpacing(12)
+        self.settings_list = QListWidget(page)
+        self.settings_list.setFixedWidth(160)
+        self.settings_pages = QStackedWidget(page)
+        for name in SETTINGS_SECTIONS:
+            self.settings_list.addItem(name)
+            body = self._build_theme_section() if name == "Theme" else self._placeholder_page()
+            self.settings_pages.addWidget(body)
+        self.settings_list.currentRowChanged.connect(self.settings_pages.setCurrentIndex)
+        self.settings_list.setCurrentRow(0)
+        row.addWidget(self.settings_list)
+        row.addWidget(self.settings_pages, 1)
+        return page
+
+    def _build_theme_section(self) -> QWidget:
+        page = QWidget()
+        column = QVBoxLayout(page)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(6)
+        column.addWidget(QLabel("Theme", page))
+        self.theme_combo = QComboBox(page)
+        self.theme_combo.addItems(theme_names())
+        self.theme_combo.setCurrentText(self.theme_name)
+        # Connected last: setCurrentText must not count as the user choosing.
+        self.theme_combo.currentTextChanged.connect(self.set_theme)
+        self.theme_combo.setMaximumWidth(240)
+        column.addWidget(self.theme_combo)
+        column.addStretch(1)
+        return page
+
+    def _build_serial_dock(self) -> None:
+        self.serial_dock = QDockWidget("Serial Monitor", self)
+        self.serial_dock.setObjectName("serialDock")
+        self.serial_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetClosable
+            | QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+        )
+        self.serial_log = QPlainTextEdit(self.serial_dock)
+        self.serial_log.setObjectName("serialLog")
+        self.serial_log.setReadOnly(True)
+        self.serial_log.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        # Ring-buffer semantics, the QPlainTextEdit way — matches the Tk monitor's deque.
+        self.serial_log.setMaximumBlockCount(SERIAL_LOG_LINES)
+        self.serial_dock.setWidget(self.serial_log)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.serial_dock)
+
+    def _build_menus(self) -> None:
+        # menuBar().addMenu(str) hands the QMenu back with Python ownership; the
+        # menus have to be kept alive here or shiboken deletes them.
+        self.menus: dict[str, Any] = {}
+        file_menu = self.menus["File"] = self.menuBar().addMenu("&File")
+        open_data = file_menu.addAction("Open Data Folder")
+        open_data.triggered.connect(self._open_data_folder)
+        file_menu.addSeparator()
+        quit_action = file_menu.addAction("Quit")
+        quit_action.setShortcut(QKeySequence.StandardKey.Quit)
+        quit_action.triggered.connect(self.close)
+
+        toggle = self.serial_dock.toggleViewAction()
+        toggle.setText("Serial Monitor")
+        self.menus["View"] = self.menuBar().addMenu("&View")
+        self.menus["View"].addAction(toggle)
+
+        self.menus["Help"] = self.menuBar().addMenu("&Help")
+        about = self.menus["Help"].addAction("About")
+        about.triggered.connect(self._show_about)
+
+    # ----- navigation ---------------------------------------------------------
+
+    def show_page(self, name: str) -> None:
+        self.pages.setCurrentWidget(self._pages_by_name[name])
+
+    def _open_data_folder(self) -> None:
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(app_data_dir())))
+
+    def _show_about(self) -> None:
+        QMessageBox.about(self, "About", f"AI Case Sorter\nv{__version__}\nQt spike")
+
+    def _append_serial(self, prefix: str, line: Any) -> None:
+        self.serial_log.appendPlainText(f"{prefix} {str(line).rstrip()}")
 
     # ----- theme --------------------------------------------------------------
 
@@ -200,8 +384,7 @@ class QtMainWindow(QMainWindow):
         self.palette_colors = THEMES[name]
         self.setStyleSheet(build_stylesheet(self.palette_colors))
         muted = f"color: {self.palette_colors['text_muted']};"
-        self._subtitle.setStyleSheet(muted)
-        for label in getattr(self, "_placeholder_labels", []):
+        for label in self._muted_labels:
             label.setStyleSheet(muted)
         # Indicator dots carry state, not a palette role a stylesheet can reach.
         self._paint_indicators()

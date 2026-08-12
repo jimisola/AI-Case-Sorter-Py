@@ -135,8 +135,9 @@ Status: implemented on this branch. Design goals: prove the risky parts
   (`qtui/theme.py::build_stylesheet`). A theme added or edited on either side
   shows up in both.
 
-**Spike scope:** main-window shell (gradient header, theme picker, tabs,
-status bar), serial/camera status indicators driven by the bus, live camera
+**Increment 1 scope** (its layout is superseded by increment 2 below;
+everything else carries over): main-window shell (gradient header, theme
+picker, tabs, status bar), serial/camera status indicators driven by the bus, live camera
 preview (BGR numpy → `QImage`), serial auto-connect (same port-walking probe
 as the Tk UI), theme switching with persistence. Run/Serial tabs are
 placeholders — no tab logic is ported.
@@ -181,6 +182,59 @@ passed / 0 failed; ruff and ty clean.
   refactor (see below) is the one `ui/` change the design eventually needs.
 - **CI wiring is a decision, not free:** `build.yml` syncs without the extra,
   so the qtui tests skip there until a job adds `--extra qt`.
+
+### Second increment: the clean-slate layout (2026-08-12)
+
+The tabbed shell was a straight transcription of the Tk UI; increment 2 replaces
+it with the shell of the design in "Proposed layout (clean-slate)" below, to
+judge the *navigation* rather than the widgets. Still a layout spike — real
+chrome, placeholder content wherever porting tab logic would be needed.
+
+- **Activities sidebar** (fixed 84 px, exclusive `QToolButton`s) driving a
+  `QStackedWidget`: Sort / Train / Models / Community, with Settings pinned at
+  the bottom. Replaces the tab bar — the Tk UI's eight tabs don't fit one row,
+  and half of them are setup, not work.
+- **Sort is a dashboard**, not a tab: action row (Start/Stop/Manual feed,
+  disabled — no run controller in the spike) over a `QSplitter` holding the
+  camera preview beside the (unported) slot grid, with a one-line recent-
+  classification strip beneath.
+- **Settings is one page with a section list** (Camera, Serial, Image Proc, AI
+  Config, Updates, Theme), which is where the six configuration tabs go. The
+  theme picker moved out of the title bar into Settings → Theme; the header
+  keeps title/subtitle only.
+- **Serial monitor is a `QDockWidget`** (right, closable/floatable) instead of
+  the Tk detached `Toplevel` — `View → Serial Monitor` is literally the dock's
+  `toggleViewAction()`. It renders `serial/rx`, `serial/tx` and `serial/note`
+  from the bus into a `QPlainTextEdit` with `setMaximumBlockCount(500)` — the
+  ring buffer the Tk monitor hand-rolls with a deque.
+- **Menu bar**: File → Open Data Folder / Quit, View, Help → About. The Tk UI
+  has no menu bar at all; this is where "not a tab, not a button" actions
+  (data folder, updates, about) stop competing for status-bar space.
+
+Verified the same way as increment 1: 28 offscreen tests, full unit suite (823)
+green, ruff/ty clean.
+
+**Gotchas found in increment 2:**
+
+- **`QAction.menu()` destroys the menu.** Iterating `menuBar().actions()` and
+  calling `.menu()` on each hands back a *Python-owned* wrapper; when the
+  temporary is collected, shiboken deletes the C++ `QMenu` and the menu bar
+  silently loses that entry (later access raises "Internal C++ object already
+  deleted"). Keep the menus in a dict on the window (`self.menus`) and go
+  through that — in app code and in tests.
+- **`QWidget`-selector cascade bites again, harder.** The base
+  `QMainWindow, QWidget` rule paints every descendant, so each new container
+  (`#sidebar`, its `QToolButton`s) needs an explicit background or it fights
+  the surface it sits on. Same class of fix as `#header QLabel`.
+- **`QDockWidget::title` is style-able, its buttons are not** (without shipping
+  icons): float/close glyphs come from the platform style, so a dark palette
+  gets platform-colored controls on a themed title bar. Acceptable; icons are a
+  later polish item.
+- **`QSplitter::handle` needs an explicit `width`/`height`** as well as a
+  background, or the themed handle is invisible.
+- Emoji-as-icon in the sidebar works and renders fine offscreen, but real SVG
+  icons (`QIcon`) are the end state — emoji colour is out of the palette's
+  control, which breaks the "every color comes from the theme" rule.
 
 ## What retiring `ui/` would remove (beyond the directory itself)
 
@@ -240,6 +294,64 @@ decided against both:
   co-existence, along with the emulator and the firmware-pinned protocol
   tests.
 
+## Proposed layout (clean-slate)
+
+Per the port principle above, the Qt UI does not clone the Tk screens. The
+Tk UI's flat row of eight equal tabs treats daily activities and one-time
+setup as siblings; actual usage is that **Run is where an operator lives**,
+Train/Models/Community are occasional, and Camera/Serial/Image Proc/AI
+Config are setup surfaces visited rarely. The proposed shape follows what
+mature Qt apps converge on (Qt Creator, OBS, Telegram Desktop, Arduino
+IDE 2):
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ File  View  Tools  Help                                      │
+├────┬─────────────────────────────────────┬───────────────────┤
+│ ▶  │  [▶ Start]  [Feed 1]   Template ▾   │  Serial Monitor   │
+│Sort│ ┌───────────────┐ ┌───────────────┐ │  (dock, optional) │
+│ 🎓 │ │ live preview  │ │ slot cards    │ │ <- ok             │
+│Train│ │ (camera)     │ │ w/ counts     │ │ -> xf:0           │
+│ 📦 │ └───────────────┘ └───────────────┘ │ <- done           │
+│Mdls│  recent: 9mm ✓ .223 ✓ 9mm ✓ 45acp ?│                   │
+│ 🌐 │                                     │                   │
+│Comm│                                     │                   │
+│ ⚙️ │                                     │                   │
+├────┴─────────────────────────────────────┴───────────────────┤
+│ Idle.                    ● Camera: OK   ● Serial: COM3  ⟳ 👤 │
+└──────────────────────────────────────────────────────────────┘
+```
+
+1. **Left activity sidebar → `QStackedWidget`**, not a top tab row. Four
+   activities — Sort, Train, Models, Community — plus a Settings entry
+   pinned at the bottom (the Qt Creator mode-selector / Telegram pattern).
+   Mode-driven visibility (Train only for owned models, Community only when
+   signed in) maps to hiding/showing sidebar entries, same `mode/changed`
+   event as today.
+2. **Sort is a dashboard, not a form.** Live camera preview *in* the Sort
+   view (operators want to see what the machine sees while it runs), a
+   prominent Start/Stop, the slot-card grid with live counts, and the
+   recent-classification feed integrated — an OBS-style monitoring surface.
+   A `QSplitter` trades preview size against grid size.
+3. **All configuration becomes one Settings view**: Camera, Serial, Image
+   Proc, AI Config, Updates, Theme as a searchable section list (Qt Creator
+   Options / OBS Settings pattern). Removes four top-level tabs in one move.
+4. **`QDockWidget` for utility panels.** Serial monitor and classification
+   history become dockable/floatable panels — beside Sort on a wide screen,
+   floated to a second monitor, closed when irrelevant. Native Qt strength;
+   the Tk app grew detached toplevels precisely because Tk lacks this.
+5. **A real `QMenuBar` + shortcuts** (File/View/Tools/Help): Check for
+   Updates, Open Data Folder, Sign In, About. Free discoverability and
+   accessibility; absent in Tk because Tk menus fight the theming.
+6. **Empty states instead of assumptions.** No camera/board/model on first
+   run → guided panels with action buttons where the dashboard will be,
+   not tabs that presume a configured machine.
+
+Function parity per capability is unaffected — this changes where things
+live, not what exists. **Spike 2 on this branch implements the shell of
+this layout** (sidebar, dashboard skeleton, Settings view, serial-monitor
+dock, menu bar) with placeholders where real tab logic would go.
+
 ## Open questions
 
 - Is the pain mostly *visual* (option 2 fixes it) or *structural* — DPI,
@@ -267,3 +379,5 @@ decided against both:
 | 2026-08-12 | Spike implemented and verified (17 offscreen tests, full suite green, ruff/ty clean). Headless story confirmed; wheel estimate corrected to 256 MB (meta) vs ~80 MB (`PySide6-Essentials` — recommended); halftone/ink themes flagged as the one theming gap. |
 | 2026-08-12 | `[qt]` extra swapped to `PySide6-Essentials==6.11.1` — pixel-identical (spike uses only QtCore/QtGui/QtWidgets, all in essentials; the meta-package adds only unused addons + stubs). Gotcha for existing dev venvs: the wheels overlap, so uninstalling the meta clobbers `PySide6/__init__.py` and the stubs — fix with `uv sync --extra qt --reinstall-package pyside6-essentials`. |
 | 2026-08-12 | Hardware layer stays toolkit-neutral (pyserial + cv2); QtSerialPort/QtMultimedia rejected — see "The hardware layer stays toolkit-neutral". |
+| 2026-08-12 | Clean-slate layout proposed (activity sidebar + Sort dashboard + unified Settings + docks + menu bar — see "Proposed layout"); spike 2 implements its shell. |
+| 2026-08-12 | Spike 2 built and verified (28 offscreen tests, full unit suite green, ruff/ty clean). New gotchas: `QAction.menu()` deletes the menu it returns; dock title-bar buttons aren't themable without icons. Sidebar glyphs stay emoji until real `QIcon`s exist. |

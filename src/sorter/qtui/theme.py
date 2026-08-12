@@ -24,6 +24,7 @@ _FALLBACK = {
     "border": "#3a3a3a",
     "border_focus": "#8f8f8f",
     "text": "#d4d4d4",
+    "text_highlight": "#ffffff",
     "text_muted": "#9a9a9a",
     "text_inverse": "#121212",
     "accent_dim": "#2e2e2e",
@@ -37,7 +38,7 @@ _FALLBACK = {
 
 
 def build_stylesheet(palette: dict[str, str]) -> str:
-    """QSS for one palette: window, header gradient, tabs, buttons, fields, status bar."""
+    """QSS for one palette: window, header, sidebar, menus, dock, buttons, fields, status bar."""
     c = {**_FALLBACK, **{k: v for k, v in palette.items() if isinstance(v, str)}}
     return f"""
 QMainWindow, QWidget {{
@@ -50,6 +51,72 @@ QMainWindow, QWidget {{
         stop:0 {c["bg_gradient_a"]}, stop:1 {c["bg_gradient_b"]});
 }}
 #header QLabel {{ background: transparent; }}
+
+#sidebar {{ background-color: {c["bg_surface"]}; }}
+#sidebar QToolButton {{
+    background: transparent;
+    color: {c["text_muted"]};
+    border: none;
+    border-radius: 3px;
+    padding: 8px 2px;
+}}
+#sidebar QToolButton:hover {{ background-color: {c["bg_card_hover"]}; }}
+#sidebar QToolButton:checked {{
+    background-color: {c["bg_card_sel"]};
+    color: {c["text_highlight"]};
+}}
+
+QMenuBar {{
+    background-color: {c["bg_surface"]};
+    color: {c["text"]};
+}}
+QMenuBar::item {{ background: transparent; padding: 4px 10px; }}
+QMenuBar::item:selected {{ background-color: {c["bg_card_sel"]}; }}
+QMenu {{
+    background-color: {c["bg_card"]};
+    color: {c["text"]};
+    border: 1px solid {c["border"]};
+}}
+QMenu::item {{ padding: 4px 22px; }}
+QMenu::item:selected {{
+    background-color: {c["bg_card_sel"]};
+    color: {c["text_highlight"]};
+}}
+QMenu::separator {{ height: 1px; background-color: {c["border"]}; margin: 4px 0; }}
+
+QDockWidget {{ color: {c["text"]}; }}
+QDockWidget::title {{
+    background-color: {c["bg_surface"]};
+    color: {c["text"]};
+    padding: 5px 8px;
+}}
+
+QPlainTextEdit#serialLog {{
+    background-color: {c["bg_input"]};
+    color: {c["text"]};
+    border: 1px solid {c["border"]};
+}}
+
+QListWidget {{
+    background-color: {c["bg_input"]};
+    color: {c["text"]};
+    border: 1px solid {c["border"]};
+}}
+QListWidget::item {{ padding: 5px 8px; }}
+QListWidget::item:selected {{
+    background-color: {c["bg_card_sel"]};
+    color: {c["text_highlight"]};
+}}
+
+QSplitter::handle {{ background-color: {c["border"]}; }}
+QSplitter::handle:horizontal {{ width: 3px; }}
+QSplitter::handle:vertical {{ height: 3px; }}
+
+QToolTip {{
+    background-color: {c["bg_card"]};
+    color: {c["text"]};
+    border: 1px solid {c["border"]};
+}}
 
 QTabWidget::pane {{
     background-color: {c["bg_surface"]};

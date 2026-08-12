@@ -47,9 +47,63 @@ def window(qapp, config):
     win.close()
 
 
-def test_tabs(window) -> None:
-    titles = [window.tabs.tabText(i) for i in range(window.tabs.count())]
-    assert titles == ["Run", "Camera", "Serial"]
+def test_sidebar_activities(window) -> None:
+    assert list(window.sidebar_buttons) == ["Sort", "Train", "Models", "Community", "Settings"]
+    assert window.sidebar_buttons["Sort"].isChecked()
+    assert window.pages.currentWidget() is window._pages_by_name["Sort"]
+
+
+@pytest.mark.parametrize("name", ["Train", "Models", "Community", "Settings", "Sort"])
+def test_sidebar_switches_pages(window, name: str) -> None:
+    window.sidebar_buttons[name].click()
+
+    assert window.pages.currentWidget() is window._pages_by_name[name]
+    assert window.sidebar_buttons[name].isChecked()
+
+
+def test_sort_actions_are_present_but_disabled(window) -> None:
+    assert list(window.action_buttons) == ["Start", "Stop", "Manual feed"]
+    assert not any(button.isEnabled() for button in window.action_buttons.values())
+
+
+def test_serial_dock_logs_traffic(window) -> None:
+    assert not window.serial_dock.isHidden()
+
+    window.bus.post("serial/rx", "ok")
+    window.bus.drain()
+
+    assert "<- ok" in window.serial_log.toPlainText()
+
+
+def test_menus(window) -> None:
+    assert [a.text().replace("&", "") for a in window.menuBar().actions()] == [
+        "File",
+        "View",
+        "Help",
+    ]
+    # window.menus, not action.menu(): the latter hands back a Python-owned
+    # wrapper and destroys the C++ menu when the temporary is collected.
+    assert [a.text() for a in window.menus["View"].actions()] == ["Serial Monitor"]
+    assert window.serial_dock.toggleViewAction() in window.menus["View"].actions()
+
+
+def test_theme_section_hosts_the_theme_combo(window) -> None:
+    window.sidebar_buttons["Settings"].click()
+    window.settings_list.setCurrentRow(window.settings_list.count() - 1)
+
+    assert window.settings_list.currentItem().text() == "Theme"
+    page = window.settings_pages.currentWidget()
+    assert window.theme_combo.parentWidget() is page
+
+
+def test_theme_switch_restyles_the_window(window) -> None:
+    window.theme_combo.setCurrentText("Dark")
+    dark = window.styleSheet()
+
+    window.theme_combo.setCurrentText("Light")
+
+    assert window.styleSheet() != dark
+    assert window.theme_name == "Light"
 
 
 def test_indicators_start_disconnected(window) -> None:
