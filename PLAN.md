@@ -62,6 +62,7 @@ Status: ☐ todo · ▶ in progress · ✔ done · ✗ blocked
 | 15 | Theme editor (build/save/rename/import/export custom themes) — descopable; halftone/ink themes stay flat under Qt either way | `dialog_theme_editor.py` | Opus | ☐ |
 | 17 | **Headstamp manager dialog** (parents, auto-suggest, rename incl. on-disk image renames, unsaved guard — gap found in #5: Tk's Models tab has it, no Qt equivalent; ~660 Tk lines) | `dialog_headstamps.py` (Tk: inside `tab_models.py`) | Opus | ▶ |
 | 18 | **Application documentation** — original user guide for the OSS app, informed by the structure/topics of Seth's CS7.2 Application Guide PDF (his copyrighted work: adapt with permission, never copy); includes picking the format and an in-app context-aware help mechanism (see log) | new `docs/guide/` | — | ✗ **blocked: needs Seth's green light (JL 2026-08-13)** |
+| 19 | **Decouple qtui from ui/** (JL 2026-08-13: no qtui→ui dependencies): copy palettes + theme machinery to `qtui/palettes.py`, copy serial-monitor constants; byte-equality drift-pin tests against the ui/ originals (CI-enforced); drop tkinter importorskip from qtui tests | `ui/theme.py`, `ui/serial_monitor.py` (read-only) | Fable | ☐ (after wave-3 integration) |
 | 16 | CI: qt test job (offscreen, `--extra qt`); CLAUDE.md + docs final pass; parity sign-off checklist | workflows, docs | Fable | ☐ |
 
 Increments 1–2 run in parallel (disjoint modules; the orchestrator wires
@@ -144,3 +145,7 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
   the same docs source can back per-page F1 help via anchors, plus Qt's
   built-in QWhatsThis (Shift+F1 per-widget) and status-bar tips. Decision
   deferred to the increment itself.
+- 2026-08-13 — JL rules: NO runtime dependencies qtui→ui. Mechanism: copies
+  + byte-equality drift-pin tests (ui/ stays untouched; custom themes still
+  sync via the DB setting). Added as #19, right after wave-3 integration.
+  Docs' "one source of truth for colors" section to be amended accordingly.
