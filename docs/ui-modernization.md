@@ -463,6 +463,14 @@ dock, menu bar) with placeholders where real tab logic would go.
   everything else themes 1:1.)
 - CI: add a `--extra qt` job (or matrix leg) so the qtui tests actually run,
   and decide when the ~256 MB per-job download is worth it.
+- **For Seth — Image Proc settings persistence.** The Qt page currently
+  saves each parameter as it changes (no Save button); the Tk/WinForms flow
+  is edit-then-explicit-Save. Options: (a) keep save-on-change — fewer
+  clicks, no "forgot to save" losses, but no way to abandon an experiment;
+  (b) explicit **Save/Revert** pair like the legacy apps — familiar to
+  existing users and gives tuning sessions an undo; (c) save-on-change plus
+  a "Restore defaults / last-saved" escape hatch. Applies to the other
+  settings pages as they land, so worth deciding once.
 
 ## Decision log
 
