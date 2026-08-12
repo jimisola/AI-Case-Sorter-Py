@@ -64,7 +64,7 @@ Status: ☐ todo · ▶ in progress · ✔ done · ✗ blocked
 | 20 | **The PR** (JL 2026-08-13, clarified: **in the fork** — base `jimisola:main`, head `ui-modernization-research`, created by Fable via `gh`; Seth reviews by link; NOT a cross-repo PR to sjseth). Body top-to-bottom: (1) how to run the qtui (clone/sync/launch, three OSes); (2) explicit note that the Tk UI is untouched and remains the default — nothing removed (yet); (3) feature-parity table from PLAN's checklist; (4) design decisions (co-existence, activity sidebar, docks, function-not-UI parity) + the judgment-call register; (5) open items (register "Open" rows, halftone themes, #18 docs approval) + LINK the parity-gap issue jimisola#29 (Windows-guide inventory); (6) pros of the stack — LEAD with the testability contrast (JL): the Tk UI's modules sit at 9–19% coverage because its tests need a display and skip headless, while the Qt layer measures **91% (branch) fully headless** — same functionality, no Xvfb, no display server, 460+ tests in ~80s; include the per-layer coverage table, note whole-app 55% today rises sharply when ui/ retires, plus PySide6-Essentials sizing, LGPL/GPL fit, single-source docs PoC; (7) test/velocity numbers. Draft PR; no merge — Seth decides. | `docs/ui-modernization.md`, `PLAN.md` as sources | Fable | ☐ **GO GRANTED (JL 2026-08-13): create after the final sweep** |
 | 18 | **Application documentation** — original user guide for the OSS app, informed by the structure/topics of Seth's CS7.2 Application Guide PDF (his copyrighted work: adapt with permission, never copy); includes picking the format and an in-app context-aware help mechanism (see log) | new `docs/guide/` | — | ✗ **blocked: needs Seth's green light (JL 2026-08-13)** |
 | 19 | **Decouple qtui from ui/** (JL 2026-08-13: no qtui→ui dependencies): copy palettes + theme machinery to `qtui/palettes.py`, copy serial-monitor constants; byte-equality drift-pin tests against the ui/ originals (CI-enforced); drop tkinter importorskip from qtui tests | `ui/theme.py`, `ui/serial_monitor.py` (read-only) | Fable | ☐ (after wave-3 integration) |
-| 21 | Polish batch (JL live-testing): app-wide ISO dates (YYYY-MM-DD, 24h) via one shared helper regardless of UI language; Models-table column sorting (typed items, evaluator's `_SortableItem` pattern — natively supported by Qt); Settings gear colored via objectName QSS; file-filter labels that survive GNOME's paren-stripping (e.g. "Model archives — *.zip") | qtui polish | Sonnet | ▶ (dates respec'd: OS-locale formats via QLocale.system, NOT hardcoded ISO — JL correction) |
+| 21 | Polish batch (JL live-testing): OS-locale dates (QLocale.system, NOT hardcoded ISO — JL correction) via `qtui/formatting.py`; column sorting on ALL columns of BOTH Models and Community tables (typed `_SortableItem`s, AI row re-pinned after sort, selection survives, real header-click tests); Settings gear colored (update role); GNOME-proof file-filter labels; Run-options row removed (⚙ on action row); "Sorted this run"+Reset as slot-grid header; Community banner removed — identity + Sign out live in the status bar only; dead "Updates" settings section dropped | qtui polish | Sonnet | ✔ |
 | 16 | CI: qt test job (offscreen, `--extra qt`); CLAUDE.md + docs final pass; parity sign-off checklist | workflows, docs | Opus | ✔ (`1b9da2a`) |
 
 Increments 1–2 run in parallel (disjoint modules; the orchestrator wires
@@ -202,6 +202,12 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
 - 2026-08-13 — JL: PR body notes the serial monitor is a dock — pops out to
   a free-floating, resizable window and docks back (Arduino-IDE-style at the
   bottom); list with the small-improvements section.
+- 2026-08-13 — JL: PR's top "How to run" section gets a note: on Linux/
+  Wayland desktops, full window functionality (moving/resizing floated
+  docks) needs the xcb cursor util lib — `libxcb-cursor0` on Ubuntu/Debian,
+  `xcb-util-cursor` on Fedora/Arch (the app prefers `xcb;wayland`, and Qt's
+  xcb plugin needs it; without it Qt falls back and floated docks freeze
+  under native Wayland — upstream Qt limitation).
 - 2026-08-13 — spend-limit outage killed #21/#16 mid-run; credits restored,
   both resumed from transcript. #16 landed (`1b9da2a`): qtui CI job
   (offscreen, no Xvfb, out-of-matrix rationale in build.yml), 8-test e2e
