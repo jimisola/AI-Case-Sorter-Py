@@ -184,3 +184,6 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
 - 2026-08-13 — JL: quick parity batch (issue #29 B1/B2/A6/A12/A14/A16)
   WAITS until after the PR. Sequence locked: #21+#16 land → integrate +
   wire #15's editor button → #19 decoupling (Fable) → final sweep → PR.
+- 2026-08-13 — PR #30 CREATED as draft (token-safety, JL): body per spec
+  incl. small-improvements section; updated as 21/16/19 land, then sweep,
+  then un-draft.
