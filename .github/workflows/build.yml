@@ -73,6 +73,80 @@ jobs:
           name: junit-${{ matrix.os }}-py${{ matrix.python-version }}
           path: build/junit.xml
 
+  # The Qt UI's tests, and only those. Deliberately NOT folded into the matrix
+  # above, for three reasons:
+  #
+  #  * PySide6-Essentials is an ~80 MB wheel per job (79.9 MB Linux / 77.5 MB
+  #    Windows, from uv.lock), so the matrix would pay for it six times.
+  #  * That wheel is cp310-**abi3** -- one compiled binary serves 3.10 through
+  #    3.14 -- so running the same suite on three interpreters would exercise
+  #    the identical Qt build three times over. The Python-version question the
+  #    matrix exists to answer is already answered by the suite above, which
+  #    imports every non-Qt module the qtui code sits on.
+  #  * Keeping the qt extra out of the matrix keeps the *absent*-PySide6 path
+  #    honest: that is what a normal install has, and it is what makes the
+  #    qtui tests' `importorskip` skip rather than fail there.
+  #
+  # 3.13 rather than .python-version's 3.14: the 3.14 leg above is
+  # continue-on-error, and a red Qt job should never be ambiguous about which
+  # of the two it is.
+  qtui:
+    name: pytest qtui (offscreen, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        # One entry on purpose (see above) -- kept as a matrix axis so adding
+        # a version later is a one-word change, same shape as the job above.
+        python-version: ["3.13"]
+    env:
+      # The whole point of the Qt port's test story: Qt's own offscreen
+      # platform plugin, so there is no display server and no xvfb anywhere in
+      # this job (the Tk jobs still need theirs). tests/unit/qtui/conftest.py
+      # sets the same value with setdefault; this makes CI's intent legible.
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      # Exactly what `ldd` reports for the wheel's own
+      # PySide6/Qt/plugins/platforms/libqoffscreen.so, minus the C/C++ runtime
+      # and what the wheel bundles itself. Most are already on the runner
+      # image; listing them is what keeps this job independent of that.
+      # NOT libxcb-cursor0: that one belongs to libqxcb.so -- the plugin the
+      # desktop app picks (app.py's default_qpa_platform) and this job never
+      # loads. Verified by ldd on both plugins.
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1 libegl1 libglib2.0-0 libxkbcommon0 libdbus-1-3 \
+            libfontconfig1 libx11-6 libxcb1
+
+      # --locked for the same reason as the matrix above; --extra qt is what
+      # turns the qtui tests from skipped into run.
+      - name: Sync dependencies (with the qt extra)
+        run: uv sync --locked --extra qt --python ${{ matrix.python-version }}
+
+      - name: Run the qtui tests
+        run: >
+          uv run --locked --extra qt --python ${{ matrix.python-version }}
+          pytest tests/unit/qtui -q --junitxml=build/junit.xml
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: junit-qtui-${{ matrix.os }}
+          path: build/junit.xml
+
   launcher-smoke:
     name: verify launcher bootstrap (${{ matrix.os }})
     strategy:

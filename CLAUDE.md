@@ -89,9 +89,9 @@ automatically):**
   no `.git` present that overwrites a correct `src/sorter/_version.py` with
   `fallback-version = "0.0.0"`, and `0.0.0+unknown` parses as a pre-release,
   so every launch then sees the current release as newer and re-prompts.
-- **PySide6 spike UI** (developers only): append `--qt` (or set
-  `CASESORTER_QT=1`) to the direct launch above to get the experimental Qt
-  shell in `sorter/qtui/` instead of the Tk UI. Needs a one-time
+- **PySide6 UI** (opt-in; Tk is still what a launch gives you): append `--qt`
+  (or set `CASESORTER_QT=1`) to the direct launch above to get the Qt UI in
+  `sorter/qtui/` instead. Needs a one-time
   `uv sync --no-install-project --extra qt` first — PySide6 is the optional
   `[qt]` extra and bootstrap never installs it. See §5 and
   `docs/ui-modernization.md`.
@@ -106,6 +106,11 @@ directly under `tests/unit/`. Everything in `tests/unit/` uses synthetic
 fixtures only; `tests/integration/` stays flat — the two files that shell out
 to a real external tool (`uv build`, `git-cliff`) instead, each self-skipping
 if that tool is missing; `pytest -m "not integration"` skips them outright.
+`tests/unit/qtui/` is the exception to "mirrors a subpackage one-for-one" only
+in that it needs the `[qt]` extra: without PySide6 every module there skips
+itself, which is what a plain `pytest` on a normal install does. With the
+extra, `QT_QPA_PLATFORM=offscreen` (its `conftest.py` sets it) runs the whole
+UI headless — **no Xvfb, no display** (§5, §8).
 CI (`.github/workflows/build.yml`) runs the full matrix on every push/PR —
 run `pytest` locally before pushing regardless, since CI turnaround is slower
 than your own machine. The suite is threading-fragile by design (see
@@ -137,7 +142,7 @@ AI-Case-Sorter-Py/
 │       ├── update/              # self-update: check/stage + pre-launch apply
 │       ├── training/            # out-of-process ConvNeXt trainer
 │       ├── ui/                  # Tkinter UI (tabs + dialogs + theme)
-│       └── qtui/                # PySide6 spike shell (`--qt`; docs/ui-modernization.md)
+│       └── qtui/                # PySide6 UI (`--qt`; §5, docs/ui-modernization.md)
 ├── installer/               # Windows bootstrapper (see §7)
 └── tests/                   # pytest suite, mirrors src/sorter/'s subpackages
 ```
@@ -464,13 +469,13 @@ between them from the Run tab's template dropdown.
 
 ## 5. The UI (`sorter/ui/`)
 
-A second, experimental **PySide6 shell** lives in `sorter/qtui/` (launch with
-`--qt` or `CASESORTER_QT=1`; PySide6 is the optional `[qt]` extra). It reuses
-the event bus, hardware layers, and `ui.theme`'s palettes (rendered as QSS),
-and must never require changes inside `sorter/ui/` — the two UIs evolve in
-parallel. Scope, findings, and the port plan: `docs/ui-modernization.md`. Its
-tests (`tests/unit/qtui/`) run headless via `QT_QPA_PLATFORM=offscreen`, no
-Xvfb needed.
+This section is the **Tk** UI, which is what a launch still gives you. A
+second, opt-in **PySide6 UI** lives in `sorter/qtui/` (launch with `--qt` or
+`CASESORTER_QT=1`; PySide6 is the optional `[qt]` extra). It reuses the event
+bus, hardware layers, and `ui.theme`'s palettes (rendered as QSS), and must
+never require changes inside `sorter/ui/` — the two UIs evolve in parallel.
+Its own conventions are at the end of this section (*The Qt UI*); scope,
+findings and the port plan are in `docs/ui-modernization.md`.
 
 `MainWindow` (`app.py`) is the shell: gradient title bar (with the theme picker
 parked at its right edge), a `ttk.Notebook` of tabs (each wrapped in a
@@ -644,6 +649,63 @@ a separate one, so a built-in is never the thing being written to),
   sanctioned way to front a local-model action with the PyTorch install dialog.
   See *The PyTorch install gate* above.
 - **`sysutil.py`** — `open_path` (os.startfile / open / xdg-open).
+
+### The Qt UI (`sorter/qtui/`)
+
+The second UI, opt-in behind `--qt` (§2). It reuses every non-UI layer as-is
+and **must never require a change inside `sorter/ui/`** — the only thing it
+imports from there is `ui.theme`'s palettes.
+
+- **Shell (`app.py`).** `QtMainWindow` = an **activity sidebar** (Sort, Train,
+  Models, Community; Settings pinned below the stretch) driving a
+  `QStackedWidget` of pages, plus three **docks** — serial monitor (bottom),
+  classification history and the user guide (right, both hidden until asked
+  for) — a status bar (camera/serial indicators, update affordance, sign-in)
+  and File/View/Help menus. It owns the `EventBus`, `Camera`, broker,
+  `RunController` and `AuthManager`, exactly as Tk's `MainWindow` does.
+- **One module per surface.** Activity pages (`models_page.py`,
+  `train_page.py`, `community_page.py`), Settings sections
+  (`settings_{camera,serial,imageproc,ai}.py`) and dialogs (`dialog_*.py`)
+  each own their widgets and expose a `build_*(win)` factory taking the
+  window; `app.py` only wires them together. Settings sections are listed in
+  `SETTINGS_SECTIONS` and reached by name (`_open_settings_section`).
+- **The notify/confirm seam.** Anything that would open a native modal —
+  `win.notify`, a page's `confirm` / `ask_text` / `ask_open_path` /
+  `ask_save_path` / `ask_import_choice` — is an **instance attribute**, not a
+  method, so a test replaces it and nothing blocks. Keep it that way: a
+  `QMessageBox` called directly from a handler is untestable offscreen.
+- **Bus drain.** A 50 ms `QTimer` calls `bus.drain(max_items=128)`; workers go
+  through `run_worker(fn, on_done, on_error)` and post back. Same threading
+  rule as Tk (§8): no widget touch off the main thread, and `QTimer.singleShot`
+  is a main-thread-only deferral, not an escape hatch. A modal raised *from* a
+  bus handler is queued with `singleShot(0, …)` so it can't re-enter the drain.
+- **Palette-only QSS.** `qtui/theme.py`'s `build_stylesheet(palette)` renders
+  one `ui.theme` palette into a stylesheet keyed on **objectNames**
+  (`action`, `danger`, `update`, `slotCard`, `serialLog`, …) — set the
+  objectName, never a hard-coded color. Halftone/ink-outline themes render
+  flat here. The few places a stylesheet can't reach (rich text in the feed
+  and indicators, `QPlainTextEdit` line colors, painted history cards) bake
+  their colors in and are re-rendered by an explicit `apply_palette()` on
+  every switch.
+- **Gates and help.** `qtui/torch_gate.TorchGate` is bound once as
+  `win.ensure_torch` (`__call__` = hard gate, `offer` = once-per-session
+  soft gate) and is the only sanctioned front door for a local-model action.
+  `help_viewer.topic_for(page, section)` maps "where the user is" to an anchor
+  in `docs/guide/GUIDE.md`, which `QTextBrowser` renders directly; F1 and
+  Help → User Guide open the dock at that topic, falling back to the top of
+  the guide for anything the guide doesn't cover yet.
+- **Platform.** `default_qpa_platform()` prefers `xcb;wayland` on Linux — a
+  floated `QDockWidget` can't be moved or resized under native Wayland — and
+  always yields to an explicit `QT_QPA_PLATFORM`, which is what lets the tests
+  run offscreen.
+- **Tests** live in `tests/unit/qtui/` and run **offscreen, with no Xvfb**
+  (§8). `conftest.py` supplies `qapp`, a real SQLite-backed `config`,
+  `window_factory`/`window`, plus `seed_model` and `drain_until` (pump the bus
+  until a predicate holds — never a sleep). `test_qt_e2e.py` is the
+  cross-cutting layer: whole demo journeys (connect → assign → sort → counts,
+  a settings round-trip across a restart, a model's life from cartridge to
+  activation, F1 following the page) through the real bus, controller and
+  serial emulator, with only the camera and `classify_active` stubbed.
 
 ---
 
@@ -942,7 +1004,19 @@ flowchart TD
   Still run `pytest` locally before pushing — faster feedback than waiting on
   CI. Most UI modules need a display — `xvfb-run -a pytest` covers them on a
   headless box; without tkinter installed those modules skip rather than
-  fail. `lint.yml` also runs the [ty](https://docs.astral.sh/ty/) type checker
+  fail.
+  The Qt UI gets its **own job** (`qtui`), Linux + Windows on one Python:
+  `uv sync --locked --extra qt` and `QT_QPA_PLATFORM=offscreen`, running
+  `tests/unit/qtui` only — and **no Xvfb**, which is the point (Qt's offscreen
+  platform plugin needs no display server at all; the Tk jobs keep theirs).
+  It is deliberately not folded into the matrix: PySide6-Essentials is an
+  ~80 MB wheel, and it's an **abi3** wheel, so all six legs would download and
+  exercise the identical Qt binary. Leaving the extra out of the matrix also
+  keeps the no-PySide6 path — what a normal install has, and what makes those
+  tests `importorskip`-skip — covered. Its only Linux system deps are what
+  `ldd` reports for the offscreen plugin itself; `libxcb-cursor0` is
+  **not** among them (that belongs to the xcb plugin the desktop app uses).
+  `lint.yml` also runs the [ty](https://docs.astral.sh/ty/) type checker
   (`uv run ty check`), and it is **blocking** — the tree is at zero
   diagnostics, so anything it reports is something the PR introduced. Run it
   locally alongside `pytest` and `ruff`. **Fix the code, don't silence the
@@ -952,13 +1026,20 @@ flowchart TD
   extra, pygrabber/comtypes are Windows-only) or gaps in opencv's bundled
   stubs. Note the job does a **full** `uv sync` rather than `--only-group dev`:
   ty resolves third-party imports from the environment, so without the runtime
-  deps the output drowns in unresolved-import noise. The one `[tool.ty]` block
-  in `pyproject.toml` exists because `src/sorter/_version.py` is generated and
-  gitignored (§7): it is absent in CI (which never fires the build hook) and
-  present for anyone who has run `uv build`, so the `# ty: ignore` on its
-  import would otherwise flip to an *unused* ignore and fail the build for
-  contributors only. The override silences `unused-ignore-comment` for that
-  one file and nowhere else.
+  deps the output drowns in unresolved-import noise. That sync is
+  deliberately **without `--extra qt`**, which has a consequence worth knowing:
+  ty can't resolve PySide6 there, so every Qt type is unknown and
+  `sorter/qtui/` is effectively unchecked in CI — installing the extra *would*
+  type-check it, at the cost of the same ~80 MB download in a lint job and a
+  batch of new (real) diagnostics to clear first. Both `[[tool.ty.overrides]]`
+  blocks in `pyproject.toml` exist for the same two-states reason: a file whose
+  imports resolve for some contributors and not others, where a bare
+  `# ty: ignore` would flip to an *unused* ignore and fail the build for
+  exactly one of the two. `src/sorter/__init__.py` is one (`_version.py` is
+  generated and gitignored, §7 — absent in CI, present after a `uv build`);
+  `src/sorter/qtui/*` is the other (PySide6 absent in CI, present for anyone
+  who installed the `[qt]` extra). Each silences `unused-ignore-comment` for
+  those paths and nowhere else.
   `install-windows.ps1` gets its own workflow
   (`.github/workflows/installer-smoke.yml`), not `build.yml`'s blanket
   trigger: it needs a real published release to exercise its interesting
