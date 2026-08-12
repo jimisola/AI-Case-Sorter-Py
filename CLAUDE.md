@@ -130,7 +130,8 @@ AI-Case-Sorter-Py/
 │       ├── community/           # auth, community backend client, feedback loop
 │       ├── update/              # self-update: check/stage + pre-launch apply
 │       ├── training/            # out-of-process ConvNeXt trainer
-│       └── ui/                  # Tkinter UI (tabs + dialogs + theme)
+│       ├── ui/                  # Tkinter UI (tabs + dialogs + theme)
+│       └── qtui/                # PySide6 spike shell (`--qt`; docs/ui-modernization.md)
 ├── installer/               # Windows bootstrapper (see §7)
 └── tests/                   # pytest suite, mirrors src/sorter/'s subpackages
 ```
@@ -456,6 +457,14 @@ between them from the Run tab's template dropdown.
 ---
 
 ## 5. The UI (`sorter/ui/`)
+
+A second, experimental **PySide6 shell** lives in `sorter/qtui/` (launch with
+`--qt` or `CASESORTER_QT=1`; PySide6 is the optional `[qt]` extra). It reuses
+the event bus, hardware layers, and `ui.theme`'s palettes (rendered as QSS),
+and must never require changes inside `sorter/ui/` — the two UIs evolve in
+parallel. Scope, findings, and the port plan: `docs/ui-modernization.md`. Its
+tests (`tests/unit/qtui/`) run headless via `QT_QPA_PLATFORM=offscreen`, no
+Xvfb needed.
 
 `MainWindow` (`app.py`) is the shell: gradient title bar (with the theme picker
 parked at its right edge), a `ttk.Notebook` of tabs (each wrapped in a
