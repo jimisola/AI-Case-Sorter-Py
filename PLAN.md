@@ -149,3 +149,6 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
   + byte-equality drift-pin tests (ui/ stays untouched; custom themes still
   sync via the DB setting). Added as #19, right after wave-3 integration.
   Docs' "one source of truth for colors" section to be amended accordingly.
+- 2026-08-13 — JL: write out "Image Proc" as "Image Processing" in the UI.
+  Queued for the wave-3 integration pass (the string is in app.py, owned by
+  #6 until it lands).
