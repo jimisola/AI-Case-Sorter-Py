@@ -116,3 +116,7 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
   flagged), `connect_serial` decoupled from page widgets. Free-hands
   wishlist started in docs/ui-modernization.md (JL). Next wave: #5 Models
   (Opus) + #8 image browser (Sonnet, module-only).
+- 2026-08-12 ~23:25 — JL: session tokens nearly exhausted (reset ~01:00).
+  After increments 5+8 integrate, switch to ONE subagent at a time to pace
+  the burn; #12 (serial monitor parity, Sonnet) goes first as the cheapest
+  file-disjoint increment, then back to plan order after the reset.
