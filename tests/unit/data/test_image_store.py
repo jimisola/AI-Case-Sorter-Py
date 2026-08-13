@@ -115,5 +115,35 @@ def test_delete(tmp_path: Path) -> None:
     src.touch()
     assert image_store.delete(src) is True
     assert not src.exists()
-    # Deleting a missing file fails gracefully.
-    assert image_store.delete(src) is False
+    # The answer is "is it gone?": an already-missing file is a success, not
+    # a failure — the UI would otherwise warn about deleting what's deleted
+    # (and the Windows retry loop needs a racer's win to count as ours).
+    assert image_store.delete(src) is True
+
+
+def test_delete_retries_past_a_transient_windows_style_lock(tmp_path: Path, monkeypatch) -> None:
+    """A reader that momentarily holds the file (thumbnail worker mid-imread
+    on Windows) must not make the delete silently fail — found via a real
+    leftover file on Windows CI."""
+    src = tmp_path / "WIN__1.jpg"
+    src.touch()
+    real_unlink = Path.unlink
+    denials = [PermissionError("held open"), PermissionError("still open")]
+
+    def flaky_unlink(self: Path, *args, **kwargs):
+        if denials:
+            raise denials.pop(0)
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", flaky_unlink)
+
+    assert image_store.delete(src, retry_delay_s=0.001) is True
+    assert not src.exists()
+
+
+def test_delete_gives_up_on_a_permanent_lock(tmp_path: Path, monkeypatch) -> None:
+    src = tmp_path / "WIN__1.jpg"
+    src.touch()
+    monkeypatch.setattr(Path, "unlink", lambda self, *a, **k: (_ for _ in ()).throw(PermissionError("locked")))
+
+    assert image_store.delete(src, attempts=3, retry_delay_s=0.001) is False

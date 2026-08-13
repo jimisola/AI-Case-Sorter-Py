@@ -7,6 +7,7 @@ so the UI image-manager and evaluator share one source of truth.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -83,9 +84,23 @@ def reclassify(path: Path | str, new_headstamp: str) -> Path | None:
         return None
 
 
-def delete(path: Path | str) -> bool:
-    try:
-        Path(path).unlink()
-        return True
-    except OSError:
-        return False
+def delete(path: Path | str, *, attempts: int = 5, retry_delay_s: float = 0.05) -> bool:
+    """Remove one training image; ``True`` when it is gone.
+
+    Retries briefly: on Windows an unlink fails while any reader still holds
+    the file open, and the readers here are transient (a thumbnail worker
+    mid-``imread`` — found via a real leftover file on Windows CI). POSIX
+    unlinks an open file first try, so the loop only ever spins on Windows.
+    """
+    target = Path(path)
+    for attempt in range(attempts):
+        try:
+            target.unlink()
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError:
+            if attempt == attempts - 1:
+                return False
+            time.sleep(retry_delay_s)
+    return False

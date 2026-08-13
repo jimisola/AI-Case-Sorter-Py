@@ -432,8 +432,9 @@ class ModelImagesDialog(QDialog):
             return
         if not self.confirm("Delete images", f"Delete {len(selected)} image(s)? This cannot be undone."):
             return
-        for tile in selected:
-            image_store.delete(tile.path)
+        failed = [tile for tile in selected if not image_store.delete(tile.path)]
+        if failed:
+            self.notify("Delete failed", f"{len(failed)} image(s) could not be deleted — are they open elsewhere?")
         self.refresh()
 
     def _open_preview(self, path: str) -> None:
@@ -465,7 +466,10 @@ class ModelImagesDialog(QDialog):
     def _delete_one(self, tile: _ThumbTile) -> None:
         if not self.confirm("Delete image", f"Delete this image?\n\n{Path(tile.path).name}"):
             return
-        image_store.delete(tile.path)
+        if not image_store.delete(tile.path):
+            # A file that would not go must be said out loud (a silent False
+            # left images behind on Windows), not swallowed.
+            self.notify("Delete failed", f"Could not delete {Path(tile.path).name} — is it open elsewhere?")
         self.refresh()
 
     def _open_folder(self) -> None:
