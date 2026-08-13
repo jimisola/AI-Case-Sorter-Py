@@ -77,11 +77,22 @@ STATE_LABELS = {
     STATE_UPDATE: "Update available",
     STATE_INSTALLED: "Installed",
 }
+# Icon-only buttons (JL live-testing): a text label was clipped by the
+# narrow trailing column, so the glyph carries the action and the tooltip
+# carries the words. Unicode, not icon assets — themes recolor text for free.
 ACTION_LABELS = {
-    STATE_DOWNLOAD: "Download model",
-    STATE_UPDATE: "Update model",
-    STATE_INSTALLED: "Already installed",
+    STATE_DOWNLOAD: "⭳",
+    STATE_UPDATE: "⟳",
+    STATE_INSTALLED: "✓",
 }
+ACTION_TOOLTIPS = {
+    STATE_DOWNLOAD: "Download this model",
+    STATE_UPDATE: "Update the installed copy to this version",
+    STATE_INSTALLED: "Already installed and up to date",
+}
+# Wide enough for the glyph plus QSS padding; fixed so the trailing column
+# never squeezes it (ResizeToContents ignores item widgets).
+ACTION_BUTTON_WIDTH = 36
 # Sort order for the State column: needs-action states first, "nothing to do"
 # last — alphabetizing the labels ("Available", "Installed", "Update
 # available") would not read as a sane order.
@@ -352,6 +363,7 @@ class CommunityPage(QWidget):
 
     def _build_row_action(self, uid: str) -> QPushButton:
         button = QPushButton("")
+        button.setFixedWidth(ACTION_BUTTON_WIDTH)
         button.clicked.connect(lambda _checked=False, u=uid: self.download_row(u))
         return button
 
@@ -386,6 +398,7 @@ class CommunityPage(QWidget):
             info = next((m for m in self._models if m.model_uid == uid), None)
             state = self.installed_state(info) if info is not None else STATE_DOWNLOAD
             button.setText(ACTION_LABELS[state])
+            button.setToolTip(ACTION_TOOLTIPS[state])
             button.setEnabled(info is not None and state != STATE_INSTALLED and not self._busy)
             # Blue for an update, green for a download — the theme's rule for
             # "replace something installed" vs "primary/go" (ui/theme.py).

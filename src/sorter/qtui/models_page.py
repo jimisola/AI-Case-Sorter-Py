@@ -6,10 +6,9 @@ filter, create, edit, activate, delete, import/export ZIP, the synthetic
 calls and the same ``mode/changed`` post, so the two UIs agree on what a model
 is and who owns it.
 
-Layout follows the Windows app's table: one row per model, its actions on a
-trailing button strip (JL live-testing — a bottom bar that followed the
-selection was the earlier shape here). The columns carry the same facts Tk's
-cards did.
+Layout is Qt-idiomatic rather than a transcription: one table of models with
+an action row that follows the selection, instead of Tk's per-row card
+buttons. The columns carry the same facts the cards did.
 
 Three things worth knowing:
 
@@ -76,23 +75,6 @@ AI_CONFIG_NAME = "Use AI Config"
 AI_CONFIG_HINT = "Route classification through the AI Config page (HTTP server)."
 
 COLUMNS = ("Model", "Active", "Cartridge", "Type", "Mode", "Images", "Trained", "Last trained")
-# The button strip rides in one extra, unlabelled column past the data ones.
-# It carries no value, so it is excluded from the sort handler and from the
-# typed sort keys `_SortableItem` compares.
-ACTIONS_COLUMN = len(COLUMNS)
-# Label -> palette role (empty = the plain button look).
-ROW_ACTIONS: tuple[tuple[str, str], ...] = (
-    ("Activate", "action"),
-    ("Edit", ""),
-    ("Images", ""),
-    ("Headstamps", ""),
-    ("Evaluate", ""),
-    ("Export", ""),
-    ("Delete", "danger"),
-)
-# Actions a hook has to be attached for; without one the button is not built
-# at all, so the row never shows an action that leads nowhere.
-HOOKED_ACTIONS = ("Images", "Headstamps", "Evaluate")
 ACTIVE_MARK = "● ACTIVE"
 EMPTY_VALUE = "—"
 # GNOME's file-chooser portal strips the parenthesized "(*.zip)" from the
@@ -113,7 +95,7 @@ FOREIGN_NOTICE = (
     "Downloaded from the community and managed by its publisher, so it can't be "
     "trained here. To build on it, export it and import the archive back as your own."
 )
-SELECT_HINT = "Each row's buttons act on that model."
+SELECT_HINT = "Select a model to activate, edit, export or delete it."
 
 
 def describe_type(model: Model) -> str:
@@ -176,32 +158,8 @@ class _SortableItem(QTreeWidgetItem):
             return super().__lt__(other)
 
 
-class _RowActions(QWidget):
-    """One row's button strip, installed with ``setItemWidget``.
-
-    ``buttons`` is what the page (and the tests) reach for. Never hold one of
-    these across a sort: ``takeTopLevelItem`` destroys an item's widgets, so
-    ``ModelsPage._sync_row_actions`` re-installs whatever went missing and is
-    the only thing that should hand one out.
-    """
-
-    def __init__(self, actions: Sequence[tuple[str, str]]) -> None:
-        super().__init__()
-        self.setObjectName("rowActions")
-        row = QHBoxLayout(self)
-        row.setContentsMargins(4, 1, 4, 1)
-        row.setSpacing(4)
-        self.buttons: dict[str, QPushButton] = {}
-        for text, object_name in actions:
-            button = QPushButton(text, self)
-            if object_name:
-                button.setObjectName(object_name)
-            row.addWidget(button)
-            self.buttons[text] = button
-
-
 class ModelsPage(QWidget):
-    """The library table, its toolbar, and the per-row actions."""
+    """The library table plus its toolbar and selection-driven actions."""
 
     def __init__(self, win: Any) -> None:
         super().__init__()
@@ -243,6 +201,7 @@ class ModelsPage(QWidget):
         self.hint_label.setObjectName("rowHint")
         self.hint_label.setWordWrap(True)
         column.addWidget(self.hint_label)
+        column.addLayout(self._build_action_row())
 
         self.refresh()
 
@@ -281,20 +240,17 @@ class ModelsPage(QWidget):
     def _build_table(self) -> QTreeWidget:
         self.tree = QTreeWidget(self)
         self.tree.setObjectName("modelTable")
-        self.tree.setColumnCount(len(COLUMNS) + 1)
-        self.tree.setHeaderLabels([*COLUMNS, ""])
+        self.tree.setColumnCount(len(COLUMNS))
+        self.tree.setHeaderLabels(list(COLUMNS))
         self.tree.setRootIsDecorated(False)
         self.tree.setAlternatingRowColors(False)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        # Every data column user-draggable (JL); contents-sized once on fill,
-        # then the user's widths stick. A Stretch section can't be dragged —
-        # which is also why the last section doesn't stretch: that section is
-        # the button strip, and it has to hold exactly its buttons.
+        # Every column user-draggable (JL); contents-sized once on fill, then
+        # the user's widths stick. A Stretch section can't be dragged.
         header = self.tree.header()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        header.setStretchLastSection(False)
-        header.setSectionResizeMode(ACTIONS_COLUMN, QHeaderView.ResizeMode.ResizeToContents)
+        header.setStretchLastSection(True)
         # Sorting is driven by hand (`_on_header_clicked`), not
         # `setSortingEnabled(True)`: that flag re-sorts on every insert using
         # whatever column/order the header defaults to (column 0 descending),
@@ -308,8 +264,6 @@ class ModelsPage(QWidget):
         return self.tree
 
     def _on_header_clicked(self, column: int) -> None:
-        if column >= len(COLUMNS):
-            return  # the button strip is not data — clicking it sorts nothing
         if self._sort_column == column:
             self._sort_order = (
                 Qt.SortOrder.DescendingOrder
@@ -332,7 +286,6 @@ class ModelsPage(QWidget):
         if self._sort_column is not None:
             self.tree.sortItems(self._sort_column, self._sort_order)
         self._pin_ai_row()
-        self._sync_row_actions()
 
     def _pin_ai_row(self) -> None:
         """Keep the synthetic "Use AI Config" row first, regardless of sort.
@@ -343,11 +296,6 @@ class ModelsPage(QWidget):
         whole comparison, which would flip an "always least" row to "always
         last" on a descending click. Reinserting after the fact works the
         same regardless of which column or direction was clicked.
-
-        ``takeTopLevelItem`` destroys the item's widgets, so this row loses
-        its button strip every time it is re-pinned — ``_sync_row_actions``,
-        which every caller of ``_apply_sort`` runs straight after, is what
-        puts it back.
         """
         for i in range(self.tree.topLevelItemCount()):
             item = self.tree.topLevelItem(i)
@@ -380,13 +328,9 @@ class ModelsPage(QWidget):
             self._columns_sized = True
         # restoreState() also restores clickable/indicator-shown — and a blob
         # saved by a pre-sorting build restores them *off*, which silently
-        # kills header-click sorting. Re-assert them whatever the blob said,
-        # along with the button strip's own sizing (a blob carries per-section
-        # resize modes and stretch too).
+        # kills header-click sorting. Re-assert them whatever the blob said.
         header.setSectionsClickable(True)
         header.setSortIndicatorShown(True)
-        header.setStretchLastSection(False)
-        header.setSectionResizeMode(ACTIONS_COLUMN, QHeaderView.ResizeMode.ResizeToContents)
         return ok
 
     def _autosize_columns(self) -> None:
@@ -397,116 +341,45 @@ class ModelsPage(QWidget):
             self.tree.resizeColumnToContents(i)
         self.tree.setColumnWidth(0, max(self.tree.columnWidth(0), 260))
 
-    # ----- per-row actions ----------------------------------------------------
-
-    def _hook_for(self, action: str) -> Callable[[Model], None] | None:
-        return {
-            "Images": self.open_images,
-            "Headstamps": self.open_headstamps,
-            "Evaluate": self.open_evaluator,
-        }[action]
-
-    def _build_row_actions(self, model_id: int) -> _RowActions:
-        """The strip for one row. The AI Config row can only be activated."""
-        if model_id == AI_CONFIG_SENTINEL_ID:
-            widget = _RowActions([ROW_ACTIONS[0]])
-        else:
-            widget = _RowActions(
-                [
-                    (text, role)
-                    for text, role in ROW_ACTIONS
-                    if text not in HOOKED_ACTIONS or self._hook_for(text) is not None
-                ]
-            )
-        handlers: dict[str, Callable[[int], None]] = {
-            "Activate": self.activate_row,
-            "Edit": self.edit_row,
-            "Images": self.images_row,
-            "Headstamps": self.headstamps_row,
-            "Evaluate": self.evaluate_row,
-            "Export": self.export_row,
-            "Delete": self.delete_row,
-        }
-        for text, button in widget.buttons.items():
-            handler = handlers[text]
-            button.clicked.connect(lambda _checked=False, h=handler, i=model_id: h(i))
-        return widget
-
-    def row_actions(self, model_id: int) -> dict[str, QPushButton]:
-        """The live buttons for a row, looked up fresh.
-
-        Always ask for them by id rather than holding one: a sort or a re-pin
-        can destroy the strip (see ``_pin_ai_row``), and the replacement is a
-        different widget.
-        """
-        for i in range(self.tree.topLevelItemCount()):
-            item = self.tree.topLevelItem(i)
-            if item is not None and int(item.data(0, Qt.ItemDataRole.UserRole)) == model_id:
-                widget = self.tree.itemWidget(item, ACTIONS_COLUMN)
-                return dict(widget.buttons) if isinstance(widget, _RowActions) else {}
-        return {}
-
-    def _sync_row_actions(self) -> None:
-        """Re-install any strip that went missing, and refresh every state."""
-        active_id = self.settings.get_active_model_id()
-        by_id = dict(self._rows)
-        for i in range(self.tree.topLevelItemCount()):
-            item = self.tree.topLevelItem(i)
-            if item is None:
-                continue
-            model_id = int(item.data(0, Qt.ItemDataRole.UserRole))
-            widget = self.tree.itemWidget(item, ACTIONS_COLUMN)
-            if not isinstance(widget, _RowActions):
-                widget = self._build_row_actions(model_id)
-                self.tree.setItemWidget(item, ACTIONS_COLUMN, widget)
-            self._apply_row_state(widget, model_id, by_id.get(model_id), active_id)
-
-    def _apply_row_state(self, widget: _RowActions, model_id: int, model: Model | None, active_id: int | None) -> None:
-        buttons = widget.buttons
-        if model_id == AI_CONFIG_SENTINEL_ID:
-            buttons["Activate"].setEnabled(not self._busy and active_id is not None)
-            return
-        real = model is not None and not self._busy
-        buttons["Activate"].setEnabled(real and model is not None and model.id != active_id)
-        for name in ("Edit", "Export", "Delete"):
-            buttons[name].setEnabled(real)
-        # A community model's training images are the publisher's: it can't be
-        # trained here, so there is no training set to curate. (Tk leaves the
-        # browser open for these; the Train tab then refuses.)
-        if "Images" in buttons:
-            buttons["Images"].setEnabled(real and is_trainable(model))
-        # Tk parity: headstamps manageable on every model, foreign included
-        # (see the judgment-call register). Evaluate needs a checkpoint, not
-        # ownership — scoring a community model on your folder is legitimate.
-        if "Headstamps" in buttons:
-            buttons["Headstamps"].setEnabled(real)
-        if "Evaluate" in buttons:
-            buttons["Evaluate"].setEnabled(real and bool(model and model.model_path))
-
-    def _rebuild_row_actions(self) -> None:
-        """Drop every strip and build it again — a hook changed which buttons exist."""
-        for i in range(self.tree.topLevelItemCount()):
-            item = self.tree.topLevelItem(i)
-            if item is not None:
-                self.tree.setItemWidget(item, ACTIONS_COLUMN, None)
-        self._sync_row_actions()
+    def _build_action_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        self.buttons: dict[str, QPushButton] = {}
+        for text, object_name, handler in (
+            ("Activate", "action", self.activate_selected),
+            ("Edit…", "", self.edit_selected),
+            ("Images…", "", self.images_selected),
+            ("Headstamps…", "", self.headstamps_selected),
+            ("Evaluate…", "", self.evaluate_selected),
+            ("Export…", "", self.export_selected),
+            ("Delete", "danger", self.delete_selected),
+        ):
+            button = QPushButton(text, self)
+            if object_name:
+                button.setObjectName(object_name)
+            button.clicked.connect(handler)
+            row.addWidget(button)
+            self.buttons[text] = button
+        self.buttons["Images…"].setVisible(False)
+        row.addStretch(1)
+        return row
 
     def set_images_hook(self, open_images: Callable[[Model], None] | None) -> None:
         """Attach the training-image browser (increment 8).
 
-        The button exists only once something can answer it, so a row never
-        shows an action that leads nowhere.
+        The button appears only once something can answer it, so the page
+        never shows an action that leads nowhere.
         """
         self.open_images = open_images
-        self._rebuild_row_actions()
+        self.buttons["Images…"].setVisible(open_images is not None)
 
     def set_headstamps_hook(self, open_headstamps: Callable[[Model], None] | None) -> None:
         self.open_headstamps = open_headstamps
-        self._rebuild_row_actions()
+        self.buttons["Headstamps…"].setVisible(open_headstamps is not None)
 
     def set_evaluate_hook(self, open_evaluator: Callable[[Model], None] | None) -> None:
         self.open_evaluator = open_evaluator
-        self._rebuild_row_actions()
+        self.buttons["Evaluate…"].setVisible(open_evaluator is not None)
+        self._update_actions()
 
     # ----- data ---------------------------------------------------------------
 
@@ -587,7 +460,6 @@ class ModelsPage(QWidget):
     ) -> QTreeWidgetItem:
         item = _SortableItem(values, sort_values, model_id)
         self.tree.addTopLevelItem(item)
-        self.tree.setItemWidget(item, ACTIONS_COLUMN, self._build_row_actions(model_id))
         self._rows.append((model_id, model))
         return item
 
@@ -671,21 +543,34 @@ class ModelsPage(QWidget):
             return None
         return int(item.data(0, Qt.ItemDataRole.UserRole))
 
-    def select(self, model_id: int) -> None:
-        """Move the selection onto a row — what a row button does before acting."""
-        for i in range(self.tree.topLevelItemCount()):
-            item = self.tree.topLevelItem(i)
-            if item is not None and int(item.data(0, Qt.ItemDataRole.UserRole)) == model_id:
-                self.tree.setCurrentItem(item)
-                return
+    def selected_model(self) -> Model | None:
+        """The selected row's model, re-read from the DB (None for the AI row)."""
+        model_id = self.selected_id()
+        if model_id is None or model_id == AI_CONFIG_SENTINEL_ID:
+            return None
+        return self.models.get(model_id)
 
     def _update_actions(self) -> None:
-        """The hint follows the selection; the buttons follow their own row."""
         model_id = self.selected_id()
         is_ai_row = model_id == AI_CONFIG_SENTINEL_ID
         model = next((m for row_id, m in self._rows if row_id == model_id), None)
+        active_id = self.settings.get_active_model_id()
+        already_active = (active_id is None) if is_ai_row else (model is not None and model.id == active_id)
+        real = model is not None and not self._busy
+
+        self.buttons["Activate"].setEnabled((real or (is_ai_row and not self._busy)) and not already_active)
+        for name in ("Edit…", "Export…", "Delete"):
+            self.buttons[name].setEnabled(real)
+        # A community model's training images are the publisher's: it can't be
+        # trained here, so there is no training set to curate. (Tk leaves the
+        # browser open for these; the Train tab then refuses.)
+        self.buttons["Images…"].setEnabled(real and is_trainable(model))
+        # Tk parity: headstamps manageable on every model, foreign included
+        # (see the judgment-call register). Evaluate needs a checkpoint, not
+        # ownership — scoring a community model on your folder is legitimate.
+        self.buttons["Headstamps…"].setEnabled(real)
+        self.buttons["Evaluate…"].setEnabled(real and bool(model and model.model_path))
         self.hint_label.setText(self._hint_for(model, is_ai_row))
-        self._sync_row_actions()
 
     def _hint_for(self, model: Model | None, is_ai_row: bool) -> str:
         if is_ai_row:
@@ -696,26 +581,12 @@ class ModelsPage(QWidget):
             return FOREIGN_NOTICE
         return SELECT_HINT
 
-    def _act_on(self, model_id: int | None) -> Model | None:
-        """The row a button belongs to, re-read from the DB.
-
-        Also moves the selection onto that row: the hint line (and the
-        foreign-model notice) reads as commentary on what was just clicked.
-        """
-        if model_id is None or model_id == AI_CONFIG_SENTINEL_ID:
-            return None
-        self.select(model_id)
-        return self.models.get(model_id)
-
     # ----- activation ---------------------------------------------------------
 
     def activate_selected(self) -> None:
-        self.activate_row(self.selected_id())
-
-    def activate_row(self, model_id: int | None) -> None:
+        model_id = self.selected_id()
         if model_id is None:
             return
-        self.select(model_id)
         if model_id == AI_CONFIG_SENTINEL_ID:
             self.settings.clear_active_model()
             new_active: int | None = None
@@ -767,10 +638,7 @@ class ModelsPage(QWidget):
             self._win.set_status("Model created.")
 
     def edit_selected(self) -> None:
-        self.edit_row(self.selected_id())
-
-    def edit_row(self, model_id: int | None) -> None:
-        model = self._act_on(model_id)
+        model = self.selected_model()
         if model is None:
             return
         dialog = ModelEditorDialog(self.db, existing=model, parent=self)
@@ -779,37 +647,25 @@ class ModelsPage(QWidget):
             self._win.set_status(f"Saved '{model.name}'.")
 
     def headstamps_selected(self) -> None:
-        self.headstamps_row(self.selected_id())
-
-    def headstamps_row(self, model_id: int | None) -> None:
-        model = self._act_on(model_id)
+        model = self.selected_model()
         if model is None or self.open_headstamps is None:
             return
         self.open_headstamps(model)
 
     def evaluate_selected(self) -> None:
-        self.evaluate_row(self.selected_id())
-
-    def evaluate_row(self, model_id: int | None) -> None:
-        model = self._act_on(model_id)
+        model = self.selected_model()
         if model is None or self.open_evaluator is None:
             return
         self.open_evaluator(model)
 
     def images_selected(self) -> None:
-        self.images_row(self.selected_id())
-
-    def images_row(self, model_id: int | None) -> None:
-        model = self._act_on(model_id)
+        model = self.selected_model()
         if model is None or self.open_images is None:
             return
         self.open_images(model)
 
     def delete_selected(self) -> None:
-        self.delete_row(self.selected_id())
-
-    def delete_row(self, model_id: int | None) -> None:
-        model = self._act_on(model_id)
+        model = self.selected_model()
         if model is None:
             return
         if not self.confirm(
@@ -872,10 +728,7 @@ class ModelsPage(QWidget):
         self._win.notify("Import complete", message)
 
     def export_selected(self) -> None:
-        self.export_row(self.selected_id())
-
-    def export_row(self, model_id: int | None) -> None:
-        model = self._act_on(model_id)
+        model = self.selected_model()
         if model is None:
             return
         cartridge = self.cartridges.get(model.cartridge_id)
