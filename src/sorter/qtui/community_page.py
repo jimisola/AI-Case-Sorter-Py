@@ -2,9 +2,9 @@
 
 Behavior reference: ``ui/tab_community.py``. Same catalogue, same filters, the
 same download → ``import_model(community_download=True)`` path, and the same
-post-install messaging; the layout is the Qt table-plus-action-row idiom the
-Models activity already uses rather than Tk's stack of wide cards, so the two
-libraries read alike.
+post-install messaging; the layout is the table-with-per-row-actions idiom the
+Models activity uses rather than Tk's stack of wide cards, so the two libraries
+read alike.
 
 Three things worth knowing:
 
@@ -56,6 +56,9 @@ from ..data.repository import ModelRepo
 from . import formatting
 
 COLUMNS = ("Model", "Cartridge", "Version", "Includes", "Headstamps", "Images", "Size", "Published", "Author", "State")
+# The row's action button rides in one extra, unlabelled column past the data
+# ones. It carries no value, so it never sorts.
+ACTIONS_COLUMN = len(COLUMNS)
 
 # Display label -> the server's ModelType query value (empty = no filter).
 TYPE_FILTERS: dict[str, str] = {
@@ -85,7 +88,7 @@ ACTION_LABELS = {
 _STATE_SORT_RANK = {STATE_DOWNLOAD: 0, STATE_UPDATE: 1, STATE_INSTALLED: 2}
 
 EMPTY_VALUE = "—"
-SELECT_HINT = "Select a model to see its description and install it."
+SELECT_HINT = "Select a model to see its description; each row's button installs it."
 SIGNED_OUT_TEXT = (
     "Sign in to browse and download community models.\n\n"
     "Everything else in the app works signed out — the community is the only part that needs an account."
@@ -302,15 +305,18 @@ class CommunityPage(QWidget):
         self.tree = QTreeWidget(page)
         # Shares the models table's palette role — one table look in the app.
         self.tree.setObjectName("modelTable")
-        self.tree.setColumnCount(len(COLUMNS))
-        self.tree.setHeaderLabels(list(COLUMNS))
+        self.tree.setColumnCount(len(COLUMNS) + 1)
+        self.tree.setHeaderLabels([*COLUMNS, ""])
         self.tree.setRootIsDecorated(False)
         self.tree.setAlternatingRowColors(False)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         header = self.tree.header()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        header.setStretchLastSection(True)
+        # The last section is the action button, which has to hold exactly its
+        # own width — so nothing stretches, same as the Models table.
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(ACTIONS_COLUMN, QHeaderView.ResizeMode.ResizeToContents)
         # Sorting is driven by hand, not `setSortingEnabled(True)`: that flag
         # re-sorts on every insert using whatever column/order the header
         # defaults to (column 0 descending), which would sort the table
@@ -323,6 +329,8 @@ class CommunityPage(QWidget):
         return self.tree
 
     def _on_header_clicked(self, column: int) -> None:
+        if column >= len(COLUMNS):
+            return  # the action button is not data — clicking it sorts nothing
         if self._sort_column == column:
             self._sort_order = (
                 Qt.SortOrder.DescendingOrder
@@ -338,13 +346,63 @@ class CommunityPage(QWidget):
     def _apply_sort(self) -> None:
         if self._sort_column is not None:
             self.tree.sortItems(self._sort_column, self._sort_order)
+        self._sync_row_actions()
+
+    # ----- per-row actions ----------------------------------------------------
+
+    def _build_row_action(self, uid: str) -> QPushButton:
+        button = QPushButton("")
+        button.clicked.connect(lambda _checked=False, u=uid: self.download_row(u))
+        return button
+
+    def row_button(self, uid: str) -> QPushButton | None:
+        """The live action button for a row, looked up fresh.
+
+        Never hold one: a sort can destroy an item's widget, and the
+        replacement ``_sync_row_actions`` installs is a different object.
+        """
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            if item is not None and item.data(0, Qt.ItemDataRole.UserRole) == uid:
+                button = self.tree.itemWidget(item, ACTIONS_COLUMN)
+                return button if isinstance(button, QPushButton) else None
+        return None
+
+    def _sync_row_actions(self) -> None:
+        """Re-install any button that went missing, and relabel every row.
+
+        Label, palette role and enabled state all come from ``installed_state``
+        — the same computation the page has always used, now per row.
+        """
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            if item is None:
+                continue
+            uid = str(item.data(0, Qt.ItemDataRole.UserRole) or "")
+            button = self.tree.itemWidget(item, ACTIONS_COLUMN)
+            if not isinstance(button, QPushButton):
+                button = self._build_row_action(uid)
+                self.tree.setItemWidget(item, ACTIONS_COLUMN, button)
+            info = next((m for m in self._models if m.model_uid == uid), None)
+            state = self.installed_state(info) if info is not None else STATE_DOWNLOAD
+            button.setText(ACTION_LABELS[state])
+            button.setEnabled(info is not None and state != STATE_INSTALLED and not self._busy)
+            # Blue for an update, green for a download — the theme's rule for
+            # "replace something installed" vs "primary/go" (ui/theme.py).
+            self._set_role(button, "update" if state == STATE_UPDATE else "action")
+
+    def _set_role(self, button: QPushButton, object_name: str) -> None:
+        """Swap a button's palette role. QSS matches on the objectName, and
+        a live widget has to be re-polished for the new rule to take."""
+        if button.objectName() == object_name:
+            return
+        button.setObjectName(object_name)
+        style = button.style()
+        style.unpolish(button)
+        style.polish(button)
 
     def _build_action_row(self, page: QWidget) -> QHBoxLayout:
         row = QHBoxLayout()
-        self.download_button = QPushButton(ACTION_LABELS[STATE_DOWNLOAD], page)
-        self.download_button.setObjectName("action")
-        self.download_button.clicked.connect(self.download_selected)
-        row.addWidget(self.download_button)
         row.addStretch(1)
         # Sharing needs the Contribute role on the community server; the
         # button stays hidden until the role check answers, so a
@@ -571,8 +629,13 @@ class CommunityPage(QWidget):
                 info.model_uid,
             )
             self.tree.addTopLevelItem(item)
+            self.tree.setItemWidget(item, ACTIONS_COLUMN, self._build_row_action(info.model_uid))
+            # The description is prose — too long for a column of its own (JL),
+            # so it rides as the row's tooltip, on every cell rather than just
+            # the name, and stays on the detail line under the table.
             if info.model_description:
-                item.setToolTip(0, info.model_description)
+                for index in range(len(COLUMNS)):
+                    item.setToolTip(index, info.model_description)
         self._apply_sort()
         self._restore_selection(selected)
         self._autosize_columns()
@@ -623,24 +686,9 @@ class CommunityPage(QWidget):
         return next((m for m in self._models if m.model_uid == uid), None) if uid else None
 
     def _update_actions(self) -> None:
-        info = self.selected_info()
-        state = self.installed_state(info) if info is not None else STATE_DOWNLOAD
-        self.download_button.setText(ACTION_LABELS[state])
-        self.download_button.setEnabled(info is not None and state != STATE_INSTALLED and not self._busy)
-        # Blue for an update, green for a download — the theme's rule for
-        # "replace something installed" vs "primary/go" (ui/theme.py).
-        self._set_action_role("update" if state == STATE_UPDATE else "action")
-        self.hint_label.setText(self._hint_for(info))
-
-    def _set_action_role(self, object_name: str) -> None:
-        """Swap the button's palette role. QSS matches on the objectName, and
-        a live widget has to be re-polished for the new rule to take."""
-        if self.download_button.objectName() == object_name:
-            return
-        self.download_button.setObjectName(object_name)
-        style = self.download_button.style()
-        style.unpolish(self.download_button)
-        style.polish(self.download_button)
+        """The detail line follows the selection; the buttons follow their row."""
+        self.hint_label.setText(self._hint_for(self.selected_info()))
+        self._sync_row_actions()
 
     def _hint_for(self, info: ModelInfo | None) -> str:
         if info is None:
@@ -664,6 +712,21 @@ class CommunityPage(QWidget):
         if info is None or self._busy:
             return
         self.download(info)
+
+    def download_row(self, uid: str) -> None:
+        """A row's own button: select that row, then the one download path."""
+        info = next((m for m in self._models if m.model_uid == uid), None)
+        if info is None or self._busy:
+            return
+        self._select(uid)
+        self.download(info)
+
+    def _select(self, uid: str) -> None:
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            if item is not None and item.data(0, Qt.ItemDataRole.UserRole) == uid:
+                self.tree.setCurrentItem(item)
+                return
 
     def download(self, info: ModelInfo) -> None:
         name = info.model_name or info.model_uid or "model"

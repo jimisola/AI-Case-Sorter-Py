@@ -41,6 +41,7 @@ from sorter.data.models import Model, is_trainable
 from sorter.data.repository import CartridgeRepo, HeadstampRepo, ModelRepo
 from sorter.qtui.community_page import (
     ACTION_LABELS,
+    ACTIONS_COLUMN,
     ALL_CARTRIDGES,
     COLUMNS,
     STATE_DOWNLOAD,
@@ -266,6 +267,19 @@ def select_row(page: Any, index: int) -> None:
     item = page.tree.topLevelItem(index)
     assert item is not None, f"no row {index}"
     page.tree.setCurrentItem(item)
+
+
+def row_button(page: Any, index: int) -> Any:
+    """The trailing action button on a row, looked up fresh every time.
+
+    Never cached in a local: a sort destroys the item's widget and the page
+    installs a replacement (see ``_sync_row_actions``).
+    """
+    item = page.tree.topLevelItem(index)
+    assert item is not None, f"no row {index}"
+    button = page.tree.itemWidget(item, ACTIONS_COLUMN)
+    assert button is not None, f"row {index} has no action button"
+    return button
 
 
 def pump(qapp: Any, predicate: Any, timeout_s: float = 10.0) -> bool:
@@ -681,7 +695,6 @@ def test_a_failed_query_reports_and_empties_the_table(window, api) -> None:
 
     assert drain_until(window, lambda: page.status_label.text().startswith("Failed:"))
     assert page.tree.topLevelItemCount() == 0
-    assert not page.download_button.isEnabled()
 
 
 def test_an_empty_catalogue_says_so(window, api) -> None:
@@ -713,21 +726,90 @@ def test_the_state_column_and_action_follow_the_local_library(window, api, confi
         STATE_LABELS[STATE_UPDATE],
     ]
 
-    select_row(page, 0)
-    assert page.download_button.text() == ACTION_LABELS[STATE_DOWNLOAD]
-    assert page.download_button.isEnabled()
+    # Each row's own button, no selection involved: label, enabled state and
+    # palette role all follow that row.
+    assert row_button(page, 0).text() == ACTION_LABELS[STATE_DOWNLOAD]
+    assert row_button(page, 0).isEnabled()
+    assert row_button(page, 0).objectName() == "action"
 
-    select_row(page, 1)
-    assert page.download_button.text() == ACTION_LABELS[STATE_INSTALLED]
-    assert not page.download_button.isEnabled()
+    assert row_button(page, 1).text() == ACTION_LABELS[STATE_INSTALLED]
+    assert not row_button(page, 1).isEnabled()
 
-    select_row(page, 2)
-    assert page.download_button.text() == ACTION_LABELS[STATE_UPDATE]
-    assert page.download_button.isEnabled()
+    assert row_button(page, 2).text() == ACTION_LABELS[STATE_UPDATE]
+    assert row_button(page, 2).isEnabled()
     # Blue, not the download green: this replaces something already installed.
-    assert page.download_button.objectName() == "update"
+    assert row_button(page, 2).objectName() == "update"
+
+
+def test_a_row_button_installs_that_row_not_the_selected_one(window, api) -> None:
+    api.models = [info(uid="first", name="First"), info(uid="second", name="Second")]
+    page = build_page(window, api, auth=FakeAuth())
+    started: list[str] = []
+    page.download = lambda entry: started.append(entry.model_uid)
+    page.refresh_auth_state()
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 2)
     select_row(page, 0)
-    assert page.download_button.objectName() == "action"
+
+    row_button(page, 1).click()
+
+    # The same `download()` the bottom button used to call — one path, and it
+    # acts on the button's row, which the click also selects.
+    assert started == ["second"]
+    assert page.selected_uid() == "second"
+
+
+def test_the_row_button_runs_the_real_download_path(page, window, api, config, tmp_path) -> None:
+    source = seed_exportable(config, "Source")
+    api.archive = write_archive(config, tmp_path / "m.zip", source, name="Range brass")
+    page.confirm = lambda _title, _text: True
+
+    row_button(page, 0).click()
+
+    assert drain_until(window, lambda: window.notify.titles == ["Download complete"])
+    assert api.download_requests == ["uid-1"]
+    assert any(m.model_type == "CommunityManaged" for m in ModelRepo(config.db).list())
+
+
+def test_the_action_column_is_not_sortable(window, api) -> None:
+    api.models = [info(uid="z", name="Zed"), info(uid="a", name="Alpha")]
+    page = build_page(window, api, auth=FakeAuth())
+    page.refresh_auth_state()
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 2)
+
+    page.tree.header().sectionClicked.emit(ACTIONS_COLUMN)
+
+    assert page._sort_column is None
+    assert names(page) == ["Zed", "Alpha"], "the button column sorted the table"
+
+
+def test_row_buttons_survive_a_real_header_click_sort(window, api) -> None:
+    api.models = [info(uid="z", name="Zed"), info(uid="a", name="Alpha")]
+    page = build_page(window, api, auth=FakeAuth())
+    page.refresh_auth_state()
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 2)
+
+    click_header(page, "Model")
+
+    assert names(page) == ["Alpha", "Zed"]
+    # Qt destroys an item's widgets when the row moves; every row must still
+    # have a live, correctly-labelled button afterwards.
+    assert [row_button(page, row).text() for row in range(2)] == [ACTION_LABELS[STATE_DOWNLOAD]] * 2
+    assert all(row_button(page, row).isEnabled() for row in range(2))
+
+
+def test_the_description_is_the_rows_tooltip_on_every_column(window, api) -> None:
+    # Prose doesn't fit a column (JL), so hovering anywhere on the row shows
+    # it — and the selected-row detail line still carries it too.
+    api.models = [info(description="Mixed range pickup"), info(uid="bare", name="Bare")]
+    page = build_page(window, api, auth=FakeAuth())
+    page.refresh_auth_state()
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 2)
+
+    described = page.tree.topLevelItem(0)
+    assert [described.toolTip(i) for i in range(len(COLUMNS))] == ["Mixed range pickup"] * len(COLUMNS)
+    assert all(page.tree.topLevelItem(1).toolTip(i) == "" for i in range(len(COLUMNS)))
+    select_row(page, 0)
+    assert page.hint_label.text() == "Mixed range pickup"
 
 
 # ----- share gating, sign-out ---------------------------------------------------
@@ -912,7 +994,7 @@ def test_a_failed_download_reports_instead_of_raising(page, window, api, config)
     page.download_selected()
 
     assert drain_until(window, lambda: window.notify.titles == ["Download failed"])
-    assert page.download_button.isEnabled(), "the page stayed busy after a failure"
+    assert row_button(page, 0).isEnabled(), "the page stayed busy after a failure"
 
 
 # ----- sign-in dialog ----------------------------------------------------------
@@ -1051,7 +1133,11 @@ def test_images_only_can_be_shared_without_a_checkpoint(share, config, api, qapp
 
     dialog.share()
 
-    assert pump(qapp, lambda: api.shares != []), "the share worker never finished"
+    # Wait on the notify, not api.shares: the fake api records from the worker
+    # thread, but the DB write and the notify happen in on_done on the next
+    # drain — a pump that exits on api.shares races them (seen on the slow
+    # Windows CI runner).
+    assert pump(qapp, lambda: notified.titles != []), "the share worker never finished"
     assert notified.titles == ["Model shared"]
     assert api.shares[0]["model_info"]["ModelExportMode"] == 2
     assert "images/9mm FC__1.jpg" in api.shares[0]["entries"]
@@ -1067,7 +1153,7 @@ def test_sharing_uploads_a_real_archive_and_stamps_the_uid(share, config, api, q
 
     dialog.share()
 
-    assert pump(qapp, lambda: api.shares != []), "the share worker never finished"
+    assert pump(qapp, lambda: notified.titles != []), "the share worker never finished"
     payload = api.shares[0]
     assert payload["manifest_exists"], "the standalone manifest was not uploaded alongside the ZIP"
     assert "manifest.json" in payload["entries"]
@@ -1091,11 +1177,11 @@ def test_sharing_your_own_model_does_not_make_it_foreign(share, config, api, qap
     # A community UID means "exists in the community", not "isn't yours"
     # (CLAUDE.md §5) — the publisher's own copy stays trainable.
     model = seed_exportable(config, "Range brass")
-    dialog, _notified = share()
+    dialog, notified = share()
     select_model(dialog, "Range brass")
 
     dialog.share()
-    assert pump(qapp, lambda: api.shares != [])
+    assert pump(qapp, lambda: notified.titles != [])
 
     stored = ModelRepo(config.db).get(model.id)
     assert stored is not None
@@ -1106,11 +1192,11 @@ def test_sharing_your_own_model_does_not_make_it_foreign(share, config, api, qap
 
 def test_resharing_keeps_the_uid_and_bumps_the_version(share, config, api, qapp) -> None:
     model = seed_exportable(config, "Range brass", community_model_uid="uid-mine", model_version=4)
-    dialog, _notified = share()
+    dialog, notified = share()
     select_model(dialog, "Range brass")
 
     dialog.share()
-    assert pump(qapp, lambda: api.shares != [])
+    assert pump(qapp, lambda: notified.titles != [])
 
     assert api.shares[0]["model_info"]["CommunityModelUID"] == "uid-mine"
     assert api.shares[0]["model_info"]["ModelVersion"] == 5
@@ -1121,11 +1207,11 @@ def test_resharing_keeps_the_uid_and_bumps_the_version(share, config, api, qapp)
 def test_the_server_can_rename_the_uid(share, config, api, qapp) -> None:
     model = seed_exportable(config, "Range brass")
     api.server_uid = "uid-from-server"
-    dialog, _notified = share()
+    dialog, notified = share()
     select_model(dialog, "Range brass")
 
     dialog.share()
-    assert pump(qapp, lambda: api.shares != [])
+    assert pump(qapp, lambda: notified.titles != [])
 
     stored = ModelRepo(config.db).get(model.id)
     assert stored is not None and stored.community_model_uid == "uid-from-server"

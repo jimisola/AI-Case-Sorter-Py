@@ -350,8 +350,7 @@ def test_demo_c_model_lifecycle(config, window, monkeypatch, tmp_path) -> None:
     assert created.model_mode == "convnext_small"
 
     # 2. Activate it: the Train activity appears, the library marks the row.
-    select_model(page, created.id)
-    page.buttons["Activate"].click()
+    row_button(page, created.id, "Activate").click()
     assert drain_until(window, lambda: not window.sidebar_buttons["Train"].isHidden())
     assert SettingsRepo(config.db).get_active_model_id() == created.id
 
@@ -363,7 +362,7 @@ def test_demo_c_model_lifecycle(config, window, monkeypatch, tmp_path) -> None:
             dialog.add_button.click()
 
     script_dialog(monkeypatch, HeadstampManagerDialog, add_headstamps)
-    page.buttons["Headstamps…"].click()
+    row_button(page, created.id, "Headstamps").click()
     assert sorted(h.name for h in HeadstampRepo(config.db).list_for_model(created.id)) == [".223 LC", "9mm FC"]
 
     # 4. Route one of them, through the slot card's own editor.
@@ -375,9 +374,8 @@ def test_demo_c_model_lifecycle(config, window, monkeypatch, tmp_path) -> None:
     # 5. Export the model, then import the archive back as a second copy.
     window.sidebar_buttons["Models"].click()
     archive = tmp_path / "demo-model.zip"
-    select_model(page, created.id)
     page.ask_save_path = lambda _title, _name: str(archive)
-    page.buttons["Export…"].click()
+    row_button(page, created.id, "Export").click()
     assert drain_until(window, archive.exists), "the export worker never finished"
 
     # Import is a filter-bar button with no handle on the page, so it is called
@@ -399,17 +397,26 @@ def test_demo_c_model_lifecycle(config, window, monkeypatch, tmp_path) -> None:
 
     # 6. Activate the copy: the dashboard follows the active model, so the
     #    slot the original had routed is empty again.
-    select_model(page, imported.id)
-    page.buttons["Activate"].click()
+    row_button(page, imported.id, "Activate").click()
     assert drain_until(window, lambda: SettingsRepo(config.db).get_active_model_id() == imported.id)
     assert window.slot_grid.cards[1].names_label.text() == EMPTY_HINT
     assert not window.sidebar_buttons["Train"].isHidden()
 
     # 7. Back to AI Config mode: Train goes away again.
-    select_model(page, -1)  # the synthetic "Use AI Config" row
-    page.buttons["Activate"].click()
+    row_button(page, -1, "Activate").click()  # the synthetic "Use AI Config" row
     assert drain_until(window, lambda: window.sidebar_buttons["Train"].isHidden())
     assert SettingsRepo(config.db).get_active_model_id() is None
+
+
+def row_button(page: Any, model_id: int, action: str) -> Any:
+    """A library row's own action button (``-1`` is the AI Config row).
+
+    Looked up fresh each time: a sort destroys an item's widget and the page
+    installs a replacement.
+    """
+    buttons = page.row_actions(model_id)
+    assert action in buttons, f"row {model_id} has no {action!r} button: {list(buttons)}"
+    return buttons[action]
 
 
 def select_model(page: Any, model_id: int) -> None:
@@ -563,7 +570,7 @@ def test_demo_e_a_model_that_cannot_classify_still_lists_and_exports(config, win
 
     archive = tmp_path / "untrained.zip"
     page.ask_save_path = lambda _title, _name: str(archive)
-    page.buttons["Export…"].click()
+    row_button(page, model.id, "Export").click()
 
     assert drain_until(window, archive.exists)
     assert window.notify.titles == ["Export complete"]

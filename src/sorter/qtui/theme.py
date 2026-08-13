@@ -157,6 +157,10 @@ QTreeWidget#modelTable QHeaderView::section, QTreeWidget#headstampTable QHeaderV
     border-bottom: 1px solid {c["border"]};
     padding: 5px 6px;
 }}
+/* Per-row action buttons: the row is the item's own background, and a
+   toolbar-sized button would make every row that tall. */
+QWidget#rowActions {{ background: transparent; }}
+QTreeWidget#modelTable QPushButton {{ padding: 2px 8px; }}
 
 QFrame#slotCard {{
     background-color: {c["bg_card"]};

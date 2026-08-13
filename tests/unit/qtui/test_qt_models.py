@@ -113,6 +113,17 @@ def select_name(page: Any, name: str) -> None:
     select_row(page, names(page).index(name))
 
 
+def row_buttons(page: Any, model_id: int) -> dict[str, Any]:
+    """A row's action strip, looked up fresh every time.
+
+    Never cached in a local: a sort (and the AI row's re-pin) destroys the
+    item's widget and the page installs a replacement.
+    """
+    buttons = page.row_actions(model_id)
+    assert buttons, f"model {model_id} has no action buttons"
+    return buttons
+
+
 def make_model(config: Any, name: str, **fields: Any) -> Model:
     fields.setdefault("cartridge_id", CartridgeRepo(config.db).list()[0].id)
     return ModelRepo(config.db).create(Model(name=name, **fields))
@@ -434,6 +445,45 @@ def test_selection_survives_a_header_click_sort(page, window, config) -> None:
     assert page.selected_id() == target.id
 
 
+def test_the_button_column_is_not_sortable(page, window, config) -> None:
+    from sorter.qtui.models_page import ACTIONS_COLUMN
+
+    make_model(config, "Zed model")
+    make_model(config, "Alpha model")
+    page.refresh()
+    before = names(page)
+
+    page.tree.header().sectionClicked.emit(ACTIONS_COLUMN)
+
+    assert page._sort_column is None
+    assert names(page) == before, "the button column sorted the table"
+
+
+def test_row_buttons_survive_a_sort_and_the_ai_rows_re_pin(page, window, config) -> None:
+    """Qt destroys an item's widgets when the row is moved, and ``_pin_ai_row``
+    moves the AI row with ``takeTopLevelItem`` after every sort — so every row
+    has to be handed a live strip again afterwards, the pinned one included.
+    """
+    zed = make_model(config, "Zed model")
+    alpha = make_model(config, "Alpha model")
+    page.refresh()
+
+    for column_name in ("Model", "Images", "Last trained"):
+        for _direction in range(2):  # ascending, then descending
+            click_header(page, column_name, window)
+            assert names(page)[0] == AI_CONFIG_NAME
+            assert list(row_buttons(page, AI_CONFIG_SENTINEL_ID)) == ["Activate"]
+            for model_id in (zed.id, alpha.id):
+                buttons = row_buttons(page, model_id)
+                assert list(buttons) == ["Activate", "Edit", "Images", "Headstamps", "Evaluate", "Export", "Delete"]
+                assert buttons["Activate"].isEnabled()
+
+    # And they still work: the strip handed out after a sort is wired to its
+    # own row, not to whatever row was there when it was first built.
+    row_buttons(page, alpha.id)["Activate"].click()
+    assert fresh_active_id(config) == alpha.id
+
+
 def test_column_resizing_stays_interactive_after_sorting_is_wired(page, window) -> None:
     header = page.tree.header()
     click_header(page, "Model", window)
@@ -477,65 +527,105 @@ def test_activating_the_ai_row_returns_to_ai_config_mode(page, window, config) -
 def test_activate_is_disabled_for_the_row_that_is_already_active(page, config) -> None:
     model = make_model(config, "Range brass")
     page.refresh()
-    select(page, model.id)
-    page.activate_selected()
+    row_buttons(page, model.id)["Activate"].click()
 
-    assert not page.buttons["Activate"].isEnabled()
+    assert not row_buttons(page, model.id)["Activate"].isEnabled()
+    assert row_buttons(page, AI_CONFIG_SENTINEL_ID)["Activate"].isEnabled()
 
-    select(page, AI_CONFIG_SENTINEL_ID)
-    assert page.buttons["Activate"].isEnabled()
+    row_buttons(page, AI_CONFIG_SENTINEL_ID)["Activate"].click()
+
+    assert not row_buttons(page, AI_CONFIG_SENTINEL_ID)["Activate"].isEnabled()
+    assert row_buttons(page, model.id)["Activate"].isEnabled()
 
 
-def test_the_ai_row_has_no_model_actions(page) -> None:
-    select(page, AI_CONFIG_SENTINEL_ID)
-
-    assert not any(page.buttons[name].isEnabled() for name in ("Edit…", "Export…", "Delete"))
+def test_the_ai_row_carries_activate_alone(page) -> None:
+    # Nothing else on that row means anything: there is no model to edit,
+    # export, delete or train.
+    assert list(row_buttons(page, AI_CONFIG_SENTINEL_ID)) == ["Activate"]
 
 
 # ----- ownership -------------------------------------------------------------
 
 
 def test_a_community_download_is_read_only_and_not_trainable(page, config) -> None:
-    make_model(config, "Someone else's", model_type="CommunityManaged", community_model_uid="uid-9")
+    model = make_model(config, "Someone else's", model_type="CommunityManaged", community_model_uid="uid-9")
     page.refresh()
     select_name(page, "Someone else's")
 
     assert cell(page, names(page).index("Someone else's"), "Type") == "Community (read-only)"
     assert page.hint_label.text() == FOREIGN_NOTICE
-    assert not page.buttons["Images…"].isEnabled()
+    assert not row_buttons(page, model.id)["Images"].isEnabled()
     # Everything that isn't about training the model stays available.
-    assert all(page.buttons[name].isEnabled() for name in ("Edit…", "Export…", "Delete"))
+    assert all(row_buttons(page, model.id)[name].isEnabled() for name in ("Edit", "Export", "Delete"))
 
 
 def test_a_model_you_shared_yourself_stays_yours(page, config) -> None:
     # A UID means "exists in the community", not "isn't yours" (CLAUDE.md §5).
-    make_model(config, "Mine", community_model_uid="uid-2")
+    model = make_model(config, "Mine", community_model_uid="uid-2")
     page.refresh()
-    select_name(page, "Mine")
-    page.set_images_hook(lambda _model: None)
 
     assert cell(page, names(page).index("Mine"), "Type") == "Community"
-    assert page.buttons["Images…"].isEnabled()
+    assert row_buttons(page, model.id)["Images"].isEnabled()
 
 
-def test_the_images_button_appears_only_once_a_browser_is_attached(window, config) -> None:
+def test_the_foreign_notice_follows_the_row_a_button_acts_on(page, config) -> None:
+    # The buttons act without a selection, so a row button moves the selection
+    # onto its own row — otherwise the notice would describe a different model.
+    foreign = make_model(config, "Someone else's", model_type="CommunityManaged", community_model_uid="uid-9")
+    mine = make_model(config, "Mine")
+    page.refresh()
+    select(page, mine.id)
+
+    row_buttons(page, foreign.id)["Export"].click()
+
+    assert page.selected_id() == foreign.id
+    assert page.hint_label.text() == FOREIGN_NOTICE
+
+
+def test_the_hooked_buttons_appear_only_once_a_browser_is_attached(window, config) -> None:
     # The window wires the browser at build, so exercise the module contract
     # on a fresh, unwired page.
     from sorter.qtui.models_page import build_models_page
 
     page = build_models_page(window)
     opened: list[Any] = []
-    make_model(config, "Range brass")
+    model = make_model(config, "Range brass")
     page.refresh()
-    select_name(page, "Range brass")
 
-    assert page.buttons["Images…"].isHidden()
+    assert "Images" not in row_buttons(page, model.id)
 
     page.set_images_hook(opened.append)
-    page.images_selected()
+    row_buttons(page, model.id)["Images"].click()
 
-    assert not page.buttons["Images…"].isHidden()
     assert [m.name for m in opened] == ["Range brass"]
+
+
+def test_every_row_button_runs_its_own_rows_action(page, window, config) -> None:
+    target = make_model(config, "Target", model_path="/fake/checkpoint.pth")
+    make_model(config, "Other")
+    page.refresh()
+    opened: dict[str, list[str]] = {"images": [], "headstamps": [], "evaluate": []}
+    page.set_images_hook(lambda model: opened["images"].append(model.name))
+    page.set_headstamps_hook(lambda model: opened["headstamps"].append(model.name))
+    page.set_evaluate_hook(lambda model: opened["evaluate"].append(model.name))
+
+    for action in ("Images", "Headstamps", "Evaluate"):
+        row_buttons(page, target.id)[action].click()
+    row_buttons(page, target.id)["Activate"].click()
+
+    assert opened == {"images": ["Target"], "headstamps": ["Target"], "evaluate": ["Target"]}
+    assert fresh_active_id(config) == target.id
+
+
+def test_delete_from_a_row_button_removes_that_model(page, config) -> None:
+    make_model(config, "Keeper")
+    doomed = make_model(config, "Doomed")
+    page.refresh()
+
+    row_buttons(page, doomed.id)["Delete"].click()
+
+    assert ModelRepo(config.db).get(doomed.id) is None
+    assert "Doomed" not in names(page)
 
 
 # ----- create / edit ---------------------------------------------------------
