@@ -283,6 +283,13 @@ class SerialMonitorWidget(QWidget):
 
     def _on_state(self, _payload: Any = None) -> None:
         self.refresh_connection()
+        # Mirror the config's baud: a reconnect from Settings → Serial (which
+        # posts serial/state) must not leave this picker showing the old speed.
+        saved = str(self._configured_baud())
+        if self.baud_combo.currentText() != saved:
+            if self.baud_combo.findText(saved) < 0:
+                self.baud_combo.addItem(saved)
+            self.baud_combo.setCurrentText(saved)
 
     def _on_baud_activated(self, index: int) -> None:
         self._on_baud_changed(self.baud_combo.itemText(index))

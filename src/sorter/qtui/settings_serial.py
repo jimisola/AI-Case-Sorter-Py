@@ -139,9 +139,21 @@ class SerialSection(QWidget):
         buttons.addWidget(self.connect_button)
         buttons.addWidget(self.disconnect_button)
         buttons.addWidget(refresh)
+        # Tk parity (its Serial tab had "Open monitor ↗"): the traffic log
+        # lives in the bottom dock, and this page should say so — a user
+        # configuring serial is exactly the one who wants to watch it (JL).
+        self.monitor_button = QPushButton("Open serial monitor ↗", box)
+        self.monitor_button.clicked.connect(self._open_monitor)
+        buttons.addWidget(self.monitor_button)
         buttons.addStretch(1)
         column.addLayout(buttons)
         return box
+
+    def _open_monitor(self) -> None:
+        dock = getattr(self._win, "serial_dock", None)
+        if dock is not None:
+            dock.show()
+            dock.raise_()
 
     def refresh_ports(self) -> None:
         """Emulated first, then USB/ACM/COM adapters, then the rest.
@@ -242,6 +254,15 @@ class SerialSection(QWidget):
 
     def _update_connection_state(self) -> None:
         """Board-only actions need a live broker; everything else is offline-editable."""
+        # Two surfaces own a baud picker (this page and the serial monitor's
+        # IDE-style one); the config row is the truth, so follow it here on
+        # every state change — the monitor persists + reconnects, which posts
+        # serial/state, which lands us here (JL: the two must not drift).
+        saved = str(int(self._win.config.serial.get("baud", 9600) or 9600))
+        if self.baud_combo.currentText() != saved:
+            if self.baud_combo.findText(saved) < 0:
+                self.baud_combo.addItem(saved)
+            self.baud_combo.setCurrentText(saved)
         connected = self._win.broker is not None
         for widget in (
             self.disconnect_button,

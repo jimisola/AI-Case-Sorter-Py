@@ -360,3 +360,32 @@ def test_home_sorter_sends_sortto_zero_and_resets_the_spinbox(window) -> None:
     assert section.sort_to_spin.value() == 0
     # Resetting the spinbox must not fire a second, redundant sortto:0.
     assert sent.count("sortto:0") == 1
+
+
+# ----- the monitor is one click away, and the two baud pickers agree ----------
+
+
+def test_the_page_opens_the_serial_monitor_dock(window) -> None:
+    """Tk parity: its Serial tab had "Open monitor" — a user configuring
+    serial is exactly the one who wants to watch the traffic (JL)."""
+    section = build_serial_section(window)
+    window.serial_dock.hide()
+
+    section.monitor_button.click()
+
+    assert not window.serial_dock.isHidden()
+
+
+def test_a_monitor_baud_change_reaches_the_settings_combo(window, config) -> None:
+    """Two surfaces show the baud (this page and the monitor's IDE-style
+    picker); the config row is the truth and neither may go stale (JL)."""
+    section = build_serial_section(window)
+    assert section.baud_combo.currentText() == "9600"
+
+    # What the monitor's picker does: persist, then reconnect → serial/state.
+    config.serial["baud"] = 115200
+    config.save()
+    window.bus.post("serial/state", {"connected": False, "message": "Serial: disconnected"})
+    window.bus.drain()
+
+    assert section.baud_combo.currentText() == "115200"
