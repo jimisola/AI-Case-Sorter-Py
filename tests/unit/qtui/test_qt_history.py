@@ -10,6 +10,7 @@ stays independent of another increment's in-flight file.
 from __future__ import annotations
 
 import types
+from typing import Any
 
 import numpy as np
 import pytest
@@ -19,8 +20,12 @@ pytest.importorskip("PySide6")
 from sorter.hardware.serial_emulator import EMULATED_PORT
 from sorter.ml import classifier
 from sorter.qtui.history_view import (
-    HISTORY_MAX_ENTRIES,
+    FALLBACK_COLS,
+    FALLBACK_ROWS,
+    GUTTER,
     SNAKE_ROLES,
+    TILE_H,
+    TILE_W,
     HistoryPreviewDialog,
     build_history_view,
 )
@@ -47,7 +52,7 @@ def test_empty_state_shows_hint_and_hides_the_list(window) -> None:
     view = build_history_view(window)
 
     assert not view.empty_label.isHidden()
-    assert view._scroll.isHidden()
+    assert view.grid_area.isHidden()
     assert view._entries == []
 
 
@@ -57,7 +62,7 @@ def test_first_entry_reveals_the_list_and_hides_the_hint(window) -> None:
     push(window, view, "9mm FC", 92.0)
 
     assert view.empty_label.isHidden()
-    assert not view._scroll.isHidden()
+    assert not view.grid_area.isHidden()
 
 
 # ----- rendering -----------------------------------------------------------------
@@ -99,18 +104,61 @@ def test_non_dict_payloads_are_ignored(window) -> None:
 # ----- cap -------------------------------------------------------------------------
 
 
-def test_cap_respected_oldest_dropped(window) -> None:
+def test_full_grid_overwrites_the_oldest_cell_in_place(window) -> None:
+    """The Windows monitor contract (Seth): tiles never move or scroll — a
+    new record overwrites the oldest cell, everything else stays put."""
+    view = build_history_view(window)
+    capacity = FALLBACK_COLS * FALLBACK_ROWS
+
+    for index in range(capacity):
+        push(window, view, f"hs{index}", 99.0)
+    assert len(view._tiles) == capacity
+    tiles_before = list(view._tiles)
+
+    push(window, view, "overwriter", 99.0)
+
+    assert view._tiles == tiles_before  # same widgets, same positions
+    assert len(view._entries) == capacity
+    assert view._tiles[0].label_label.text() == "overwriter"  # oldest cell reused
+    assert view._tiles[1].label_label.text() == "hs1"  # neighbours untouched
+    assert view._entries[0] is view._tiles[0]  # ...and it is now the newest
+
+
+def test_tiles_fill_top_to_bottom_then_next_column(window) -> None:
     view = build_history_view(window)
 
-    for index in range(HISTORY_MAX_ENTRIES + 5):
+    for index in range(FALLBACK_ROWS + 2):
         push(window, view, f"hs{index}", 99.0)
 
-    assert len(view._entries) == HISTORY_MAX_ENTRIES
+    def cell(tile) -> tuple[int, int]:
+        # PySide6 stubs type getItemPosition as `object`; it is a 4-tuple.
+        position: Any = view._grid.getItemPosition(view._grid.indexOf(tile))
+        return position[0], position[1]
+
+    assert cell(view._tiles[0]) == (0, 0)
+    assert cell(view._tiles[1]) == (1, 0)
+    assert cell(view._tiles[FALLBACK_ROWS]) == (0, 1)
+
+
+def test_shrinking_the_view_reflows_and_keeps_the_newest(qapp, window) -> None:
+    view = build_history_view(window)
+    view.resize(4 * (TILE_W + GUTTER) + GUTTER, 4 * (TILE_H + GUTTER) + GUTTER)
+    view.show()
+    qapp.processEvents()
+    capacity = view._capacity
+    assert capacity >= 4
+
+    for index in range(capacity):
+        push(window, view, f"hs{index}", 99.0)
+
+    view.resize(TILE_W + 2 * GUTTER, 2 * (TILE_H + GUTTER) + GUTTER)
+    qapp.processEvents()
+
+    assert view._capacity < capacity
+    assert len(view._entries) == view._capacity
     labels = [entry.label_label.text() for entry in view._entries]
-    assert "hs0" not in labels  # the oldest fell off the end
-    assert "hs4" not in labels
-    assert labels[0] == f"hs{HISTORY_MAX_ENTRIES + 4}"  # newest survives, at the top
-    assert labels[-1] == "hs5"
+    assert labels[0] == f"hs{capacity - 1}"  # newest survived
+    assert "hs0" not in labels  # oldest discarded
 
 
 # ----- recency highlight ("snake") --------------------------------------------------

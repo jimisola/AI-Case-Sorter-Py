@@ -1,13 +1,15 @@
 """Classification history — Qt port of ``sorter.ui.monitor`` (CLAUDE.md §5).
 
-``sorter.ui.monitor.MonitorWindow`` is a separate Toplevel with a fixed-position
-tile grid and a "snake" of border colours trailing the newest classification.
-This is the same idea reshaped for Qt: a scrollable, newest-first list any
-container (dock or expanded feed — the orchestrator decides) can host, so it
-grows downward instead of wrapping a fixed grid. The recency fade survives as
-a border highlight on the first few entries, using the same neutral
-(hue-free) palette roles the rest of the chrome uses for focus/selection —
-see CLAUDE.md's "Hue is meaning" note in ``ui/theme.py``'s section.
+A fixed-position tile grid with a "snake" of border colours trailing the
+newest classification — the same ring-buffer semantics as
+``sorter.ui.monitor.MonitorWindow`` and the Windows app's Monitor, and those
+semantics are **intentional** (Seth, PR #30 feedback): images must never
+scroll or shift position, or the operator can't track a case by where it sits.
+New records overwrite the oldest cell in place; capacity is however many
+tiles fit the space the host gives the widget, reflowing on resize (wider
+window → more columns). The recency trail uses the same neutral (hue-free)
+palette roles the rest of the chrome uses for focus/selection — see
+CLAUDE.md's "Hue is meaning" note in ``ui/theme.py``'s section.
 
 Subscribes ``run/history`` on ``win.bus`` at construction; payload shape is
 ``{"image": <BGR ndarray>, "label", "parent", "confidence", "slot"}``, the same
@@ -31,18 +33,24 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QDialog,
     QDialogButtonBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
-    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
 THUMB = 56
 PREVIEW_SIZE = 320
-# Fixed, unlike the Tk monitor's window-size-derived capacity: this is a
-# scrollable list, not a tiled grid that has to fit a fixed area.
-HISTORY_MAX_ENTRIES = 40
+# One tile's footprint; capacity = how many fit the widget's current size.
+TILE_W = 190
+TILE_H = 72
+GUTTER = 6
+# Before the widget has a real size (dock hidden, offscreen tests without an
+# explicit resize) capacity falls back to this grid rather than 1×1, so
+# records pushed while unmapped are still there when the dock opens.
+FALLBACK_COLS = 4
+FALLBACK_ROWS = 10
 EMPTY_TEXT = "Recent classifications will appear here."
 
 # Newest -> oldest border tint for the trailing "snake". Neutral roles only
@@ -95,6 +103,9 @@ class HistoryEntry(QFrame):
         super().__init__(parent)
         self.setObjectName("historyEntry")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Fixed footprint: the grid's capacity math depends on every tile
+        # being exactly TILE_W × TILE_H.
+        self.setFixedSize(TILE_W, TILE_H)
         self.record: dict[str, Any] = {}
         self.below_floor = False
 
@@ -188,7 +199,13 @@ class HistoryPreviewDialog(QDialog):
 
 
 class HistoryView(QWidget):
-    """Scrollable, newest-first classification history with images.
+    """Fixed-tile classification history: a ring buffer over a reflowing grid.
+
+    Semantics ported from ``ui/monitor.MonitorWindow`` (and deliberately from
+    the Windows app): tiles never move or scroll — a new record overwrites the
+    oldest cell in place, and the recency snake is what points at "current".
+    Capacity is whatever fits the widget's size; a resize reflows the grid,
+    discarding the oldest records if it shrank.
 
     Construct via :func:`build_history_view`, not directly — that keeps the
     one required argument (the main window) obvious at the call site.
@@ -197,7 +214,12 @@ class HistoryView(QWidget):
     def __init__(self, win: Any) -> None:
         super().__init__()
         self._win = win
-        self._entries: list[HistoryEntry] = []  # newest first
+        self._tiles: list[HistoryEntry] = []  # fixed grid positions
+        self._entries: list[HistoryEntry] = []  # newest first (drives the snake)
+        self._write_index = 0
+        self._capacity = 0
+        self._cols = 1
+        self._rows = 1
         # Swappable like ImagePreviewDialog's notify/confirm: a test replaces
         # this to observe a click without a modal ever opening.
         self.open_preview: Any = self._open_preview_dialog
@@ -212,38 +234,97 @@ class HistoryView(QWidget):
         self.empty_label.setWordWrap(True)
         outer.addWidget(self.empty_label)
 
-        self._scroll = QScrollArea(self)
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self._holder = QWidget(self._scroll)
-        self._list = QVBoxLayout(self._holder)
-        self._list.setContentsMargins(6, 6, 6, 6)
-        self._list.setSpacing(6)
-        self._list.addStretch(1)
-        self._scroll.setWidget(self._holder)
-        self._scroll.hide()
-        outer.addWidget(self._scroll, 1)
+        self.grid_area = QWidget(self)
+        self._grid = QGridLayout(self.grid_area)
+        self._grid.setContentsMargins(GUTTER, GUTTER, GUTTER, GUTTER)
+        self._grid.setSpacing(GUTTER)
+        # Pin tiles to the top-left so partial fills look like the Windows
+        # monitor, not a centered cloud.
+        self._grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.grid_area.hide()
+        outer.addWidget(self.grid_area, 1)
 
         win.bus.subscribe("run/history", self._on_history)
+
+    # ----- layout --------------------------------------------------------------
+
+    def resizeEvent(self, event: Any) -> None:
+        super().resizeEvent(event)
+        self._recompute_capacity()
+
+    def _recompute_capacity(self) -> None:
+        width = self.grid_area.width()
+        height = self.grid_area.height()
+        if width < TILE_W + GUTTER or height < TILE_H + GUTTER:
+            # Not laid out yet (hidden dock, unshown test widget): keep a
+            # usable buffer instead of collapsing to one cell.
+            cols, rows = FALLBACK_COLS, FALLBACK_ROWS
+        else:
+            cols = max(1, width // (TILE_W + GUTTER))
+            rows = max(1, height // (TILE_H + GUTTER))
+        capacity = cols * rows
+        if capacity == self._capacity and cols == self._cols and rows == self._rows:
+            return
+        self._cols = cols
+        self._rows = rows
+        self._capacity = capacity
+        self._rebuild_layout()
+
+    def _rebuild_layout(self) -> None:
+        """Re-place tiles for the current capacity, keeping the newest records.
+
+        Same rules as the Tk monitor: when the grid shrinks, the oldest
+        records (by recency) are discarded, survivors re-pack into the first
+        positions oldest-first so the next overwrite hits the oldest cell,
+        and the write cursor resets.
+        """
+        if len(self._tiles) > self._capacity:
+            keep = set(self._entries[: self._capacity])
+            for tile in self._tiles:
+                if tile not in keep:
+                    self._grid.removeWidget(tile)
+                    tile.deleteLater()
+            self._tiles = [t for t in reversed(self._entries) if t in keep]
+            self._entries = [t for t in self._entries if t in keep]
+            self._write_index = 0
+
+        for index, tile in enumerate(self._tiles):
+            row, col = self._position(index)
+            self._grid.addWidget(tile, row, col)
+        self._recolor()
+
+    def _position(self, index: int) -> tuple[int, int]:
+        """Top-to-bottom, then left-to-right — the Windows monitor's fill order."""
+        rows = max(1, self._rows)
+        return index % rows, index // rows
 
     # ----- record push ---------------------------------------------------------
 
     def _on_history(self, payload: Any) -> None:
         if not isinstance(payload, dict):
             return
-        entry = HistoryEntry(self._holder)
-        entry.set_record(payload)
+        if self._capacity <= 0:
+            self._recompute_capacity()
+
+        if len(self._tiles) < self._capacity:
+            tile = HistoryEntry(self.grid_area)
+            tile.clicked.connect(lambda record: self.open_preview(record))
+            self._tiles.append(tile)
+            row, col = self._position(len(self._tiles) - 1)
+            self._grid.addWidget(tile, row, col)
+            tile.show()
+        else:
+            if self._write_index >= len(self._tiles):
+                self._write_index = 0
+            tile = self._tiles[self._write_index]
+            self._write_index = (self._write_index + 1) % len(self._tiles)
+
+        tile.set_record(payload)
         floor = float(getattr(self._win.config, "run_confidence_floor", 0) or 0)
-        entry.below_floor = floor > 0 and _confidence(payload) < floor
-        entry.clicked.connect(lambda record: self.open_preview(record))
-        self._entries.insert(0, entry)
-        self._list.insertWidget(0, entry)
-
-        while len(self._entries) > HISTORY_MAX_ENTRIES:
-            oldest = self._entries.pop()
-            self._list.removeWidget(oldest)
-            oldest.deleteLater()
-
+        tile.below_floor = floor > 0 and _confidence(payload) < floor
+        if tile in self._entries:
+            self._entries.remove(tile)
+        self._entries.insert(0, tile)
         self._recolor()
         self._update_empty_state()
 
@@ -257,7 +338,7 @@ class HistoryView(QWidget):
     def _update_empty_state(self) -> None:
         has_entries = bool(self._entries)
         self.empty_label.setVisible(not has_entries)
-        self._scroll.setVisible(has_entries)
+        self.grid_area.setVisible(has_entries)
 
     # ----- theme -----------------------------------------------------------------
 
