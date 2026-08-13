@@ -417,7 +417,9 @@ def test_the_list_carries_the_facts_the_tk_cards_showed(window, api, monkeypatch
     assert cell(page, 0, "Model") == "Range brass"
     assert cell(page, 0, "Cartridge") == "9mm"
     assert cell(page, 0, "Version") == "v1"
-    assert cell(page, 0, "Includes") == "ModelAndImages"
+    # Human-readable, not the WinForms enum name (JL: the type filter's
+    # counterpart must be visible in the table).
+    assert cell(page, 0, "Includes") == "Model + images"
     assert cell(page, 0, "Headstamps") == "3"
     assert cell(page, 0, "Images") == "12"
     assert cell(page, 0, "Size") == "5.00 MB"
@@ -809,6 +811,54 @@ def test_the_row_button_runs_the_real_download_path(page, window, api, config, t
     assert drain_until(window, lambda: window.notify.titles == ["Download complete"])
     assert api.download_requests == ["uid-1"]
     assert any(m.model_type == "CommunityManaged" for m in ModelRepo(config.db).list())
+
+
+def test_a_second_download_queues_and_both_install(page, window, api, config, tmp_path) -> None:
+    """JL: clicking a second row mid-download must visibly queue, not vanish.
+
+    Both rows install from one FakeApi archive; the queue is observed through
+    the status stream ("Queued", then the "2 of 2" prefix on the second) and
+    through the queued row's disabled button.
+    """
+    source = seed_exportable(config, "Source")
+    api.archive = write_archive(config, tmp_path / "m.zip", source, name="Range brass")
+    api.models = [info("uid-a", name="First"), info("uid-b", name="Second")]
+    page.refresh()
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 2)
+    page.confirm = lambda _title, _text: True
+    statuses: list[str] = []
+    window.bus.subscribe("community/status", statuses.append)
+
+    row_button(page, 0).click()
+    row_button(page, 1).click()  # while the first is (at least logically) in flight
+
+    assert drain_until(window, lambda: len(api.download_requests) == 2)
+    assert drain_until(window, lambda: not page._busy)
+    assert api.download_requests == ["uid-a", "uid-b"]  # queue order preserved
+    assert any(s.startswith("Queued Second") for s in statuses)
+    assert any("Downloading 2 of 2: " in s for s in statuses)
+    # Stand-down after the batch: counters reset, buttons live again.
+    assert page._download_queue == [] and page._active_download_uid is None
+    assert row_button(page, 0).isEnabled()
+
+
+def test_a_failed_download_does_not_strand_the_queue(page, window, api, config, tmp_path) -> None:
+    source = seed_exportable(config, "Source")
+    api.archive = write_archive(config, tmp_path / "m.zip", source, name="Range brass")
+    api.models = [info("uid-a", name="First"), info("uid-b", name="Second")]
+    page.refresh()
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 2)
+    page.confirm = lambda _title, _text: True
+    # First request explodes; the second must still run.
+    real_request = api.request_download
+    api.request_download = lambda uid: (_ for _ in ()).throw(RuntimeError("boom")) if uid == "uid-a" else real_request(uid)
+
+    row_button(page, 0).click()
+    row_button(page, 1).click()
+
+    assert drain_until(window, lambda: "uid-b" in api.download_requests)
+    assert drain_until(window, lambda: not page._busy)
+    assert "Download failed" in window.notify.titles
 
 
 def test_the_action_column_is_not_sortable(window, api) -> None:

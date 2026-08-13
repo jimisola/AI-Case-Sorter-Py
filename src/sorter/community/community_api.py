@@ -81,6 +81,28 @@ class CartridgeInfo:
         return cls(id=int(d.get("Id", d.get("id", 0))), name=d.get("Name", d.get("name", "")))
 
 
+_EXPORT_MODE_NAMES = {0: "ModelOnly", 1: "ModelAndImages", 2: "ImagesOnly"}
+
+
+def _export_mode_name(raw: Any) -> str:
+    """The catalogue's export mode as its WinForms enum *name*.
+
+    The server serializes the enum as its integer value (ModelOnly=0,
+    ModelAndImages=1, ImagesOnly=2) — and 0 is falsy, which is exactly how
+    every ModelOnly row rendered as "—" in the table (JL live-testing).
+    Older payloads and our own exports carry the name; both are accepted.
+    """
+    if isinstance(raw, str) and raw.strip():
+        text = raw.strip()
+        try:
+            return _EXPORT_MODE_NAMES[int(text)]
+        except (KeyError, ValueError):
+            return text
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return _EXPORT_MODE_NAMES.get(int(raw), "ModelAndImages")
+    return "ModelAndImages"
+
+
 @dataclass
 class ModelInfo:
     model_uid: str
@@ -115,7 +137,7 @@ class ModelInfo:
             image_count=int(get("ImageCount", 0) or 0),
             headstamp_count=int(get("HeadstampCount", 0) or 0),
             download_size=int(get("DownloadSize", 0) or 0),
-            export_mode=get("ModelExportMode", "ModelAndImages"),
+            export_mode=_export_mode_name(get("ModelExportMode", None)),
             feedback_loop_enabled=bool(get("FeedbackLoopEnabled", False)),
             feedback_loop_confidence_floor=int(get("FeedbackLoopConfidenceFloor", 0) or 0),
         )

@@ -101,6 +101,13 @@ ACTION_TOOLTIPS = {
 # flip's glyph swap can change the button — or the row height under it.
 ACTION_BUTTON_WIDTH = 36
 ACTION_BUTTON_HEIGHT = 22
+# What the archive carries (the type filter's counterpart in the table), as
+# humans read it; the raw WinForms enum name survives for anything unmapped.
+INCLUDES_LABELS = {
+    "ModelOnly": "Model",
+    "ModelAndImages": "Model + images",
+    "ImagesOnly": "Images",
+}
 # Sort order for the State column: needs-action states first, "nothing to do"
 # last — alphabetizing the labels ("Available", "Installed", "Update
 # available") would not read as a sane order.
@@ -216,6 +223,13 @@ class CommunityPage(QWidget):
         self.db = win.db
         self._auth: Any | None = None
         self._models: list[ModelInfo] = []
+        # One archive imports at a time (two would race the model tree), but
+        # requests queue (JL): each entry is (info, name, update_existing,
+        # is_update), prompts already answered at click time.
+        self._download_queue: list[tuple[ModelInfo, str, bool, bool]] = []
+        self._active_download_uid: str | None = None
+        self._batch_total = 0
+        self._batch_done = 0
         self._cartridges: list[CartridgeInfo] = []
         self._loaded = False
         self._busy = False
@@ -408,14 +422,31 @@ class CommunityPage(QWidget):
                 self.tree.setItemWidget(item, ACTIONS_COLUMN, button)
             info = next((m for m in self._models if m.model_uid == uid), None)
             state = self.installed_state(info) if info is not None else STATE_DOWNLOAD
-            button.setText(ACTION_LABELS[state])
-            button.setToolTip(ACTION_TOOLTIPS[state])
-            button.setEnabled(info is not None and not self._busy)
-            # Blue for an update, green for a download, red for removing the
-            # installed copy — the theme's rule for "replace something
-            # installed" / "primary, go" / "destructive" (ui/theme.py).
-            role = {STATE_UPDATE: "update", STATE_INSTALLED: "danger"}.get(state, "action")
-            self._set_role(button, role)
+            queued = {q[0].model_uid for q in self._download_queue}
+            if uid == self._active_download_uid:
+                # The row being downloaded right now (JL: it must show).
+                button.setText("…")
+                button.setToolTip("Downloading…")
+                button.setEnabled(False)
+                self._set_role(button, "update")
+            elif uid in queued:
+                position = next(i for i, q in enumerate(self._download_queue) if q[0].model_uid == uid) + 1
+                button.setText(ACTION_LABELS[state])
+                button.setToolTip(f"Queued (#{position}) — starts after the current download")
+                button.setEnabled(False)
+                self._set_role(button, "update" if state == STATE_UPDATE else "action")
+            else:
+                button.setText(ACTION_LABELS[state])
+                button.setToolTip(ACTION_TOOLTIPS[state])
+                # Download/update stays clickable during a transfer — that is
+                # what queues (JL). Only removal waits for the imports to end.
+                removable = state == STATE_INSTALLED
+                button.setEnabled(info is not None and not (self._busy and removable))
+                # Blue for an update, green for a download, red for removing
+                # the installed copy — the theme's rule for "replace something
+                # installed" / "primary, go" / "destructive" (ui/theme.py).
+                role = {STATE_UPDATE: "update", STATE_INSTALLED: "danger"}.get(state, "action")
+                self._set_role(button, role)
 
     def _set_role(self, button: QPushButton, object_name: str) -> None:
         """Swap a button's palette role. QSS matches on the objectName, and
@@ -621,7 +652,7 @@ class CommunityPage(QWidget):
         for info in models:
             state = self.installed_state(info)
             cartridge = info.cartridge_name or EMPTY_VALUE
-            export_mode = info.export_mode or EMPTY_VALUE
+            export_mode = INCLUDES_LABELS.get(info.export_mode, info.export_mode or EMPTY_VALUE)
             author = info.author or EMPTY_VALUE
             # Sort on the underlying date, not the locale-formatted text
             # displayed below — a locale format doesn't sort chronologically
@@ -741,14 +772,15 @@ class CommunityPage(QWidget):
 
     def download_row(self, uid: str) -> None:
         """A row's own button: select the row, then dispatch on its state —
-        download or update through the one download path, remove when the
-        installed copy is already current."""
+        download or update through the one download path (which queues behind
+        a running transfer), remove when the installed copy is current."""
         info = next((m for m in self._models if m.model_uid == uid), None)
-        if info is None or self._busy:
+        if info is None:
             return
         self._select(uid)
         if self.installed_state(info) == STATE_INSTALLED:
-            self.remove_installed(info)
+            if not self._busy:  # no deletes while an import is in flight
+                self.remove_installed(info)
         else:
             self.download(info)
 
@@ -818,13 +850,49 @@ class CommunityPage(QWidget):
             update_existing = True
 
         is_update = state == STATE_UPDATE and update_existing
+        self._enqueue_download(info, name, update_existing, is_update)
+
+    def _enqueue_download(self, info: ModelInfo, name: str, update_existing: bool, is_update: bool) -> None:
+        """Start now, or queue behind the running download (JL: a second click
+        must visibly queue, not vanish). Prompts were already answered."""
+        if self._active_download_uid == info.model_uid or any(
+            q[0].model_uid == info.model_uid for q in self._download_queue
+        ):
+            return
+        self._batch_total += 1
+        if self._busy:
+            self._download_queue.append((info, name, update_existing, is_update))
+            self._post_progress(f"Queued {name} ({len(self._download_queue)} waiting).")
+            self._sync_row_actions()
+            return
+        self._start_download(info, name, update_existing, is_update)
+
+    def _start_download(self, info: ModelInfo, name: str, update_existing: bool, is_update: bool) -> None:
+        self._batch_done += 1
+        self._active_download_uid = info.model_uid
         self._set_busy(True)
-        self._post_progress(f"Downloading {name}…")
+        self._post_progress(f"{self._batch_prefix()}Downloading {name}…")
         self._win.run_worker(
             lambda: self._download_and_import(info, name, update_existing=update_existing),
             on_done=lambda result: self._on_imported(result, info, name, is_update=is_update),
             on_error=lambda exc: self._on_download_failed(exc),
         )
+
+    def _batch_prefix(self) -> str:
+        """"Downloading 2 of 3: " once a queue exists; silent for a single."""
+        if self._batch_total <= 1:
+            return ""
+        return f"Downloading {self._batch_done} of {self._batch_total}: "
+
+    def _finish_download(self) -> None:
+        """One transfer ended (either way): start the next or stand down."""
+        self._active_download_uid = None
+        if self._download_queue:
+            self._start_download(*self._download_queue.pop(0))
+            return
+        self._batch_total = 0
+        self._batch_done = 0
+        self._set_busy(False)
 
     def find_catalogue_entry(self, uid: str, api: Any | None = None) -> ModelInfo | None:
         """The catalogue row for ``uid``, from the last search or the server.
@@ -888,13 +956,14 @@ class CommunityPage(QWidget):
                     return
                 last[0] = pct
                 self._post_progress(
-                    f"Downloading {name}: {pct}% ({done / (1024 * 1024):.1f} / {total / (1024 * 1024):.1f} MB)"
+                    f"{self._batch_prefix()}Downloading {name}: {pct}% "
+                    f"({done / (1024 * 1024):.1f} / {total / (1024 * 1024):.1f} MB)"
                 )
                 return
             megabytes = done / (1024 * 1024)
             if int(megabytes) != last[0]:
                 last[0] = int(megabytes)
-                self._post_progress(f"Downloading {name}: {megabytes:.1f} MB")
+                self._post_progress(f"{self._batch_prefix()}Downloading {name}: {megabytes:.1f} MB")
 
         return report
 
@@ -907,7 +976,7 @@ class CommunityPage(QWidget):
             pct = int(step * 100 / total)
             if pct != last[0]:
                 last[0] = pct
-                self._post_progress(f"Importing {name}: {pct}% ({step} / {total} files)")
+                self._post_progress(f"{self._batch_prefix()}Importing {name}: {pct}% ({step} / {total} files)")
 
         return report
 
@@ -932,7 +1001,7 @@ class CommunityPage(QWidget):
         repo.update(model)
 
     def _on_imported(self, result: tuple[int, int], info: ModelInfo, name: str, *, is_update: bool) -> None:
-        self._set_busy(False)
+        self._finish_download()
         _cartridge_id, model_id = result
         self._post_progress(f"Updated {name} to v{info.model_version}." if is_update else f"Imported {name}.")
         self._notify_import(model_id, updated=is_update)
@@ -962,9 +1031,10 @@ class CommunityPage(QWidget):
         self._win.notify("Download complete", "Model imported.")
 
     def _on_download_failed(self, exc: Exception) -> None:
-        self._set_busy(False)
         self._post_progress(f"Download failed: {exc}")
         self._win.notify("Download failed", str(exc))
+        # After the messaging: a failure must not strand the queued rest.
+        self._finish_download()
 
     def _set_busy(self, busy: bool) -> None:
         """One archive at a time — a second import would race the same tree."""
