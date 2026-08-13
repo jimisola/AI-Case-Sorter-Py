@@ -1,4 +1,4 @@
-"""The Sort dashboard: slot cards, live counts, the recent feed, and the run.
+"""The Sort dashboard: slot cards, live counts, the current case, and the run.
 
 Everything here runs offscreen against a real SQLite-backed ``Config`` and,
 where a board is needed, the in-process serial emulator — no display, no
@@ -17,7 +17,12 @@ pytest.importorskip("PySide6")
 from sorter.control.run_controller import RunController
 from sorter.hardware.serial_emulator import EMULATED_PORT, EmulatorBroker
 from sorter.ml import classifier, local_inference
-from sorter.qtui.app import FEED_MAX
+from sorter.qtui.app import (
+    CROP_EMPTY_TEXT,
+    RESULT_EMPTY_CONFIDENCE,
+    RESULT_EMPTY_TEXT,
+    SETTING_SHOW_CAMERA,
+)
 from sorter.qtui.slot_grid import CATCH_ALL_HINT, EMPTY_HINT
 
 from .conftest import drain_until, seed_model
@@ -273,64 +278,132 @@ def test_a_cards_reset_button_empties_just_that_bin(window, connected, config) -
     assert connected.package_resets == [1]
 
 
-# ----- cropped headstamp -----------------------------------------------------
+# ----- the cropped headstamp, and the call made on it ------------------------
 
 
-def test_the_last_crop_is_shown_beside_the_preview(window) -> None:
+def test_the_crop_panel_is_empty_until_a_case_is_classified(window) -> None:
     assert window.crop_label.pixmap().isNull()
+    assert window.crop_label.text() == CROP_EMPTY_TEXT
+    assert window.result_label.text() == RESULT_EMPTY_TEXT
+    assert window.result_confidence_label.text() == RESULT_EMPTY_CONFIDENCE
 
+
+def test_a_classification_fills_the_crop_panel_and_the_result_line(window) -> None:
     window.bus.post("run/history", history("9mm FC", 99.0))
     window.bus.drain()
 
     pixmap = window.crop_label.pixmap()
     assert not pixmap.isNull()
-    assert max(pixmap.width(), pixmap.height()) == window.crop_label.width()
+    # Scaled into the panel, never past it — the panel is what resizes now.
+    assert pixmap.width() <= window.crop_label.width()
+    assert pixmap.height() <= window.crop_label.height()
+    assert window.result_label.text() == "9mm FC"
+    assert window.result_confidence_label.text() == "99%"
 
 
-# ----- recent-classification feed --------------------------------------------
-
-
-def test_feed_lists_newest_first(window) -> None:
-    for label in ("9mm", ".223", "45 ACP"):
-        window.bus.post("run/history", history(label, 99.0))
+def test_the_result_line_shows_the_current_case_only(window) -> None:
+    window.bus.post("run/history", history("9mm", 99.0))
+    window.bus.post("run/history", history(".223", 71.0))
     window.bus.drain()
 
-    text = window.feed_label.text()
-    assert text.index("45 ACP") < text.index(".223") < text.index("9mm")
+    assert window.result_label.text() == ".223"
+    assert window.result_confidence_label.text() == "71%"
+    assert "9mm" not in window.result_label.text()  # nothing accumulates here
 
 
-def test_feed_caps_what_it_shows(window) -> None:
-    for index in range(FEED_MAX + 5):
-        window.bus.post("run/history", history(f"hs{index}", 99.0))
+def test_the_result_line_carries_the_parent_classification(window) -> None:
+    payload = history("LC 21", 99.0)
+    payload["parent"] = "Lake City"
+    window.bus.post("run/history", payload)
     window.bus.drain()
 
-    text = window.feed_label.text()
-    assert text.count("99%") == FEED_MAX
-    assert "hs0" not in text  # the oldest fell off the end
-    assert f"hs{FEED_MAX + 4}" in text
+    assert window.result_label.text() == "Lake City · LC 21"
 
 
-def test_feed_colors_confidence_against_the_floor(window, config) -> None:
+def test_confidence_is_colored_against_the_floor(window, config) -> None:
     config.set_run_confidence_floor(80)
 
     window.bus.post("run/history", history("9mm", 92.0))
+    window.bus.drain()
+    assert window.palette_colors["success"] in window.result_confidence_label.styleSheet()
+
     window.bus.post("run/history", history("unknown", 41.0))
     window.bus.drain()
-
-    text = window.feed_label.text()
-    assert f'<span style="color: {window.palette_colors["success"]};">92%' in text
-    assert f'<span style="color: {window.palette_colors["warning"]};">41%' in text
+    assert window.palette_colors["warning"] in window.result_confidence_label.styleSheet()
 
 
-def test_feed_recolors_on_a_theme_switch(window) -> None:
+def test_the_result_line_recolors_on_a_theme_switch(window) -> None:
     window.bus.post("run/history", history("9mm", 99.0))
     window.bus.drain()
-    before = window.feed_label.text()
+    before = window.result_confidence_label.styleSheet()
 
     window.set_theme("Comic Book")
 
-    assert window.feed_label.text() != before
-    assert window.palette_colors["success"] in window.feed_label.text()
+    assert window.result_confidence_label.styleSheet() != before
+    assert window.palette_colors["success"] in window.result_confidence_label.styleSheet()
+
+
+# ----- the live camera toggle ------------------------------------------------
+
+
+class RecordingCamera:
+    """Counts the frame reads the preview timer would make."""
+
+    def __init__(self) -> None:
+        self.reads = 0
+
+    def latest_frame(self):
+        self.reads += 1
+        return np.zeros((480, 640, 3), np.uint8)
+
+    def stop(self) -> None:
+        pass
+
+
+def test_the_live_camera_is_off_by_default_and_reads_no_frames(window) -> None:
+    camera = RecordingCamera()
+    window.camera = camera
+
+    assert window.show_camera_check.isChecked() is False
+    assert window.preview_label.isVisibleTo(window.preview_label.parentWidget()) is False
+
+    window._refresh_preview()
+
+    assert camera.reads == 0
+
+
+def test_turning_the_camera_on_shows_the_preview_and_reads_frames(window) -> None:
+    camera = RecordingCamera()
+    window.camera = camera
+
+    window.show_camera_check.setChecked(True)
+
+    assert window.preview_label.isVisibleTo(window.preview_label.parentWidget()) is True
+    window._refresh_preview()
+    assert camera.reads == 1
+    assert not window.preview_label.pixmap().isNull()
+
+
+def test_the_camera_toggle_survives_a_restart(window, window_factory, config) -> None:
+    window.show_camera_check.setChecked(True)
+
+    reopened = window_factory(config)
+
+    assert reopened.show_camera_check.isChecked() is True
+    assert reopened._load_setting(SETTING_SHOW_CAMERA) is True
+
+
+def test_the_crop_stays_the_bigger_panel_when_the_camera_is_on(window) -> None:
+    window.show_camera_check.setChecked(True)
+    column = window.crop_label.parentWidget().layout()
+
+    stretches = {
+        column.itemAt(index).widget(): column.stretch(index)
+        for index in range(column.count())
+        if column.itemAt(index).widget() is not None
+    }
+
+    assert stretches[window.crop_label] > stretches[window.preview_label]
 
 
 # ----- start preflight -------------------------------------------------------
@@ -614,7 +687,7 @@ def test_manual_feed_drives_the_emulator_end_to_end(window, config, monkeypatch)
     window.action_buttons["Manual feed"].click()
 
     assert drain_until(window, lambda: window.slot_grid.cards[2].count_label.text() == "1")
-    assert "9mm FC" in window.feed_label.text()
+    assert window.result_label.text() == "9mm FC"
     # The dock saw the exchange: the wheel command out, the board's ack back.
     log = window.serial_monitor.output.toPlainText()
     assert "-> xf:0" in log
@@ -630,18 +703,16 @@ def test_run_options_reflect_the_config_defaults(window, config) -> None:
     assert window.auto_select_check.isChecked() == config.run_auto_select_trays
 
 
-def test_confidence_floor_control_persists_and_colors_the_feed(window, config) -> None:
+def test_confidence_floor_control_persists_and_colors_the_result(window, config) -> None:
     window.floor_spin.setValue(80)
 
     assert config.run_confidence_floor == 80
 
-    window.bus.post("run/history", history("9mm", 92.0))
     window.bus.post("run/history", history("unknown", 41.0))
     window.bus.drain()
 
-    text = window.feed_label.text()
-    assert f'<span style="color: {window.palette_colors["success"]};">92%' in text
-    assert f'<span style="color: {window.palette_colors["warning"]};">41%' in text
+    assert window.result_confidence_label.text() == "41%"
+    assert window.palette_colors["warning"] in window.result_confidence_label.styleSheet()
 
 
 def test_store_images_control_persists_and_warns_once_per_session(window, config) -> None:

@@ -30,9 +30,13 @@ def test_stylesheet_is_well_formed(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", list(BUILTIN_THEMES))
-def test_settings_button_uses_the_update_role_not_action_or_danger(name: str) -> None:
+def test_sidebar_labels_use_the_two_roles_the_icons_are_inked_from(name: str) -> None:
+    # app._paint_sidebar_icon reads these same two roles: a stylesheet cannot
+    # reach a QIcon, so the pairing is only kept by hand.
     palette = BUILTIN_THEMES[name]
     qss = build_stylesheet(palette)
 
-    assert f"#settingsButton {{ color: {palette['update']}; }}" in qss
-    assert palette["update"] not in (palette["action"], palette["danger"])
+    assert f"color: {palette['text_muted']};" in qss
+    assert f"color: {palette['text_highlight']};" in qss
+    # The gear is a drawn icon now — no per-role color workaround left.
+    assert "settingsButton" not in qss

@@ -211,8 +211,9 @@ def test_demo_a_full_sorting_session(config, window_factory, monkeypatch) -> Non
     assert counts[2] > 0 and counts[3] > 0, f"both configured slots should have filled: {counts}"
     assert counts[0] == 0, "nothing was below the floor, so the catch-all stays empty"
 
-    text = window.feed_label.text()
-    assert "9mm FC" in text and "96%" in text
+    # The current case, front and centre: its crop, its label, its confidence.
+    assert window.result_label.text() in ("9mm FC", ".223 LC")
+    assert window.result_confidence_label.text() == "96%"
     assert not window.crop_label.pixmap().isNull(), "the last cropped headstamp is never shown"
 
     # The history dock saw every classification (it is posted before the sort

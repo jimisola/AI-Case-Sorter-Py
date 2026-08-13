@@ -61,6 +61,9 @@ QMainWindow::separator {{
 }}
 QMainWindow::separator:hover {{ background-color: {c["border_focus"]}; }}
 
+/* The two label colors below are also what inks the activity icons — a
+   stylesheet can't reach a QIcon, so app._paint_sidebar_icon renders them
+   from the same two roles. Change one here and change it there. */
 #sidebar {{ background-color: {c["bg_surface"]}; }}
 #sidebar QToolButton {{
     background: transparent;
@@ -74,21 +77,6 @@ QMainWindow::separator:hover {{ background-color: {c["border_focus"]}; }}
     background-color: {c["bg_card_sel"]};
     color: {c["text_highlight"]};
 }}
-/* The gear read as chrome, not a tab, at the sidebar's default muted color
-   (JL live-testing) — "update" blue ("adjust something installed") makes it
-   easy to spot without reaching for action-green or danger-red. Checked
-   stays identical to every other sidebar button, so activating Settings
-   still reads the same way as activating any other activity. */
-#sidebar QToolButton#settingsButton {{ color: {c["update"]}; }}
-#sidebar QToolButton#settingsButton:hover {{
-    background-color: {c["bg_card_hover"]};
-    color: {c["update_hover"]};
-}}
-#sidebar QToolButton#settingsButton:checked {{
-    background-color: {c["bg_card_sel"]};
-    color: {c["text_highlight"]};
-}}
-
 QMenuBar {{
     background-color: {c["bg_surface"]};
     color: {c["text"]};
@@ -183,6 +171,10 @@ QLabel#cropPanel {{
     color: {c["text_muted"]};
     border: 1px solid {c["border"]};
 }}
+/* The Sort column's current-case line. The confidence colour is state (above
+   or below the floor), so _paint_current_result sets it per widget. */
+QLabel#currentHeadstamp {{ color: {c["text_highlight"]}; font-size: 18px; font-weight: bold; }}
+QLabel#currentConfidence {{ font-size: 16px; font-weight: bold; }}
 
 QDialog {{ background-color: {c["bg_window"]}; }}
 QLabel#dialogHint, QLabel#rowHint {{ color: {c["text_muted"]}; }}

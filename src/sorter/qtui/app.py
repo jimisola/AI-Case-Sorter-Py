@@ -22,14 +22,21 @@ import os
 import sys
 import threading
 import traceback
-from collections import deque
 from collections.abc import Callable
 from typing import Any
 
 import numpy as np
-from PySide6.QtCore import QByteArray, Qt, QTimer, QUrl, Signal  # ty: ignore[unresolved-import]
+from PySide6.QtCore import (  # ty: ignore[unresolved-import]
+    QByteArray,
+    QSize,
+    Qt,
+    QTimer,
+    QUrl,
+    Signal,
+)
 from PySide6.QtGui import (  # ty: ignore[unresolved-import]
     QDesktopServices,
+    QGuiApplication,
     QImage,
     QKeySequence,
     QPixmap,
@@ -71,6 +78,8 @@ from .dialog_slot_assign import CATCH_ALL_HINT, SlotAssignDialog
 from .dialog_template import EditTemplateDialog, NewTemplateDialog
 from .help_viewer import build_help_window, topic_for
 from .history_view import build_history_view
+from .icons import COMMUNITY, MODELS, SETTINGS, SORT, TRAIN, app_icon
+from .icons import icon as vector_icon
 from .models_page import build_models_page
 from .palettes import (
     SETTING_CUSTOM_THEMES,
@@ -91,17 +100,32 @@ from .torch_gate import TorchGate
 from .train_page import build_train_page
 
 PREVIEW_FPS = 20
-CROP_SIZE = 132
 SIDEBAR_WIDTH = 84
 PLACEHOLDER_TEXT = "Not ported to the Qt spike yet — launch without --qt for the full UI."
 
-# Sidebar: (glyph, page name). Settings is pinned to the bottom, below the stretch.
-ACTIVITIES = (("▶", "Sort"), ("🎓", "Train"), ("📦", "Models"), ("🌐", "Community"))
-SETTINGS_ACTIVITY = ("⚙", "Settings")
+# Sidebar: (icon name, page name). Settings is pinned to the bottom, below the
+# stretch. The icons are drawn from qtui/icons.py and inked by the live
+# palette (_paint_sidebar_icons) — emoji read as artwork and themed badly.
+ACTIVITIES = ((SORT, "Sort"), (TRAIN, "Train"), (MODELS, "Models"), (COMMUNITY, "Community"))
+SETTINGS_ACTIVITY = (SETTINGS, "Settings")
+SIDEBAR_ICON_SIZE = 26
 SETTINGS_SECTIONS = ("Camera", "Serial", "Image Processing", "AI Config", "Theme")
 BAUD_CHOICES = (9600, 19200, 38400, 57600, 115200)
-FEED_MAX = 12
-FEED_EMPTY_TEXT = "Recent classifications will appear here."
+
+# The Sort column's primary panel: the crop the classifier actually saw, plus
+# the one result it produced (Seth, 2026-08-13 — the Windows app's layout).
+# History belongs to the Monitor dock, not to a strip under the dashboard.
+CROP_EMPTY_TEXT = "No case captured yet"
+RESULT_EMPTY_TEXT = "—"
+RESULT_EMPTY_CONFIDENCE = "—"
+CAPTURE_CAPTION = "Last capture"
+HEADSTAMP_CAPTION = "Headstamp"
+CONFIDENCE_CAPTION = "Confidence"
+
+# The live feed is a monitor, not the working surface: off unless asked for,
+# and the preview timer does no camera read while it is (see _refresh_preview).
+SHOW_CAMERA_TEXT = "Show live camera"
+SETTING_SHOW_CAMERA = "ui.sort_show_camera"
 
 # The Start/Stop toggle: one button, two faces. The key is what
 # `action_buttons` exposes it under.
@@ -132,6 +156,41 @@ class _PreviewLabel(QLabel):
     def mousePressEvent(self, event: Any) -> None:
         self.clicked.emit()
         super().mousePressEvent(event)
+
+
+class _CropPanel(QLabel):
+    """The last cropped headstamp, filling whatever space the column gives it.
+
+    Keeps the source pixmap aside and re-scales on resize: the scaled copy must
+    never become the label's size hint, or each repaint grows the layout the
+    next one is scaled to (same discipline as ``_PreviewLabel``'s host).
+    """
+
+    def __init__(self, text: str, parent: QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self._source: QPixmap | None = None
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.setMinimumSize(1, 1)
+
+    def set_source(self, pixmap: QPixmap) -> None:
+        self._source = pixmap
+        self._rescale()
+
+    def resizeEvent(self, event: Any) -> None:
+        super().resizeEvent(event)
+        self._rescale()
+
+    def _rescale(self) -> None:
+        if self._source is None or self._source.isNull():
+            return
+        self.setPixmap(
+            self._source.scaled(
+                self.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
 
 
 CAMERA_DEAD_LINK = "open Camera settings"
@@ -198,7 +257,8 @@ class QtMainWindow(QMainWindow):
         self._is_running = False
         self._master_count = 0
         self._templates: list[Any] = []
-        self._feed_entries: deque[tuple[str, float, bool]] = deque(maxlen=FEED_MAX)
+        # The current case only — (display label, confidence, above the floor).
+        self._current_result: tuple[str, float, bool] | None = None
         # Tk parity: the store-images disk-usage notice shows once per session.
         self._store_warning_shown = False
         # Community model settings, from the last Sort-page fetch (A24/A25).
@@ -231,6 +291,12 @@ class QtMainWindow(QMainWindow):
         self.ensure_torch = TorchGate(self)
 
         self.setWindowTitle(f"AI Case Sorter OSS - v{__version__} (Qt) · GPL-3.0")
+        # The headstamp mark, in one fixed neutral (see icons.APP_ICON_COLOR):
+        # a taskbar owns its own background, so this one must not follow the
+        # live palette. Set application-wide as well, so dialogs inherit it.
+        window_icon = app_icon()
+        self.setWindowIcon(window_icon)
+        QGuiApplication.setWindowIcon(window_icon)
         self._build_ui()
         self._apply_theme(self.theme_name)
         self._restore_window_state()
@@ -376,18 +442,15 @@ class QtMainWindow(QMainWindow):
         column.setSpacing(4)
 
         self.sidebar_buttons: dict[str, QToolButton] = {}
+        # Which motif each button carries, so a theme switch can re-ink them.
+        self._sidebar_icon_names: dict[str, str] = {}
         # The group owns exclusivity; keep the reference or it is collected.
         self._sidebar_group = QButtonGroup(self)
         self._sidebar_group.setExclusive(True)
-        for glyph, name in ACTIVITIES:
-            column.addWidget(self._activity_button(sidebar, glyph, name))
+        for icon_name, name in ACTIVITIES:
+            column.addWidget(self._activity_button(sidebar, icon_name, name))
         column.addStretch(1)
         column.addWidget(self._activity_button(sidebar, *SETTINGS_ACTIVITY))
-        # The gear was easy to miss at the sidebar's default muted color (JL
-        # live-testing) — theme.py colors this objectName with the palette's
-        # "update" blue ("adjust something installed"), not action-green or
-        # danger-red.
-        self.sidebar_buttons["Settings"].setObjectName("settingsButton")
 
         # Width follows the widest label's font metrics, not a constant — a
         # fixed pixel width clips "Community" on fonts wider than the dev box.
@@ -396,19 +459,39 @@ class QtMainWindow(QMainWindow):
         sidebar.setFixedWidth(max(SIDEBAR_WIDTH, widest + 24))
 
         self.sidebar_buttons["Sort"].setChecked(True)
+        self._paint_sidebar_icons()
         self.show_page("Sort")
         return sidebar
 
-    def _activity_button(self, parent: QWidget, glyph: str, name: str) -> QToolButton:
+    def _activity_button(self, parent: QWidget, icon_name: str, name: str) -> QToolButton:
         button = QToolButton(parent)
-        button.setText(f"{glyph}\n{name}")
+        button.setText(name)
+        button.setIconSize(QSize(SIDEBAR_ICON_SIZE, SIDEBAR_ICON_SIZE))
         button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         button.setCheckable(True)
         button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         button.clicked.connect(lambda _checked=False, page=name: self.show_page(page))
+        # The checked state is a different ink, and the group flips two buttons
+        # per click — so both ends of the swap repaint themselves.
+        button.toggled.connect(lambda _on=False, page=name: self._paint_sidebar_icon(page))
         self._sidebar_group.addButton(button)
         self.sidebar_buttons[name] = button
+        self._sidebar_icon_names[name] = icon_name
         return button
+
+    def _paint_sidebar_icon(self, name: str) -> None:
+        """Ink one sidebar icon for its current state, from the live palette.
+
+        The two colors are the ones theme.py's ``#sidebar QToolButton`` rules
+        put on the label, so icon and text always agree.
+        """
+        button = self.sidebar_buttons[name]
+        role = "text_highlight" if button.isChecked() else "text_muted"
+        button.setIcon(vector_icon(self._sidebar_icon_names[name], self.palette_colors[role], SIDEBAR_ICON_SIZE))
+
+    def _paint_sidebar_icons(self) -> None:
+        for name in self.sidebar_buttons:
+            self._paint_sidebar_icon(name)
 
     def _build_sort_page(self) -> QWidget:
         page = QWidget()
@@ -431,10 +514,6 @@ class QtMainWindow(QMainWindow):
         self.sort_stack.addWidget(splitter)
         self.sort_stack.addWidget(self._build_empty_state_panel(page))
         column.addWidget(self.sort_stack, 1)
-
-        self.feed_label = self._muted_label(FEED_EMPTY_TEXT, page)
-        self.feed_label.setTextFormat(Qt.TextFormat.RichText)
-        column.addWidget(self.feed_label)
         return page
 
     def _build_grid_column(self, parent: QWidget) -> QWidget:
@@ -641,18 +720,39 @@ class QtMainWindow(QMainWindow):
             self.notify(STORE_IMAGES_WARNING_TITLE, STORE_IMAGES_WARNING_TEXT)
 
     def _on_floor_changed(self, value: int) -> None:
-        # The feed reads config.run_confidence_floor live on every run/history
-        # event (_on_run_history) — no separate wiring needed for the coloring.
+        # The current-result line reads config.run_confidence_floor live on
+        # every run/history event — no separate wiring for the coloring.
         self.config.set_run_confidence_floor(int(value))
 
     def _on_auto_select_toggled(self, checked: bool) -> None:
         self.config.set_run_auto_select_trays(bool(checked))
 
     def _build_preview_column(self, parent: QWidget) -> QWidget:
+        """The crop the classifier saw, what it made of it, and — on request — the feed.
+
+        Seth (2026-08-13): the operator watches the *cropped* headstamp and the
+        call made on it, the way the Windows app shows them. The live camera is
+        a setup aid, so it is off by default and secondary when shown.
+        """
         holder = QWidget(parent)
         column = QVBoxLayout(holder)
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(6)
+
+        header = QHBoxLayout()
+        header.addWidget(self._muted_label(CAPTURE_CAPTION, holder))
+        header.addStretch(1)
+        self.show_camera_check = QCheckBox(SHOW_CAMERA_TEXT, holder)
+        # Restored before the preview exists, so the handler is wired below it.
+        self.show_camera_check.setChecked(bool(self._load_setting(SETTING_SHOW_CAMERA)))
+        header.addWidget(self.show_camera_check)
+        column.addLayout(header)
+
+        self.crop_label = _CropPanel(CROP_EMPTY_TEXT, holder)
+        self.crop_label.setObjectName("cropPanel")
+        column.addWidget(self.crop_label, 3)
+        column.addLayout(self._build_result_row(holder))
+
         self.preview_label = _PreviewLabel(PREVIEW_INITIAL_TEXT, holder)
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         # A dead camera is the one thing this panel can usefully say, so it
@@ -666,20 +766,32 @@ class QtMainWindow(QMainWindow):
         self.preview_label.setMinimumSize(1, 1)
         # A video letterbox is black in every theme; not chrome, so not themed.
         self.preview_label.setStyleSheet("background-color: #000000; color: #808080;")
-        column.addWidget(self.preview_label, 1)
-
-        crop_row = QHBoxLayout()
-        crop_row.addWidget(self._muted_label("Last cropped", holder))
-        self.crop_label = QLabel("—", holder)
-        self.crop_label.setObjectName("cropPanel")
-        self.crop_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        # Fixed: the crop is the classifier's actual input, shown at one size
-        # so it never competes with the live preview for space.
-        self.crop_label.setFixedSize(CROP_SIZE, CROP_SIZE)
-        crop_row.addWidget(self.crop_label)
-        crop_row.addStretch(1)
-        column.addLayout(crop_row)
+        self.preview_label.setVisible(self.show_camera_check.isChecked())
+        # Smaller stretch than the crop: shown, it is the secondary panel.
+        column.addWidget(self.preview_label, 2)
+        self.show_camera_check.toggled.connect(self._on_show_camera_toggled)
         return holder
+
+    def _build_result_row(self, holder: QWidget) -> QHBoxLayout:
+        """The current case, Windows-style: what it is and how sure we are."""
+        row = QHBoxLayout()
+        row.addWidget(self._muted_label(HEADSTAMP_CAPTION, holder))
+        self.result_label = QLabel(RESULT_EMPTY_TEXT, holder)
+        self.result_label.setObjectName("currentHeadstamp")
+        row.addWidget(self.result_label)
+        row.addStretch(1)
+        row.addWidget(self._muted_label(CONFIDENCE_CAPTION, holder))
+        self.result_confidence_label = QLabel(RESULT_EMPTY_CONFIDENCE, holder)
+        self.result_confidence_label.setObjectName("currentConfidence")
+        row.addWidget(self.result_confidence_label)
+        self._paint_current_result()
+        return row
+
+    def _on_show_camera_toggled(self, checked: bool) -> None:
+        self.preview_label.setVisible(bool(checked))
+        if checked and not self._camera_state[1]:
+            self._paint_preview_placeholder()
+        self._save_setting(SETTING_SHOW_CAMERA, bool(checked))
 
     def _build_settings_page(self) -> QWidget:
         page = QWidget()
@@ -1482,7 +1594,9 @@ class QtMainWindow(QMainWindow):
         for label in self._muted_labels:
             label.setStyleSheet(muted)
         # Colors baked into rich text / per-line paints need a hand re-render.
-        self._render_feed()
+        self._paint_current_result()
+        if hasattr(self, "sidebar_buttons"):
+            self._paint_sidebar_icons()
         if hasattr(self, "serial_monitor"):
             self.serial_monitor.apply_palette()
         if hasattr(self, "history_view"):
@@ -1566,6 +1680,9 @@ class QtMainWindow(QMainWindow):
         return image.copy()
 
     def _refresh_preview(self) -> None:
+        # Hidden is the default, and a hidden panel earns no camera read.
+        if not self.show_camera_check.isChecked():
+            return
         frame = self.camera.latest_frame()
         if frame is None:
             return
@@ -1871,39 +1988,39 @@ class QtMainWindow(QMainWindow):
         self.master_count_label.setText(str(self._master_count))
 
     def _on_run_history(self, payload: Any) -> None:
-        """One classification for the recent-feed strip (newest first) + its crop."""
+        """The current case: its crop and the call made on it. Nothing accumulates."""
         if not isinstance(payload, dict):
             return
         self._show_crop(payload.get("image"))
         confidence = float(payload.get("confidence", 0) or 0)
         floor = float(getattr(self.config, "run_confidence_floor", 0) or 0)
-        self._feed_entries.appendleft(
-            (str(payload.get("label") or "(empty)"), confidence, floor <= 0 or confidence >= floor)
+        label = str(payload.get("label") or "(empty)")
+        parent = payload.get("parent")
+        self._current_result = (
+            f"{parent} · {label}" if parent else label,
+            confidence,
+            floor <= 0 or confidence >= floor,
         )
-        self._render_feed()
+        self._paint_current_result()
 
-    def _render_feed(self) -> None:
-        if not self._feed_entries:
-            self.feed_label.setText(FEED_EMPTY_TEXT)
+    def _paint_current_result(self) -> None:
+        """The confidence colour is baked in, so a theme switch re-runs this."""
+        if self._current_result is None:
+            self.result_label.setText(RESULT_EMPTY_TEXT)
+            self.result_confidence_label.setText(RESULT_EMPTY_CONFIDENCE)
+            self.result_confidence_label.setStyleSheet(f"color: {self.palette_colors['text_muted']};")
             return
-        parts = []
-        for label, confidence, above_floor in self._feed_entries:
-            color = self.palette_colors["success" if above_floor else "warning"]
-            parts.append(f'{html.escape(label)} <span style="color: {color};">{confidence:.0f}%</span>')
-        self.feed_label.setText(" &middot; ".join(parts))
+        label, confidence, above_floor = self._current_result
+        self.result_label.setText(label)
+        self.result_confidence_label.setText(f"{confidence:.0f}%")
+        color = self.palette_colors["success" if above_floor else "warning"]
+        self.result_confidence_label.setStyleSheet(f"color: {color};")
 
     def _show_crop(self, image: Any) -> None:
-        """The headstamp as the classifier saw it, at a fixed size."""
+        """The headstamp as the classifier saw it — the column's primary panel."""
         if not isinstance(image, np.ndarray) or image.size == 0:
             return
-        pixmap = QPixmap.fromImage(self.frame_to_image(image))
-        self.crop_label.setPixmap(
-            pixmap.scaled(
-                self.crop_label.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        )
+        self.crop_label.set_source(QPixmap.fromImage(self.frame_to_image(image)))
 
     def beep(self) -> None:
         """Non-blocking batch-complete tone. Best-effort — never fails a handler."""

@@ -123,6 +123,9 @@ def test_run_worker_replies_are_one_shot_and_unsubscribed(window) -> None:
 
     worker_topics = [t for t, handlers in window.bus._subs.items() if t.startswith("worker/") and handlers]
     assert worker_topics == []  # delivery must tear the subscription down
+
+
+def test_theme_switch_restyles_the_window(window) -> None:
     window.theme_combo.setCurrentText("Dark")
     dark = window.styleSheet()
 
@@ -177,9 +180,11 @@ def test_bgr_frame_renders(window) -> None:
     assert (pixmap.width(), pixmap.height()) == (640, 480)
 
 
-def test_preview_frames_never_grow_the_window(qapp, window) -> None:
-    # Regression: the scaled pixmap must not feed back into the layout's
-    # minimum, or the window ratchets larger on every preview repaint.
+def test_scaled_frames_never_grow_the_window(qapp, window) -> None:
+    # Regression: a scaled pixmap must not feed back into the layout's minimum,
+    # or the window ratchets larger on every repaint. Both panels scale — the
+    # crop on every classification, the live preview on every frame.
+    window.show_camera_check.setChecked(True)
     window.resize(1024, 768)
     window.show()
     qapp.processEvents()
@@ -190,6 +195,7 @@ def test_preview_frames_never_grow_the_window(qapp, window) -> None:
     window.camera = types.SimpleNamespace(latest_frame=lambda: frame)
     for _ in range(3):
         window._refresh_preview()
+        window._show_crop(frame)
         qapp.processEvents()
 
     assert window.minimumSizeHint() == minimum_before

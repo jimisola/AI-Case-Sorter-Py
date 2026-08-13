@@ -7,8 +7,8 @@ and inside the app's own help viewer.
 
 ## Contents
 
-- [Sort dashboard](#sort-dashboard) — the sidebar's main working screen: live
-  camera preview, slot cards, sorting templates, and the
+- [Sort dashboard](#sort-dashboard) — the sidebar's main working screen: the
+  current case, slot cards, sorting templates, and the
   Start/Stop/Manual-feed controls.
 - [Settings](#settings) — device and board configuration, including
   [Serial](#serial) and [Camera](#camera).
@@ -25,10 +25,24 @@ This whole guide is one Markdown file, rendered two ways:
 ## Sort dashboard
 
 The Sort activity (the sidebar's top button) is where sorting actually
-happens. It combines the live camera feed, the slot layout, and the run
+happens. It combines the current case, the slot layout, and the run
 controls on one screen instead of spreading them across tabs.
 
-<!-- screenshot: Sort dashboard — camera preview beside the slot-card grid, action row above, recent-classification strip below -->
+<!-- screenshot: Sort dashboard — cropped-headstamp panel beside the slot-card grid, action row above -->
+
+### The current case
+
+The left-hand panel shows the **last captured and cropped headstamp** —
+exactly the image the classifier was given — with what it made of it
+underneath: the headstamp it matched and how confident it was. A confidence
+below the confidence floor is highlighted, and that case goes to the
+Catch-All. Only the current case is shown here; the running history lives in
+the classification history panel (View → Classification History).
+
+**Show live camera** above the panel adds the live camera feed as a smaller
+second panel below the crop. It is off by default — the feed is a setup aid,
+not what an operator watches during a run — and while it is off no frames are
+read at all. Use [Settings → Camera](#camera) to pick or aim a device.
 
 ### Slot cards
 

@@ -19,9 +19,16 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import Qt
 
 from sorter.hardware.serial_emulator import EMULATED_PORT
-from sorter.qtui.app import default_qpa_platform
+from sorter.qtui.app import SIDEBAR_ICON_SIZE, default_qpa_platform
 
 from .conftest import seed_model
+
+
+def _icon_bytes(button) -> bytes:
+    """The button's icon as pixels — the only way to see what color it was inked."""
+    image = button.icon().pixmap(SIDEBAR_ICON_SIZE, SIDEBAR_ICON_SIZE).toImage()
+    return bytes(image.constBits())
+
 
 # ----- QT_QPA_PLATFORM default (no QApplication needed) -----------------------
 
@@ -182,12 +189,50 @@ def test_empty_state_panel_links_to_settings_serial_and_camera(window) -> None:
 # ----- sidebar branding -------------------------------------------------------
 
 
-def test_the_settings_button_carries_its_own_object_name(window) -> None:
-    # theme.py colors #settingsButton with the palette's "update" role — see
-    # test_qt_theme.py for the stylesheet side of this contract.
-    assert window.sidebar_buttons["Settings"].objectName() == "settingsButton"
-    for name in ("Sort", "Train", "Models", "Community"):
-        assert window.sidebar_buttons[name].objectName() != "settingsButton"
+def test_every_activity_carries_a_vector_icon_at_the_configured_size(window) -> None:
+    for name, button in window.sidebar_buttons.items():
+        assert not button.icon().isNull(), name
+        assert button.iconSize().width() == SIDEBAR_ICON_SIZE
+        assert button.toolButtonStyle() == Qt.ToolButtonStyle.ToolButtonTextUnderIcon
+
+
+def test_sidebar_labels_are_the_page_name_alone(window) -> None:
+    # The glyphs used to live in the label text; they are icons now, so a
+    # label is exactly what the width rule measures.
+    for name, button in window.sidebar_buttons.items():
+        assert button.text() == name
+
+
+def test_the_checked_activity_is_inked_differently(window) -> None:
+    checked = window.sidebar_buttons["Sort"]
+    unchecked = window.sidebar_buttons["Models"]
+    assert checked.isChecked() and not unchecked.isChecked()
+
+    assert _icon_bytes(checked) != _icon_bytes(unchecked)
+
+    window.sidebar_buttons["Models"].click()
+
+    # Both ends of the swap repaint: the new selection takes the highlight ink
+    # and the old one goes back to muted.
+    assert _icon_bytes(window.sidebar_buttons["Models"]) != _icon_bytes(checked)
+
+
+def test_a_theme_switch_re_renders_the_sidebar_icons(window) -> None:
+    before = {name: _icon_bytes(b) for name, b in window.sidebar_buttons.items()}
+
+    window.set_theme("Light")
+
+    assert window.palette_colors["text_muted"] != "#9a9a9a"
+    for name, button in window.sidebar_buttons.items():
+        assert _icon_bytes(button) != before[name], name
+
+
+def test_the_window_icon_is_the_fixed_neutral_mark(window) -> None:
+    assert not window.windowIcon().isNull()
+    # It must NOT follow the palette — a taskbar has its own background.
+    mark = window.windowIcon().pixmap(32, 32).toImage()
+    window.set_theme("Light")
+    assert window.windowIcon().pixmap(32, 32).toImage() == mark
 
 
 # ----- window/session polish --------------------------------------------------
