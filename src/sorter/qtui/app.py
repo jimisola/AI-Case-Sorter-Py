@@ -352,7 +352,9 @@ class QtMainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal, page)
         splitter.addWidget(self._build_preview_column(splitter))
         splitter.addWidget(self._build_grid_column(splitter))
-        splitter.setSizes([600, 400])
+        # Tk's proportions (JL): the slot cards are the working surface and get
+        # the majority; the camera is a monitor, not the centerpiece.
+        splitter.setSizes([360, 640])
 
         # Index 0 is the working dashboard, 1 the first-run guided panel — see
         # _update_sort_empty_state. Nothing computes the initial state here:
