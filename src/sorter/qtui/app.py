@@ -27,7 +27,7 @@ from collections.abc import Callable
 from typing import Any
 
 import numpy as np
-from PySide6.QtCore import QByteArray, Qt, QTimer, QUrl  # ty: ignore[unresolved-import]
+from PySide6.QtCore import QByteArray, Qt, QTimer, QUrl, Signal  # ty: ignore[unresolved-import]
 from PySide6.QtGui import (  # ty: ignore[unresolved-import]
     QDesktopServices,
     QImage,
@@ -115,6 +115,25 @@ TEMPLATE_BUTTON_WIDTH = 36
 # link from the live palette.
 PREVIEW_INITIAL_TEXT = "No frame"
 CAMERA_DEAD_TEXT = "No camera feed"
+
+
+class _PreviewLabel(QLabel):
+    """The camera preview surface — plain text only, whole-widget click.
+
+    This was a rich-text label with an ``<a>`` link; PySide6 6.11's
+    QTextDocument path crashed the Windows CI runner (offscreen) with a
+    deterministic access violation the first time an event pump touched it.
+    Plain text plus a click signal gives the same affordance without ever
+    instantiating a text document.
+    """
+
+    clicked = Signal()
+
+    def mousePressEvent(self, event: Any) -> None:
+        self.clicked.emit()
+        super().mousePressEvent(event)
+
+
 CAMERA_DEAD_LINK = "open Camera settings"
 CAMERA_FAILED_STATUS = "Camera failed to start — pick a device in Settings → Camera."
 
@@ -634,12 +653,12 @@ class QtMainWindow(QMainWindow):
         column = QVBoxLayout(holder)
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(6)
-        self.preview_label = QLabel(PREVIEW_INITIAL_TEXT, holder)
+        self.preview_label = _PreviewLabel(PREVIEW_INITIAL_TEXT, holder)
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         # A dead camera is the one thing this panel can usefully say, so it
-        # says where to fix it rather than sitting black (JL).
-        self.preview_label.setTextFormat(Qt.TextFormat.RichText)
-        self.preview_label.linkActivated.connect(lambda _href: self._open_settings_section("Camera"))
+        # says where to fix it rather than sitting black (JL). The whole
+        # label is the click target — see _PreviewLabel for why not a link.
+        self.preview_label.clicked.connect(self._on_preview_clicked)
         # Ignored + tiny minimum: the label must never report the pixmap as
         # its size hint, or each scaled frame grows the layout that the next
         # frame is scaled to — the window ratchets larger on every repaint.
@@ -1491,9 +1510,8 @@ class QtMainWindow(QMainWindow):
         # between the guided empty state and the real dashboard.
         self._update_sort_empty_state()
 
-    def _camera_placeholder_html(self) -> str:
-        color = self.palette_colors["update"]
-        return f'{CAMERA_DEAD_TEXT} — <a href="#camera" style="color: {color};">{CAMERA_DEAD_LINK}</a>'
+    def _camera_placeholder_text(self) -> str:
+        return f"{CAMERA_DEAD_TEXT} — {CAMERA_DEAD_LINK}"
 
     def _paint_preview_placeholder(self) -> None:
         """A camera that isn't connected says so where the feed would be."""
@@ -1502,7 +1520,12 @@ class QtMainWindow(QMainWindow):
         # Painted before the Sort page exists on the very first indicator paint.
         label = getattr(self, "preview_label", None)
         if label is not None:
-            label.setText(self._camera_placeholder_html())
+            label.setText(self._camera_placeholder_text())
+            label.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def _on_preview_clicked(self) -> None:
+        if not self._camera_state[1]:
+            self._open_settings_section("Camera")
 
     def _set_camera_indicator(self, message: str, *, connected: bool) -> None:
         self._camera_state = (message, connected)

@@ -720,7 +720,9 @@ def test_the_preview_says_where_to_fix_a_dead_camera(window) -> None:
     assert "No camera feed" in text
     assert "open Camera settings" in text
 
-    window.preview_label.linkActivated.emit("#camera")
+    # The whole label is the click target (plain text on purpose — a rich-text
+    # link here crashed Windows CI offscreen; see _PreviewLabel).
+    window.preview_label.clicked.emit()
 
     assert window.pages.currentWidget() is window._pages_by_name["Settings"]
     assert window.settings_list.currentItem().text() == "Camera"
