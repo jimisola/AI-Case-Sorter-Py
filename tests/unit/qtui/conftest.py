@@ -27,6 +27,31 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.fixture(autouse=True)
+def _flush_deferred_deletes():
+    """Run Qt's own deletions before the repo-wide between-tests gc.collect().
+
+    tests/conftest.py forces a collection after every test (a Tk necessity).
+    For Qt that means shiboken wrappers can be finalized while their C++
+    objects still sit in the deleteLater queue — on Windows that lands as
+    heap corruption (0xc0000374) inside the collector. Draining the
+    DeferredDelete queue first lets Qt delete through its own machinery, so
+    the collector only ever sees wrappers that are already settled. This
+    teardown runs before the parent conftest's (child fixtures tear down
+    first), which is exactly the ordering that makes it work.
+    """
+    yield
+    try:
+        from PySide6.QtCore import QEvent
+        from PySide6.QtWidgets import QApplication
+    except ImportError:  # no [qt] extra: the test modules all skip anyway
+        return
+    app = QApplication.instance()
+    if app is not None:
+        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        app.processEvents()
+
+
 @pytest.fixture
 def config(tmp_path: Path):
     from sorter.data.config import Config
