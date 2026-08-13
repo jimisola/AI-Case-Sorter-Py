@@ -215,7 +215,7 @@ class ImageProcSection(QWidget):
             broker.send_command(f"cameraledlevel:{value}")
             self._win.set_status(f"Camera LED level → {value}.")
             # Give the LED + camera a moment to settle, then show the new brightness.
-            QTimer.singleShot(LED_RECAPTURE_DELAY_MS, self.capture)
+            QTimer.singleShot(LED_RECAPTURE_DELAY_MS, self, self.capture)
         except Exception as exc:
             self._win.set_status(f"LED send failed: {exc}")
 

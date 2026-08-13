@@ -341,7 +341,7 @@ class QtMainWindow(QMainWindow):
             self._fetch_community_settings()
             self.start_camera()
             self._auto_connect_serial()
-            QTimer.singleShot(2500, self._startup_update_check)
+            QTimer.singleShot(2500, self, self._startup_update_check)
         self._apply_auth_visibility()
 
     # ----- construction -------------------------------------------------------
@@ -984,11 +984,14 @@ class QtMainWindow(QMainWindow):
 
     def _schedule_dock_repaint(self, *_args: Any) -> None:
         # Deferred one event-loop turn: Qt hasn't finished the dock's own
-        # transition (float/re-dock) at the moment the signal fires.
-        QTimer.singleShot(0, self._repaint_after_dock_transition)
+        # transition (float/re-dock) at the moment the signal fires. The
+        # context argument (here and on every deferral in qtui) drops the
+        # callback if the owner is destroyed first — an unbound singleShot
+        # fires on the deleted C++ widget and segfaults.
+        QTimer.singleShot(0, self, self._repaint_after_dock_transition)
 
     def _schedule_collapse_check(self, *_args: Any) -> None:
-        QTimer.singleShot(0, self._restore_collapsed_docks)
+        QTimer.singleShot(0, self, self._restore_collapsed_docks)
 
     def _repaint_after_dock_transition(self) -> None:
         """Force QMainWindowLayout to recompute, then repaint what it owns."""
@@ -1040,7 +1043,7 @@ class QtMainWindow(QMainWindow):
         """
         size = self.size()
         self.resize(size.width(), size.height() + 1)
-        QTimer.singleShot(0, lambda: self.resize(size))
+        QTimer.singleShot(0, self, lambda: self.resize(size))
 
     def _build_community_page(self) -> QWidget:
         self.community_page = build_community_page(self)
@@ -1204,7 +1207,7 @@ class QtMainWindow(QMainWindow):
         if notes_store.unacknowledged(stored):
             # Queued: this runs inside a bus drain, and a modal here would
             # re-enter it (CLAUDE.md §5).
-            QTimer.singleShot(0, lambda: self.open_notes_dialog())
+            QTimer.singleShot(0, self, self.open_notes_dialog)
 
     def _on_community_settings_failed(self) -> None:
         """Offline / refused / garbage: back to purely local behaviour."""
@@ -2071,7 +2074,7 @@ class QtMainWindow(QMainWindow):
         self.set_status(message)
         # Tk shows a dialog here and operators rely on it. Queued single-shot:
         # a modal straight from a bus handler would re-enter the drain.
-        QTimer.singleShot(0, lambda: self.notify("Package complete", message))
+        QTimer.singleShot(0, self, lambda: self.notify("Package complete", message))
 
     # ----- worker dispatch ----------------------------------------------------
 

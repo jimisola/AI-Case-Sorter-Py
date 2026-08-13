@@ -545,7 +545,7 @@ class TrainPage(QWidget):
         if auto_feed_next:
             # The case about to drop is the one just labelled, so it sorts to
             # THIS label's slot even though the field has moved on.
-            QTimer.singleShot(AUTO_FEED_DELAY_MS, lambda: self.feed(sort_label=label))
+            QTimer.singleShot(AUTO_FEED_DELAY_MS, self, lambda: self.feed(sort_label=label))
         return dest
 
     # ----- training -----------------------------------------------------------
