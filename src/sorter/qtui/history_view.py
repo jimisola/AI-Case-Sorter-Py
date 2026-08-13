@@ -20,6 +20,14 @@ Thumbnails are decoded to ``QPixmap`` on arrival, on the main thread: a
 classification lands here at most once per case, not in bulk, so there is no
 batch of frames to justify a worker thread the way the live camera preview
 would.
+
+A slim "Zoom" bar at the top lets the user pick a uniform scale (75/100/150/
+200%) for the tile footprint, thumbnail and entry fonts alike — capacity is
+derived from tile size ÷ widget size, so a bigger tile naturally holds fewer,
+larger records and a smaller tile holds more, smaller ones (Seth, 2026-08-13).
+A zoom change rebuilds every tile at the new size from the recency list,
+applying the same "keep newest" rule as a plain shrink; the choice persists
+via ``SettingsRepo`` under ``SETTING_HISTORY_ZOOM``.
 """
 
 from __future__ import annotations
@@ -28,8 +36,9 @@ from typing import Any
 
 import numpy as np
 from PySide6.QtCore import Qt, Signal  # ty: ignore[unresolved-import]
-from PySide6.QtGui import QImage, QPixmap  # ty: ignore[unresolved-import]
+from PySide6.QtGui import QFont, QImage, QPixmap  # ty: ignore[unresolved-import]
 from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFrame,
@@ -40,15 +49,20 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QWidget,
 )
 
+# Base (100% zoom) sizes. A view's *current* tile/thumb size lives on the
+# instance (``_tile_w``/``_tile_h``/``_thumb``) — read those, not these
+# constants, once zoom is in play.
 THUMB = 56
 PREVIEW_SIZE = 320
-# One tile's footprint; capacity = how many fit the widget's current size.
+# One tile's footprint at 100% zoom; capacity = how many fit the widget's
+# current size ÷ the current (possibly zoomed) footprint.
 TILE_W = 190
 TILE_H = 72
 GUTTER = 6
 # Before the widget has a real size (dock hidden, offscreen tests without an
 # explicit resize) capacity falls back to this grid rather than 1×1, so
-# records pushed while unmapped are still there when the dock opens.
+# records pushed while unmapped are still there when the dock opens. Zoom
+# does not affect this fallback — it's an emergency buffer, not a layout.
 FALLBACK_COLS = 4
 FALLBACK_ROWS = 10
 EMPTY_TEXT = "Recent classifications will appear here."
@@ -57,6 +71,17 @@ EMPTY_TEXT = "Recent classifications will appear here."
 # (focus/selection brightness, not hue) so recency reads the same way in
 # every theme, including the hue-free surfaces the tinted themes keep.
 SNAKE_ROLES = ("border_focus", "accent", "accent_dim")
+
+# Uniform tile scale, user-selectable from the zoom bar.
+ZOOM_LEVELS: list[tuple[str, float]] = [
+    ("75%", 0.75),
+    ("100%", 1.0),
+    ("150%", 1.5),
+    ("200%", 2.0),
+]
+ZOOM_FACTORS: dict[str, float] = dict(ZOOM_LEVELS)
+DEFAULT_ZOOM_LABEL = "100%"
+SETTING_HISTORY_ZOOM = "ui.history_zoom"
 
 
 def _bgr_to_pixmap(image: Any, size: int) -> QPixmap:
@@ -99,13 +124,21 @@ class HistoryEntry(QFrame):
 
     clicked = Signal(object)  # emits its own record dict
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        tile_w: int = TILE_W,
+        tile_h: int = TILE_H,
+        thumb: int = THUMB,
+        font_scale: float = 1.0,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("historyEntry")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         # Fixed footprint: the grid's capacity math depends on every tile
-        # being exactly TILE_W × TILE_H.
-        self.setFixedSize(TILE_W, TILE_H)
+        # being exactly tile_w × tile_h (the zoomed TILE_W × TILE_H).
+        self.setFixedSize(tile_w, tile_h)
+        self._thumb = thumb
         self.record: dict[str, Any] = {}
         self.below_floor = False
 
@@ -114,7 +147,7 @@ class HistoryEntry(QFrame):
         row.setSpacing(8)
 
         self.thumb_label = QLabel(self)
-        self.thumb_label.setFixedSize(THUMB, THUMB)
+        self.thumb_label.setFixedSize(thumb, thumb)
         self.thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         row.addWidget(self.thumb_label)
 
@@ -126,19 +159,41 @@ class HistoryEntry(QFrame):
         self.confidence_label.setObjectName("historyConfidence")
         self.slot_label = QLabel(self)
         self.slot_label.setObjectName("historySlot")
+        if font_scale != 1.0:
+            for text_label in (self.label_label, self.confidence_label, self.slot_label):
+                font = QFont(text_label.font())
+                base_pt = font.pointSizeF()
+                if base_pt > 0:
+                    font.setPointSizeF(base_pt * font_scale)
+                text_label.setFont(font)
         text_col.addWidget(self.label_label)
         text_col.addWidget(self.confidence_label)
         text_col.addWidget(self.slot_label)
         row.addLayout(text_col, 1)
 
+        # The running case number, WinForms-style: big, green, right-aligned
+        # (Seth: "the counter in those panels [must] be consistent").
+        self.number_label = QLabel(self)
+        self.number_label.setObjectName("historyNumber")
+        self.number_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        number_font = QFont(self.number_label.font())
+        base_pt = number_font.pointSizeF()
+        if base_pt > 0:
+            number_font.setPointSizeF(base_pt * 1.7 * font_scale)
+        number_font.setBold(True)
+        self.number_label.setFont(number_font)
+        row.addWidget(self.number_label)
+
     def set_record(self, record: dict[str, Any]) -> None:
         self.record = record
-        self.thumb_label.setPixmap(_bgr_to_pixmap(record.get("image"), THUMB))
+        self.thumb_label.setPixmap(_bgr_to_pixmap(record.get("image"), self._thumb))
         label = str(record.get("label") or "(empty)")
         parent = record.get("parent")
         self.label_label.setText(f"{parent} · {label}" if parent else label)
         self.confidence_label.setText(f"{_confidence(record):.0f}%")
         self.slot_label.setText(_slot_text(record.get("slot", 0)))
+        number = record.get("number")
+        self.number_label.setText(str(number) if number else "")
 
     def apply_style(self, colors: dict[str, str], *, highlight: str | None) -> None:
         """Card chrome + recency border. Re-run on every push and on a theme switch."""
@@ -156,6 +211,11 @@ class HistoryEntry(QFrame):
             "QLabel { background: transparent; }"
         )
         self.label_label.setStyleSheet(f"color: {colors.get('text', '#d4d4d4')}; font-weight: bold;")
+        # Accent, not the WinForms green: hue is meaning here (ui/theme.py) and
+        # green says "success" — but below-floor misses get numbered too. The
+        # accent family is emphasis without a verdict. One word to revert if
+        # Seth wants literal parity.
+        self.number_label.setStyleSheet(f"color: {colors.get('accent', '#6ea8fe')};")
         conf_color = colors.get("warning", "#f59e0b") if self.below_floor else colors.get("text_muted", "#9a9a9a")
         self.confidence_label.setStyleSheet(f"color: {conf_color};")
         self.slot_label.setStyleSheet(f"color: {colors.get('text_muted', '#9a9a9a')};")
@@ -217,6 +277,7 @@ class HistoryView(QWidget):
         self._tiles: list[HistoryEntry] = []  # fixed grid positions
         self._entries: list[HistoryEntry] = []  # newest first (drives the snake)
         self._write_index = 0
+        self._case_number = 0
         self._capacity = 0
         self._cols = 1
         self._rows = 1
@@ -224,9 +285,31 @@ class HistoryView(QWidget):
         # this to observe a click without a modal ever opening.
         self.open_preview: Any = self._open_preview_dialog
 
+        self._zoom_label = self._load_zoom_label()
+        self._factor = ZOOM_FACTORS[self._zoom_label]
+        self._tile_w = round(TILE_W * self._factor)
+        self._tile_h = round(TILE_H * self._factor)
+        self._thumb = round(THUMB * self._factor)
+
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
+
+        zoom_bar = QHBoxLayout()
+        zoom_bar.setContentsMargins(GUTTER, 4, GUTTER, 4)
+        zoom_bar.setSpacing(6)
+        zoom_caption = QLabel("Zoom", self)
+        zoom_caption.setObjectName("mutedLabel")
+        zoom_bar.addWidget(zoom_caption)
+        self.zoom_combo = QComboBox(self)
+        self.zoom_combo.setObjectName("historyZoomCombo")
+        self.zoom_combo.addItems([label for label, _ in ZOOM_LEVELS])
+        self.zoom_combo.setCurrentText(self._zoom_label)
+        self.zoom_combo.setFixedWidth(90)
+        self.zoom_combo.currentTextChanged.connect(self._on_zoom_changed)
+        zoom_bar.addWidget(self.zoom_combo)
+        zoom_bar.addStretch(1)
+        outer.addLayout(zoom_bar)
 
         self.empty_label = QLabel(EMPTY_TEXT, self)
         self.empty_label.setObjectName("mutedLabel")
@@ -255,13 +338,13 @@ class HistoryView(QWidget):
     def _recompute_capacity(self) -> None:
         width = self.grid_area.width()
         height = self.grid_area.height()
-        if width < TILE_W + GUTTER or height < TILE_H + GUTTER:
+        if width < self._tile_w + GUTTER or height < self._tile_h + GUTTER:
             # Not laid out yet (hidden dock, unshown test widget): keep a
             # usable buffer instead of collapsing to one cell.
             cols, rows = FALLBACK_COLS, FALLBACK_ROWS
         else:
-            cols = max(1, width // (TILE_W + GUTTER))
-            rows = max(1, height // (TILE_H + GUTTER))
+            cols = max(1, width // (self._tile_w + GUTTER))
+            rows = max(1, height // (self._tile_h + GUTTER))
         capacity = cols * rows
         if capacity == self._capacity and cols == self._cols and rows == self._rows:
             return
@@ -303,12 +386,30 @@ class HistoryView(QWidget):
     def _on_history(self, payload: Any) -> None:
         if not isinstance(payload, dict):
             return
+        # Stamp the running case number here, on the LIVE path only — a zoom
+        # replay reuses the stored dicts, so every record keeps the number it
+        # arrived with (WinForms keeps counting across runs; so does this).
+        self._case_number += 1
+        payload = {**payload, "number": self._case_number}
+        self._push_record(payload)
+
+    def _make_tile(self) -> HistoryEntry:
+        tile = HistoryEntry(self.grid_area, self._tile_w, self._tile_h, self._thumb, self._factor)
+        tile.clicked.connect(lambda record: self.open_preview(record))
+        return tile
+
+    def _push_record(self, record: dict[str, Any]) -> None:
+        """Ring-buffer insert: reuse the oldest tile once at capacity.
+
+        Shared by ``_on_history`` (a live classification) and ``_apply_zoom``
+        (replaying the recency list into freshly-sized tiles) — same rule
+        either way, so a zoom change can't diverge from a live push.
+        """
         if self._capacity <= 0:
             self._recompute_capacity()
 
         if len(self._tiles) < self._capacity:
-            tile = HistoryEntry(self.grid_area)
-            tile.clicked.connect(lambda record: self.open_preview(record))
+            tile = self._make_tile()
             self._tiles.append(tile)
             row, col = self._position(len(self._tiles) - 1)
             self._grid.addWidget(tile, row, col)
@@ -319,9 +420,9 @@ class HistoryView(QWidget):
             tile = self._tiles[self._write_index]
             self._write_index = (self._write_index + 1) % len(self._tiles)
 
-        tile.set_record(payload)
+        tile.set_record(record)
         floor = float(getattr(self._win.config, "run_confidence_floor", 0) or 0)
-        tile.below_floor = floor > 0 and _confidence(payload) < floor
+        tile.below_floor = floor > 0 and _confidence(record) < floor
         if tile in self._entries:
             self._entries.remove(tile)
         self._entries.insert(0, tile)
@@ -339,6 +440,70 @@ class HistoryView(QWidget):
         has_entries = bool(self._entries)
         self.empty_label.setVisible(not has_entries)
         self.grid_area.setVisible(has_entries)
+
+    # ----- zoom --------------------------------------------------------------------
+
+    def _load_zoom_label(self) -> str:
+        db = getattr(self._win, "db", None)
+        if db is None:
+            return DEFAULT_ZOOM_LABEL
+        try:
+            from ..data.repository import SettingsRepo
+
+            value = SettingsRepo(db).get(SETTING_HISTORY_ZOOM, DEFAULT_ZOOM_LABEL)
+        except Exception:
+            return DEFAULT_ZOOM_LABEL
+        return value if value in ZOOM_FACTORS else DEFAULT_ZOOM_LABEL
+
+    def _save_zoom_label(self, label: str) -> None:
+        db = getattr(self._win, "db", None)
+        if db is None:
+            return
+        try:
+            from ..data.repository import SettingsRepo
+
+            SettingsRepo(db).set(SETTING_HISTORY_ZOOM, label)
+        except Exception:
+            pass  # a preference that can't be persisted still applies this session
+
+    def _on_zoom_changed(self, label: str) -> None:
+        if label not in ZOOM_FACTORS or label == self._zoom_label:
+            return
+        self._apply_zoom(label)
+        self._save_zoom_label(label)
+
+    def _apply_zoom(self, label: str) -> None:
+        """Rebuild every tile at the new size from the recency list.
+
+        Existing tiles are the wrong footprint for the new zoom, so rather
+        than resize them in place this tears them all down and replays the
+        records (oldest first) through :meth:`_push_record` — the same path
+        a live classification takes, so a shrunk capacity discards the
+        oldest exactly as a plain widget-resize shrink would.
+        """
+        records = [tile.record for tile in self._entries]  # newest first
+
+        self._zoom_label = label
+        self._factor = ZOOM_FACTORS[label]
+        self._tile_w = round(TILE_W * self._factor)
+        self._tile_h = round(TILE_H * self._factor)
+        self._thumb = round(THUMB * self._factor)
+
+        for tile in self._tiles:
+            self._grid.removeWidget(tile)
+            tile.deleteLater()
+        self._tiles = []
+        self._entries = []
+        self._write_index = 0
+        # Sentinels so _recompute_capacity can't shortcut on an unchanged
+        # cols/rows/capacity tuple — the tile size behind them did change.
+        self._cols = -1
+        self._rows = -1
+        self._capacity = -1
+        self._recompute_capacity()
+
+        for record in reversed(records):
+            self._push_record(record)
 
     # ----- theme -----------------------------------------------------------------
 

@@ -23,9 +23,12 @@ from sorter.qtui.history_view import (
     FALLBACK_COLS,
     FALLBACK_ROWS,
     GUTTER,
+    SETTING_HISTORY_ZOOM,
     SNAKE_ROLES,
+    THUMB,
     TILE_H,
     TILE_W,
+    ZOOM_FACTORS,
     HistoryPreviewDialog,
     build_history_view,
 )
@@ -161,6 +164,33 @@ def test_shrinking_the_view_reflows_and_keeps_the_newest(qapp, window) -> None:
     assert "hs0" not in labels  # oldest discarded
 
 
+# ----- the running case number (Seth: WinForms parity) -------------------------
+
+
+def test_every_record_carries_a_running_case_number(window) -> None:
+    view = build_history_view(window)
+
+    push(window, view, "first", 90.0)
+    push(window, view, "second", 91.0)
+    push(window, view, "third", 92.0)
+
+    # Newest first: the numbers read 3, 2, 1 down the recency list.
+    assert [entry.number_label.text() for entry in view._entries] == ["3", "2", "1"]
+    # Accent, not green: hue is meaning, and misses get numbered too.
+    assert f"color: {window.palette_colors['accent']}" in view._entries[0].number_label.styleSheet()
+
+
+def test_case_numbers_survive_a_zoom_replay(window) -> None:
+    view = build_history_view(window)
+    for index in range(3):
+        push(window, view, f"hs{index}", 99.0)
+
+    view.zoom_combo.setCurrentText("150%")
+    view._apply_zoom("150%")
+
+    assert [entry.number_label.text() for entry in view._entries] == ["3", "2", "1"]
+
+
 # ----- recency highlight ("snake") --------------------------------------------------
 
 
@@ -257,6 +287,96 @@ def test_apply_palette_repaints_after_a_theme_switch(window) -> None:
     after = view._entries[0].styleSheet()
     assert after != before
     assert window.palette_colors[SNAKE_ROLES[0]] in after
+
+
+# ----- zoom --------------------------------------------------------------------------
+
+
+def test_zoom_defaults_to_100_percent(window) -> None:
+    view = build_history_view(window)
+
+    assert view.zoom_combo.currentText() == "100%"
+    assert view._tile_w == TILE_W
+    assert view._tile_h == TILE_H
+    assert view._thumb == THUMB
+
+
+def test_zoom_change_scales_tile_footprint_and_thumbnail(window) -> None:
+    view = build_history_view(window)
+    push(window, view, "9mm", 90.0)
+
+    view.zoom_combo.setCurrentText("200%")
+
+    factor = ZOOM_FACTORS["200%"]
+    assert view._tile_w == round(TILE_W * factor)
+    assert view._tile_h == round(TILE_H * factor)
+    assert view._thumb == round(THUMB * factor)
+    entry = view._entries[0]
+    assert (entry.width(), entry.height()) == (view._tile_w, view._tile_h)
+    pixmap = entry.thumb_label.pixmap()
+    assert (pixmap.width(), pixmap.height()) == (view._thumb, view._thumb)
+
+
+def test_zoom_change_preserves_records_when_capacity_still_fits(window) -> None:
+    """Below the fallback grid's capacity, nothing is discarded by a zoom change."""
+    view = build_history_view(window)
+    push(window, view, "9mm", 91.0, slot=1)
+    push(window, view, ".223", 82.0, slot=3)
+    push(window, view, "45 ACP", 77.0, slot=0)
+
+    view.zoom_combo.setCurrentText("75%")
+
+    labels = [entry.label_label.text() for entry in view._entries]
+    assert labels == ["45 ACP", ".223", "9mm"]  # newest-first order kept
+    assert view._entries[0].confidence_label.text() == "77%"
+    assert view._entries[0].slot_label.text() == "Catch-All"
+
+
+def test_zoom_in_on_a_fixed_size_widget_shrinks_capacity_and_drops_the_oldest(qapp, window) -> None:
+    """Same rule as a plain widget-resize shrink (Seth): newest survive, oldest go."""
+    view = build_history_view(window)
+    view.resize(4 * (TILE_W + GUTTER) + GUTTER, 4 * (TILE_H + GUTTER) + GUTTER)
+    view.show()
+    qapp.processEvents()
+    capacity_before = view._capacity
+    assert capacity_before >= 4
+
+    for index in range(capacity_before):
+        push(window, view, f"hs{index}", 99.0)
+
+    view.zoom_combo.setCurrentText("200%")
+    qapp.processEvents()
+
+    assert view._capacity < capacity_before
+    assert len(view._entries) == view._capacity
+    labels = [entry.label_label.text() for entry in view._entries]
+    assert labels[0] == f"hs{capacity_before - 1}"  # newest survived
+    assert "hs0" not in labels  # oldest discarded
+
+
+def test_zoom_choice_persists_across_view_instances(window) -> None:
+    view = build_history_view(window)
+
+    view.zoom_combo.setCurrentText("150%")
+
+    second = build_history_view(window)
+    assert second.zoom_combo.currentText() == "150%"
+    assert second._tile_w == view._tile_w
+
+    from sorter.data.repository import SettingsRepo
+
+    assert SettingsRepo(window.db).get(SETTING_HISTORY_ZOOM) == "150%"
+
+
+def test_apply_palette_still_recolors_after_a_zoom_change(window) -> None:
+    view = build_history_view(window)
+    push(window, view, "9mm", 99.0)
+    view.zoom_combo.setCurrentText("150%")
+
+    window.set_theme("Comic Book")
+    view.apply_palette()
+
+    assert window.palette_colors[SNAKE_ROLES[0]] in view._entries[0].styleSheet()
 
 
 # ----- lifecycle -----------------------------------------------------------------------
