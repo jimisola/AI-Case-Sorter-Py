@@ -1985,6 +1985,16 @@ class QtMainWindow(QMainWindow):
         # (ui/app.py) doesn't ask either — it just stops the controller and
         # destroys the window. Mirrored here rather than adding a prompt Tk
         # never had.
+        # The timers first: a closed-but-not-destroyed window (every test
+        # window, and the real one between close and quit) must go inert —
+        # left running, each keeps draining its bus and repainting its
+        # preview forever, and hundreds of those zombie ticks in one event
+        # pump is what took an access violation on the Windows CI runner.
+        for timer in (self._bus_timer, self._preview_timer):
+            try:
+                timer.stop()
+            except Exception:
+                pass
         try:
             if self.run_controller is not None:
                 self.run_controller.stop()

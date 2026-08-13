@@ -132,6 +132,19 @@ def test_run_worker_replies_are_one_shot_and_unsubscribed(window) -> None:
     assert window.theme_name == "Light"
 
 
+def test_closing_a_window_stops_its_timers(window_factory, config) -> None:
+    """Regression (Windows CI access violation): a closed window must go
+    inert — its drain and preview timers left running turn every closed test
+    window into a zombie that ticks in later tests' event pumps."""
+    window = window_factory(config)
+    assert window._bus_timer.isActive() and window._preview_timer.isActive()
+
+    window.close()
+
+    assert not window._bus_timer.isActive()
+    assert not window._preview_timer.isActive()
+
+
 def test_indicators_start_disconnected(window) -> None:
     assert "disconnected" in window.camera_label.text()
     assert "disconnected" in window.serial_label.text()
