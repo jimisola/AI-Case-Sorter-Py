@@ -65,10 +65,11 @@ def test_menus(window) -> None:
     ]
     # window.menus, not action.menu(): the latter hands back a Python-owned
     # wrapper and destroys the C++ menu when the temporary is collected.
-    assert [a.text() for a in window.menus["View"].actions()] == [
+    assert [a.text() for a in window.menus["View"].actions() if a.text()] == [
         "Serial Monitor",
         "Classification History",
         "User Guide Panel",
+        "Re-dock panels",
     ]
     assert window.serial_dock.toggleViewAction() in window.menus["View"].actions()
     assert window.history_dock.toggleViewAction() in window.menus["View"].actions()
@@ -133,6 +134,25 @@ def test_theme_switch_restyles_the_window(window) -> None:
 
     assert window.styleSheet() != dark
     assert window.theme_name == "Light"
+
+
+def test_the_history_dock_carries_its_full_name(window) -> None:
+    # Seth: "it just says History" — the dock and its View toggle must agree.
+    assert window.history_dock.windowTitle() == "Classification History"
+
+
+def test_redock_panels_brings_a_floating_dock_home(window) -> None:
+    """Seth floated the history panel and couldn't drag it back — the View
+    menu's Re-dock action must always work, no dexterity required."""
+    from PySide6.QtCore import Qt
+
+    window.history_dock.setFloating(True)
+    assert window.history_dock.isFloating()
+
+    window._redock_panels()
+
+    assert not window.history_dock.isFloating()
+    assert window.dockWidgetArea(window.history_dock) == Qt.DockWidgetArea.RightDockWidgetArea
 
 
 def test_closing_a_window_stops_its_timers(window_factory, config) -> None:

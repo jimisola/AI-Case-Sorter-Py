@@ -525,7 +525,9 @@ class QtMainWindow(QMainWindow):
         """
         holder = QWidget(parent)
         column = QVBoxLayout(holder)
-        column.setContentsMargins(0, 0, 0, 0)
+        # Left margin clears the splitter handle — "Slots" was pressed right
+        # up against the divider line (JL live-testing).
+        column.setContentsMargins(10, 0, 0, 0)
         column.setSpacing(6)
 
         header = QHBoxLayout()
@@ -736,7 +738,9 @@ class QtMainWindow(QMainWindow):
         """
         holder = QWidget(parent)
         column = QVBoxLayout(holder)
-        column.setContentsMargins(0, 0, 0, 0)
+        # Right margin clears the splitter handle, mirroring the grid
+        # column's left margin (JL: the divider line sat too tight).
+        column.setContentsMargins(0, 0, 10, 0)
         column.setSpacing(6)
 
         header = QHBoxLayout()
@@ -912,7 +916,7 @@ class QtMainWindow(QMainWindow):
         self._watch_dock_transitions(self.serial_dock)
 
     def _build_history_dock(self) -> None:
-        self.history_dock = QDockWidget("History", self)
+        self.history_dock = QDockWidget("Classification History", self)
         self.history_dock.setObjectName("historyDock")
         self.history_dock.setFeatures(
             QDockWidget.DockWidgetFeature.DockWidgetClosable
@@ -925,6 +929,23 @@ class QtMainWindow(QMainWindow):
         # Supplementary, so it starts out of the way; View re-opens it.
         self.history_dock.hide()
         self._watch_dock_transitions(self.history_dock)
+
+    def _redock_panels(self) -> None:
+        """Return every floating panel to its home area, visible and sane.
+
+        View → "Re-dock panels". Docks keep their homes: serial monitor at
+        the bottom, history and the guide on the right.
+        """
+        for dock, area in (
+            (self.serial_dock, Qt.DockWidgetArea.BottomDockWidgetArea),
+            (self.history_dock, Qt.DockWidgetArea.RightDockWidgetArea),
+            (self.help_dock, Qt.DockWidgetArea.RightDockWidgetArea),
+        ):
+            if dock.isFloating():
+                dock.setFloating(False)
+                self.addDockWidget(area, dock)
+        self._schedule_dock_repaint()
+        self._schedule_collapse_check()
 
     def _watch_dock_transitions(self, dock: QDockWidget) -> None:
         """Recompute layout and repaint after a float/re-dock.
@@ -1338,6 +1359,12 @@ class QtMainWindow(QMainWindow):
         help_toggle = self.help_dock.toggleViewAction()
         help_toggle.setText("User Guide Panel")
         self.menus["View"].addAction(help_toggle)
+        self.menus["View"].addSeparator()
+        # The always-works escape hatch (Seth: floated the history panel and
+        # couldn't get it back): drag-to-dock takes dexterity and has failed
+        # users on more than one platform; one menu action can't.
+        redock = self.menus["View"].addAction("Re-dock panels")
+        redock.triggered.connect(self._redock_panels)
 
         self.menus["Help"] = self.menuBar().addMenu("&Help")
         guide = self.menus["Help"].addAction("User Guide")
