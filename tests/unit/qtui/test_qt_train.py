@@ -377,22 +377,33 @@ def test_counts_list_uses_wrapping_top_to_bottom_flow(page) -> None:
 
 
 def test_a_wide_counts_list_shows_multiple_columns_without_scrolling(qapp, window, config) -> None:
-    # 12 items, not 40: the point is "multiple columns, all visible", and the
-    # per-item footprint follows the platform font — 40 columns' worth
-    # overflowed the fixed 1300px on Windows CI's wider fonts.
-    activate(config, _many_headstamps(12))
+    # The item count is derived from measured geometry, never hard-coded: how
+    # many rows one column holds follows the platform font, so a fixed count
+    # gave Windows CI a single column where Linux overflowed (or vice versa).
+    activate(config, _many_headstamps(1))
     window.train_page.refresh()
     window.show_page("Train")
     window.resize(1600, 250)
     # Set before the first show(): a splitter resize on an already-shown list
     # updates its geometry but not this Qt version's cached item layout, so
     # only the size in place for the first real layout pass is trustworthy.
+    # (A model change does relayout, which is what lets the second refresh
+    # below take effect.)
     window.train_page.body_splitter.setSizes([200, 1300])
     window.show()
     for _ in range(10):
         qapp.processEvents()
 
     lst = window.train_page.counts_list
+    cell = lst.visualItemRect(lst.item(0))
+    rows_per_column = max(1, lst.viewport().height() // cell.height())
+    # Enough to spill into a second column; few enough that two columns of any
+    # font's width fit the ~1200px pane.
+    activate(config, _many_headstamps(rows_per_column + 2))
+    window.train_page.refresh()
+    for _ in range(10):
+        qapp.processEvents()
+
     first = lst.visualItemRect(lst.item(0))
     later = lst.visualItemRect(lst.item(lst.count() - 1))
 
@@ -416,27 +427,31 @@ def test_a_narrow_counts_list_needs_a_scroll_past_the_first_column(qapp, window,
 
 
 def test_dragging_the_splitter_widens_the_list_and_the_scrollbar_follows(qapp, window, config) -> None:
-    # 12 items for the same platform-font reason as the wide test above: the
-    # wide state must genuinely fit everything on every platform.
-    activate(config, _many_headstamps(12))
+    activate(config, _many_headstamps(40))
     window.train_page.refresh()
     window.show_page("Train")
     window.resize(1600, 250)
-    window.show()
-    for _ in range(5):
-        qapp.processEvents()
-
     splitter = window.train_page.body_splitter
     lst = window.train_page.counts_list
-
+    # Narrow FIRST, set before the first show: only the first layout pass is
+    # trustworthy for item geometry offscreen (see the wide test's note), and
+    # the narrow state is the one that must prove a scrollbar exists.
     splitter.setSizes([1300, 200])
-    for _ in range(5):
+    window.show()
+    for _ in range(10):
         qapp.processEvents()
     narrow_width = lst.width()
     narrow_hbar_max = lst.horizontalScrollBar().maximum()
+    # The wide width is measured, not hard-coded: how many columns 40 items
+    # need follows the platform font (Windows CI overflowed a fixed 1300px).
+    cell = lst.visualItemRect(lst.item(0))
+    rows_per_column = max(1, lst.viewport().height() // cell.height())
+    columns = -(-lst.count() // rows_per_column)
+    required = columns * cell.width() + 40  # frame + scrollbar slack
 
-    splitter.setSizes([200, 1300])
-    for _ in range(5):
+    window.resize(required + 700, window.height())
+    splitter.setSizes([600, required + 60])
+    for _ in range(10):
         qapp.processEvents()
     wide_width = lst.width()
     wide_hbar_max = lst.horizontalScrollBar().maximum()
