@@ -20,7 +20,7 @@ from sorter.ml import classifier, local_inference
 from sorter.qtui.app import FEED_MAX
 from sorter.qtui.slot_grid import CATCH_ALL_HINT, EMPTY_HINT
 
-from .conftest import drain_until, seed_model
+from .conftest import drain_until, seed_model, skip_win32_pump_av
 
 
 class FakeBroker:
@@ -245,6 +245,7 @@ def test_a_full_batch_rings_and_reports(window, monkeypatch) -> None:
     assert window.statusBar().currentMessage() == "Slot 3 batch full (50). Reset it to refill."
 
 
+@skip_win32_pump_av
 def test_a_halted_run_says_how_to_resume(qapp, window, monkeypatch) -> None:
     monkeypatch.setattr(window, "beep", lambda: None)
     notices = []
