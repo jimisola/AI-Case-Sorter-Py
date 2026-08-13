@@ -697,6 +697,29 @@ class CommunityPage(QWidget):
             on_error=lambda exc: self._on_download_failed(exc),
         )
 
+    def find_catalogue_entry(self, uid: str, api: Any | None = None) -> ModelInfo | None:
+        """The catalogue row for ``uid``, from the last search or the server.
+
+        Blocking when it has to ask the server (no per-model endpoint exists —
+        ``GetModels`` unfiltered is the whole catalogue), so callers run it on a
+        worker. Used by the Sort page's model-update prompt, which starts from
+        a UID and needs the row's version, size, author and publish date.
+        """
+        cached = next((m for m in self._models if m.model_uid == uid), None)
+        if cached is not None:
+            return cached
+        models = (api or self.api_factory()).get_models()
+        return next((m for m in models if m.model_uid == uid), None)
+
+    def start_update(self, info: ModelInfo) -> None:
+        """Install ``info`` through the catalogue's own download path.
+
+        The entry point for the Sort page's model-update prompt: same
+        ``download()`` the table's action button runs, so there is one
+        download+import path and one set of prompts, not two.
+        """
+        self.download(info)
+
     def _download_and_import(self, info: ModelInfo, name: str, *, update_existing: bool) -> tuple[int, int]:
         """Worker body: SAS URL → ZIP → ``import_model``. Never touches a widget."""
         api = self.api_factory()

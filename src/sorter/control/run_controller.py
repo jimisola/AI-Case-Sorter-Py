@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import threading
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from .. import paths
@@ -245,6 +245,38 @@ class RunController:
         """Forget the current wish list (and its per-run capture quotas)."""
         if self._feedback is not None:
             self._feedback.clear_wish_list()
+
+    def apply_community_settings(
+        self,
+        model_id: int | None,
+        *,
+        confidence_floor: int = 0,
+        feedback_enabled: bool = True,
+        blocked: bool = False,
+        wish_list: Sequence[str] = (),
+    ) -> None:
+        """Install the server's settings for the active community model.
+
+        Called by the UI after a ``FetchModelSettings`` round-trip; delegates to
+        the feedback service, which owns the capture decision. An empty
+        ``wish_list`` leaves the installed one alone — the Start-time fetch is
+        still the authority on that.
+        """
+        if self._feedback is None:
+            return
+        self._feedback.apply_server_settings(
+            model_id,
+            confidence_floor=confidence_floor,
+            feedback_enabled=feedback_enabled,
+            blocked=blocked,
+        )
+        if wish_list:
+            self._feedback.set_wish_list(model_id, wish_list)
+
+    def clear_community_settings(self) -> None:
+        """Drop the server's settings — the local floor and opt-in apply again."""
+        if self._feedback is not None:
+            self._feedback.clear_server_settings()
 
     def _maybe_capture_feedback(
         self,

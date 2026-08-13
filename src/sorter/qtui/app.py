@@ -118,6 +118,19 @@ STORE_IMAGES_WARNING_TEXT = (
     "folder. This can use significant disk space over time."
 )
 
+# Community model settings (issue #29, A24/A25). The fetch fires on entering
+# Sort with a community model active and is fail-open throughout: anything that
+# goes wrong leaves the local floor, the local opt-in and no prompts.
+MODEL_UPDATE_BUTTON = "Model update: v{version}"
+NOTES_BUTTON = "Moderator notes ({count})"
+FEEDBACK_BLOCKED_STATUS = "Feedback paused by the model's moderator."
+NOTES_GATE_TITLE = "Moderator note"
+NOTES_GATE_TEXT = (
+    "A moderator has left a note about this model's feedback images. "
+    "Read and acknowledge it before starting a run — open it with the "
+    "“Moderator notes” button."
+)
+
 EMPTY_STATE_TITLE = "Nothing connected yet"
 EMPTY_STATE_HINT = "Connect a board and a camera to start sorting."
 
@@ -154,6 +167,17 @@ class QtMainWindow(QMainWindow):
         self._feed_entries: deque[tuple[str, float, bool]] = deque(maxlen=FEED_MAX)
         # Tk parity: the store-images disk-usage notice shows once per session.
         self._store_warning_shown = False
+        # Community model settings, from the last Sort-page fetch (A24/A25).
+        # `_community_settings` is kept so a serial reconnect — which builds a
+        # fresh RunController, and with it a fresh FeedbackService — doesn't
+        # silently drop the server's policy.
+        self._settings_fetch_busy = False
+        self._community_settings: tuple[int, Any] | None = None
+        self._model_update: tuple[str, int, int, Any] | None = None
+        # Modal seams (CLAUDE.md §5): instance attributes, so a test replaces
+        # them and nothing blocks offscreen.
+        self.open_notes_dialog: Callable[[], None] = self._open_notes_dialog
+        self.open_model_update_dialog: Callable[[], None] = self._open_model_update_dialog
 
         self.setMinimumSize(*MIN_WINDOW_SIZE)
 
@@ -213,6 +237,8 @@ class QtMainWindow(QMainWindow):
             except Exception:
                 self.auth = None
             self.community_page.refresh_auth_state()
+            # The shell opens on Sort, so nothing would otherwise "enter" it.
+            self._fetch_community_settings()
             self.start_camera()
             self._auto_connect_serial()
             QTimer.singleShot(2500, self._startup_update_check)
@@ -225,6 +251,14 @@ class QtMainWindow(QMainWindow):
         # own construction, below) already reaches _update_sort_empty_state.
         self._camera_state = ("Camera: disconnected", False)
         self._serial_state = ("Serial: disconnected", False)
+        # Built here rather than with the rest of the status bar (below): the
+        # sidebar's own construction enters the Sort page, which paints it.
+        # Same quiet role as the app-update button — it appears only when the
+        # Sort-page fetch found a newer published version.
+        self.model_update_button = QPushButton(self)
+        self.model_update_button.setObjectName("update")
+        self.model_update_button.clicked.connect(lambda: self.open_model_update_dialog())
+        self.model_update_button.hide()
 
         central = QWidget(self)
         layout = QVBoxLayout(central)
@@ -264,6 +298,7 @@ class QtMainWindow(QMainWindow):
         self.update_button.clicked.connect(lambda: self.open_update_dialog())
         self.update_button.hide()
         self.statusBar().addPermanentWidget(self.update_button)
+        self.statusBar().addPermanentWidget(self.model_update_button)
         # Community identity — the only surface for it now (JL): the
         # Community page used to carry its own "Signed in as ... [Sign out]"
         # row, which duplicated this button and wasted a row for nothing else
@@ -461,6 +496,12 @@ class QtMainWindow(QMainWindow):
             actions.addWidget(button)
             self.action_buttons[text] = button
         actions.addStretch(1)
+        # Visible whenever the active model has notes at all, acknowledged or
+        # not — it is the history view as well as the ack flow.
+        self.notes_button = QPushButton(NOTES_BUTTON.format(count=0), page)
+        self.notes_button.clicked.connect(lambda: self.open_notes_dialog())
+        self.notes_button.hide()
+        actions.addWidget(self.notes_button)
         # No dedicated row for this (JL) — was its own bar under the
         # template row. The run counter/reset live with the grid instead
         # (see `_build_grid_column`), not here.
@@ -906,6 +947,205 @@ class QtMainWindow(QMainWindow):
             on_error=lambda _exc: None,  # silent by design; Help menu re-checks loudly
         )
 
+    # ----- community model settings (A24/A25) ---------------------------------
+
+    def _fetch_community_settings(self) -> None:
+        """One ``FetchModelSettings`` per Sort-page entry, on a worker.
+
+        Gated on the active model being a community one *and* an account
+        already existing — reading the token cache must stay behind a
+        user action, and a signed-out user has nothing to fetch with.
+        Everything downstream fails open: a ``None`` result leaves the local
+        floor and opt-in in charge and raises no prompt.
+        """
+        if self._settings_fetch_busy or self.db is None:
+            return
+        from ..community.feedback import is_community_model
+
+        model = self._active_model()
+        # `model is None` is folded into the guard so the type checker can
+        # narrow it for the rest of this method.
+        if model is None or not is_community_model(model) or not self.community_page.is_signed_in():
+            self._clear_community_settings()
+            self._refresh_notes_button()
+            return
+        uid = str(model.community_model_uid)
+        model_id = int(model.id)
+        name = model.name
+        # The row's own version; 0/absent means "unknown", which never nags.
+        installed = int(model.model_version or 0)
+        api_factory = self.community_page.api_factory
+        find_entry = self.community_page.find_catalogue_entry
+        self._settings_fetch_busy = True
+
+        def work() -> tuple[Any, Any]:
+            api = api_factory()
+            settings = api.fetch_model_settings(uid)
+            info = None
+            if settings is not None and installed > 0 and settings.version > installed:
+                # Only then, and only to fill the dialog + drive the update:
+                # the settings response carries a version number and nothing
+                # else about the published model.
+                try:
+                    info = find_entry(uid, api)
+                except Exception:
+                    info = None
+            return settings, info
+
+        self.run_worker(
+            work,
+            on_done=lambda payload: self._on_community_settings(model_id, uid, name, installed, payload),
+            on_error=lambda _exc: self._on_community_settings_failed(),
+        )
+
+    def _on_community_settings(self, model_id: int, uid: str, name: str, installed: int, payload: Any) -> None:
+        self._settings_fetch_busy = False
+        settings, info = payload if isinstance(payload, tuple) else (None, None)
+        if settings is None:
+            self._on_community_settings_failed()
+            return
+        self._community_settings = (model_id, settings)
+        self._apply_community_settings()
+        if settings.blocked:
+            # The contract prefers saying so over going quiet — once per fetch,
+            # never per case.
+            self.set_status(FEEDBACK_BLOCKED_STATUS)
+
+        from ..community import notes as notes_store
+
+        stored = notes_store.merge(self.db, uid, settings.notes)
+        self._refresh_notes_button()
+
+        newer = installed > 0 and settings.version > installed and info is not None
+        self._model_update = (name, installed, int(settings.version), info) if newer else None
+        self._paint_model_update_button()
+
+        if notes_store.unacknowledged(stored):
+            # Queued: this runs inside a bus drain, and a modal here would
+            # re-enter it (CLAUDE.md §5).
+            QTimer.singleShot(0, lambda: self.open_notes_dialog())
+
+    def _on_community_settings_failed(self) -> None:
+        """Offline / refused / garbage: back to purely local behaviour."""
+        self._settings_fetch_busy = False
+        self._clear_community_settings()
+        self._refresh_notes_button()
+
+    def _clear_community_settings(self) -> None:
+        self._community_settings = None
+        self._model_update = None
+        self._paint_model_update_button()
+        if self.run_controller is not None:
+            self.run_controller.clear_community_settings()
+
+    def _apply_community_settings(self) -> None:
+        """Push the last fetch's policy into the (possibly rebuilt) controller."""
+        if self.run_controller is None:
+            return
+        if self._community_settings is None:
+            self.run_controller.clear_community_settings()
+            return
+        model_id, settings = self._community_settings
+        self.run_controller.apply_community_settings(
+            model_id,
+            confidence_floor=int(settings.confidence_floor),
+            feedback_enabled=bool(settings.feedback_enabled),
+            blocked=bool(settings.blocked),
+            wish_list=settings.wish_list,
+        )
+
+    def _paint_model_update_button(self) -> None:
+        if self._model_update is None:
+            self.model_update_button.hide()
+            return
+        _name, _installed, available, _info = self._model_update
+        self.model_update_button.setText(MODEL_UPDATE_BUTTON.format(version=available))
+        self.model_update_button.show()
+
+    def model_update_dialog(self) -> Any | None:
+        """The dialog, wired but not shown — tests drive its buttons directly."""
+        if self._model_update is None:
+            return None
+        from .dialog_model_update import build_model_update_dialog
+
+        name, installed, available, info = self._model_update
+        dialog = build_model_update_dialog(
+            self,
+            model_name=name,
+            installed_version=installed,
+            available_version=available,
+            info=info,
+            on_update=self.start_model_update,
+        )
+        # "Not now" (or closing) drops the affordance; the next Sort-page entry
+        # re-fetches and raises it again. No permanent dismissal.
+        dialog.rejected.connect(self.dismiss_model_update)
+        return dialog
+
+    def dismiss_model_update(self) -> None:
+        self._model_update = None
+        self._paint_model_update_button()
+
+    def _open_model_update_dialog(self) -> None:
+        dialog = self.model_update_dialog()
+        if dialog is not None:
+            dialog.exec()
+
+    def start_model_update(self) -> None:
+        """Accepting the prompt: the Community page's own download+import path."""
+        if self._model_update is None:
+            return
+        _name, _installed, _available, info = self._model_update
+        self._model_update = None
+        self._paint_model_update_button()
+        self.community_page.start_update(info)
+
+    # ----- moderator notes ----------------------------------------------------
+
+    def _community_uid(self) -> str | None:
+        model = self._active_model()
+        uid = getattr(model, "community_model_uid", None)
+        return str(uid) if uid else None
+
+    def _stored_notes(self) -> list[Any]:
+        uid = self._community_uid()
+        if uid is None or self.db is None:
+            return []
+        from ..community import notes as notes_store
+
+        return notes_store.load(self.db, uid)
+
+    def _refresh_notes_button(self) -> None:
+        notes = self._stored_notes()
+        self.notes_button.setText(NOTES_BUTTON.format(count=len(notes)))
+        self.notes_button.setVisible(bool(notes))
+
+    def notes_dialog(self) -> Any | None:
+        """The dialog, wired but not shown — tests drive its buttons directly."""
+        from .dialog_community_notes import build_community_notes_dialog
+
+        uid = self._community_uid()
+        if uid is None:
+            return None
+        model = self._active_model()
+        return build_community_notes_dialog(
+            self,
+            model_name=getattr(model, "name", ""),
+            notes=self._stored_notes(),
+            on_acknowledge=lambda ids: self._acknowledge_notes(uid, ids),
+        )
+
+    def _open_notes_dialog(self) -> None:
+        dialog = self.notes_dialog()
+        if dialog is not None:
+            dialog.exec()
+
+    def _acknowledge_notes(self, uid: str, ids: list[int]) -> None:
+        from ..community import notes as notes_store
+
+        notes_store.acknowledge(self.db, uid, ids)
+        self._refresh_notes_button()
+
     def _build_help_dock(self) -> None:
         # A dock, not a free window (JL): pin the guide beside the work while
         # learning, toggle it away after.
@@ -959,6 +1199,8 @@ class QtMainWindow(QMainWindow):
             # Assignments can have changed in Settings (or the Tk UI) since the
             # cards were last drawn; they are cheap to re-read and never cached.
             self._refresh_sort_grid()
+            self._refresh_notes_button()
+            self._fetch_community_settings()
         elif name == "Models":
             self.models_page.refresh(announce=True)
         elif name == "Community":
@@ -1119,6 +1361,9 @@ class QtMainWindow(QMainWindow):
         self._refresh_templates()
         self._refresh_sort_grid()
         self.ai_section.refresh_mode()
+        # The server's policy and the version prompt belonged to the old model.
+        self._clear_community_settings()
+        self._refresh_notes_button()
         # Everything on the Train page is scoped to the active model.
         self.train_page.refresh()
         # The library's active marker is the mode, spelled out per row.
@@ -1433,6 +1678,9 @@ class QtMainWindow(QMainWindow):
             bus=self.bus,
             db=self.db,
         )
+        # A fresh controller carries a fresh FeedbackService, so the server's
+        # policy has to be re-installed on it.
+        self._apply_community_settings()
         self._refresh_sort_grid()
         self._update_run_buttons()
 
@@ -1452,14 +1700,21 @@ class QtMainWindow(QMainWindow):
         return not (api.get("api_key") and api.get("model"))
 
     def _ready_to_sort(self) -> RunController | None:
-        """Preflight, in the Tk Run tab's order: board, AI config, checkpoint, torch.
+        """Preflight: board, moderator notes, AI config, checkpoint, torch.
 
         Each check is asked of the layer that owns the answer, so the Qt shell
         never re-derives the rule. Returns the controller when a run may start.
+        The notes check is the one addition to the Tk Run tab's order — an
+        unacknowledged moderator note gates Start (issue #29, A25).
         """
         controller = self.run_controller
         if controller is None or self.broker is None:
             self.set_status("Connect to the board first (Settings → Serial).")
+            return None
+        from ..community.notes import unacknowledged
+
+        if unacknowledged(self._stored_notes()):
+            self.notify(NOTES_GATE_TITLE, NOTES_GATE_TEXT)
             return None
         if self._ai_credentials_missing():
             self.notify(

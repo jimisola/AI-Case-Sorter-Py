@@ -442,7 +442,8 @@ between them from the Run tab's template dropdown.
   optional; the only gated surface is the Community tab.
 - **`community_api.py`** — `CommunityApi`: HTTPS client for
   `reloadingrecipes.com/api` (cartridges, model search, download via Azure-blob
-  SAS URL, feedback-image upload, wish-list fetch, model share). Bearer token
+  SAS URL, feedback-image upload, wish-list fetch, model-settings fetch, model
+  share). Bearer token
   pulled fresh from `AuthManager` per call. Downloads/uploads stream with atomic
   writes. Base URL and TLS trust come from `appenv` (see above); `verify` is
   passed **per request**, never set on the session — `REQUESTS_CA_BUNDLE` /
@@ -464,6 +465,26 @@ between them from the Run tab's template dropdown.
   `MAX_WISH_LIST_CAPTURES_PER_LABEL` (40) per classification per run, and **fails
   open** — any error or non-200 installs an empty list, i.e. confidence-only
   behavior. No UI surface.
+  Also consumes the **server-side settings** (`fetch_model_settings`, below):
+  `apply_server_settings` installs a transient per-model policy — the server's
+  confidence floor replaces the publisher's for capture decisions, and
+  `feedbackenabled=false` / `blocked=true` switch capture off. Both flags can
+  only ever turn capture *off*; the user's opt-in is still what turns it on,
+  and nothing here is written to the model row.
+- **`community_api.fetch_model_settings(uid)`** — `GET
+  /Models/FetchModelSettings?communityModelId=…`, fired once on entering the
+  Sort surface with a community model active (`is_community_model` — wider
+  than `is_feedback_model`, so the two fetches can't disagree). Returns a
+  `ModelSettings` (wish list, confidence floor, feedback-enabled/blocked, the
+  published version, moderator notes) or **`None` for every failure**, which
+  is what leaves the app behaving exactly as it does offline. The server's
+  `uploadmode` is deliberately ignored — the local preference wins.
+- **`notes.py`** — the **moderator-note** store. The server sends every live
+  note each fetch and keeps no acknowledgement state, so acking is ours:
+  settings key `community_notes:<community_model_uid>` holding
+  `[{id, note, created, acknowledged}]`. `merge` updates text/date from a
+  fetch, **preserves the acknowledgement**, and keeps notes the server has
+  stopped sending as history. UI-free — the Qt dialog renders these.
 
 ---
 
@@ -702,6 +723,16 @@ settings row is what the two actually share.
   in `docs/guide/GUIDE.md`, which `QTextBrowser` renders directly; F1 and
   Help → User Guide open the dock at that topic, falling back to the top of
   the guide for anything the guide doesn't cover yet.
+- **Community model settings.** Entering Sort with a community model active
+  fires one `fetch_model_settings` on `run_worker` (§4). What it can raise is
+  deliberately quiet: a **status-bar "Model update: vN" button** in the
+  app-update's own role — never a modal on arrival — opening
+  `dialog_model_update.py`, whose "Update now" drives
+  `community_page.start_update()`, i.e. the catalogue's own download+import,
+  not a second one. Unacknowledged **moderator notes** do raise a modal
+  (`dialog_community_notes.py`, queued out of the drain) and **gate Start**;
+  the same dialog is the history view behind the Sort page's "Moderator notes
+  (N)" button. Every one of these surfaces is absent when the fetch fails.
 - **Platform.** `default_qpa_platform()` prefers `xcb;wayland` on Linux — a
   floated `QDockWidget` can't be moved or resized under native Wayland — and
   always yields to an explicit `QT_QPA_PLATFORM`, which is what lets the tests
