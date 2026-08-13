@@ -40,8 +40,26 @@ def _collect_between_tests():
     Windows CI runner (0xc0000374), and flushing deferred deletions first
     only moved the crash to Linux. Qt test suites (pytest-qt included) run
     without forced collection; so do these.
+
+    What DOES run here: a DeferredDelete-only flush. Almost no test pumps
+    Qt's event loop (``drain_until`` drains only the bus), so deleteLater
+    work from every test otherwise piles up until the suite's rare
+    ``processEvents()`` call flushes hundreds of tests' worth at once —
+    which is where the Windows runner took a deterministic access
+    violation. Flushing per test keeps that backlog at one test's worth.
+    Deliberately NOT a generic ``processEvents()``: delivering arbitrary
+    queued events into half-torn windows is what segfaulted Linux when
+    that was tried.
     """
     yield
+    try:
+        from PySide6.QtCore import QEvent
+        from PySide6.QtWidgets import QApplication
+    except ImportError:  # no [qt] extra: the test modules all skip anyway
+        return
+    app = QApplication.instance()
+    if app is not None:
+        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 @pytest.fixture
