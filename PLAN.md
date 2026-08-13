@@ -210,6 +210,16 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
   Edit, Images, Headstamps, Evaluate, Export, Delete-in-danger-red;
   AI-row shows Activate only), bottom action bar dropped. Implement after
   the A24/A25 agent lands (same-file conflict).
+- 2026-08-13 — Seth (Sort page, via Discord screenshot): use the space
+  better. The one-line classification feed duplicates the Monitor — replace
+  with the CURRENT case only (headstamp + confidence, Windows-style). The
+  cropped/processed image is what matters mid-run: promote it to the main
+  panel. Live camera preview is useless during a run: toggleable, OFF by
+  default. Rework in flight (agent). Seth also: the history monitor gets a
+  "zoom" control scaling the repeating tiles uniformly (big-and-few vs
+  small-and-many — capacity already derives from tile size); second agent
+  in flight, parallel (disjoint files). Also: Settings→Serial monitor
+  link + bidirectional baud sync landed (`e75f2e1`, `4cdcddf`).
 - 2026-08-13 — RESOLVED (win32 CI crash saga, 8 runs): the qtui suite took
   a deterministic access violation at the first real event pump on the
   Windows offscreen runner; site moved when tests were skipped (cross-
