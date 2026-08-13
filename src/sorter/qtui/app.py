@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import html
+import itertools
 import os
 import sys
 import threading
@@ -142,6 +143,7 @@ class QtMainWindow(QMainWindow):
         self.config = config
         self.db = getattr(config, "db", None)
         self.bus = EventBus()
+        self._worker_tokens = itertools.count()
         self._muted_labels: list[QLabel] = []
         # Set before the UI is built: the action row's enabled state reads them.
         self.broker: Any | None = None
@@ -1599,13 +1601,31 @@ class QtMainWindow(QMainWindow):
         Workers must never touch widgets; the drain timer delivers the result
         on the main thread.
         """
-        topic_done = f"worker/done/{id(fn)}"
-        topic_err = f"worker/err/{id(fn)}"
+        # A monotonic token, never id(fn): CPython reuses freed addresses, so
+        # two sequential workers can share an id — and with the subscriptions
+        # left in place, the second worker's result would also be delivered to
+        # the first worker's stale callback (a cartridge list arriving in a
+        # username handler, in practice).
+        token = next(self._worker_tokens)
+        topic_done = f"worker/done/{token}"
+        topic_err = f"worker/err/{token}"
 
-        if on_done is not None:
-            self.bus.subscribe(topic_done, on_done)
-        if on_error is not None:
-            self.bus.subscribe(topic_err, on_error)
+        def _deliver_done(payload: Any) -> None:
+            _unsubscribe()
+            if on_done is not None:
+                on_done(payload)
+
+        def _deliver_err(exc: Any) -> None:
+            _unsubscribe()
+            if on_error is not None:
+                on_error(exc)
+
+        def _unsubscribe() -> None:
+            self.bus.unsubscribe(topic_done, _deliver_done)
+            self.bus.unsubscribe(topic_err, _deliver_err)
+
+        self.bus.subscribe(topic_done, _deliver_done)
+        self.bus.subscribe(topic_err, _deliver_err)
 
         def _run() -> None:
             try:

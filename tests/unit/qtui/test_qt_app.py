@@ -103,7 +103,23 @@ def test_the_edit_theme_button_opens_the_editor(window, monkeypatch) -> None:
     assert opened == [window]
 
 
-def test_theme_switch_restyles_the_window(window) -> None:
+def test_run_worker_replies_are_one_shot_and_unsubscribed(window) -> None:
+    """Regression (first qtui CI run): reply topics were keyed on id(fn) and
+    never unsubscribed, so a later worker whose fn recycled the address
+    delivered its result to the earlier worker's callback too — a cartridge
+    list arriving in a username handler.
+    """
+    import time
+
+    results: list[object] = []
+    window.run_worker(lambda: "first", on_done=results.append)
+    deadline = time.monotonic() + 5
+    while results != ["first"] and time.monotonic() < deadline:
+        window.bus.drain()
+    assert results == ["first"]
+
+    worker_topics = [t for t, handlers in window.bus._subs.items() if t.startswith("worker/") and handlers]
+    assert worker_topics == []  # delivery must tear the subscription down
     window.theme_combo.setCurrentText("Dark")
     dark = window.styleSheet()
 
