@@ -7,7 +7,6 @@ hardware, no network.
 
 from __future__ import annotations
 
-import sys
 import types
 
 import numpy as np
@@ -246,15 +245,6 @@ def test_a_full_batch_rings_and_reports(window, monkeypatch) -> None:
     assert window.statusBar().currentMessage() == "Slot 3 batch full (50). Reset it to refill."
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="the processEvents pump here takes a deterministic access violation "
-    "inside Qt's offscreen plugin on the Windows CI runner (5 identical "
-    "crashes; survives rich-text removal, timer shutdown and per-test "
-    "deferred-delete flushing). An offscreen-runner artifact, not an app "
-    "bug — the real Windows app runs the native windows platform plugin. "
-    "The behavior itself stays pinned on Linux.",
-)
 def test_a_halted_run_says_how_to_resume(qapp, window, monkeypatch) -> None:
     monkeypatch.setattr(window, "beep", lambda: None)
     notices = []

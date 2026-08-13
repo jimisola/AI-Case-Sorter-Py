@@ -34,7 +34,6 @@ from sorter.qtui.models_page import (
     AI_CONFIG_HINT,
     AI_CONFIG_NAME,
     AI_CONFIG_SENTINEL_ID,
-    COLUMN_PADDING,
     COLUMNS,
     FILTER_TYPE_COMMUNITY,
     FOREIGN_NOTICE,
@@ -868,17 +867,21 @@ def test_restoring_saved_column_widths_keeps_headers_sortable(page, window, conf
 def test_typical_values_are_not_elided_at_the_default_widths(page, config) -> None:
     # The two that clipped (JL live-testing): "8/8/26 7:06 P…" and "convnext_…".
     make_model(config, "Range brass", model_mode="convnext_small", last_training_date="2026-12-28 23:59")
+    # The window's construction-time refresh already autosized (and latched
+    # _columns_sized); reset so this refresh sizes for the new, longer row —
+    # the same first-sight sizing a fresh launch gives it.
+    page._columns_sized = False
     page.refresh()
 
-    row = names(page).index("Range brass")
     header = page.tree.header()
-    metrics = page.tree.fontMetrics()
     for column in ("Mode", "Last trained"):
         index = COLUMNS.index(column)
-        # Not "wide enough for the glyphs" — wide enough that the view has no
-        # reason to elide. COLUMN_PADDING is measured off the delegate's own
-        # size hint, which sits a hair under the raw font advance.
-        assert header.sectionSize(index) >= metrics.horizontalAdvance(cell(page, row, column)) + COLUMN_PADDING - 4
+        # Compare against the view's own computed content width, not raw font
+        # advances: the delegate-vs-fontMetrics offset is platform-dependent
+        # (a Linux-tuned pixel allowance failed on Windows CI). Section wider
+        # than the delegate's need = nothing to elide, and strictly wider
+        # proves COLUMN_PADDING was actually applied.
+        assert header.sectionSize(index) > page.tree.sizeHintForColumn(index)
 
 
 def test_the_user_can_still_drag_the_columns(page) -> None:

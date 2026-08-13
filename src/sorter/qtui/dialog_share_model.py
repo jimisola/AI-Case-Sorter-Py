@@ -214,19 +214,28 @@ class ShareModelDialog(QDialog):
         def work(_report: Callable[[str], None]) -> Any:
             return self.api_factory().get_available_cartridges()
 
-        def done(cartridges: Any) -> None:
-            self._community_cartridges = list(cartridges or [])
-            self.cartridge_combo.clear()
-            self.cartridge_combo.addItems([c.name for c in self._community_cartridges])
-            model = self.selected_model()
-            if self._community_cartridges and model is not None:
-                self.cartridge_combo.setCurrentIndex(0)
-                self._sync_cartridge_default(model)
-
         worker = ApiWorker(None, work)
-        worker.done.connect(done)
-        worker.failed.connect(lambda exc: self.status_label.setText(f"Could not load cartridges: {exc}"))
+        # Bound methods, never lambdas/closures: a lambda's connection lives
+        # as long as the WORKER, so a queued emission arriving after this
+        # dialog is destroyed would run it against freed widgets (the access
+        # violations Windows CI kept taking at event pumps). Qt drops a
+        # bound-method connection — queued deliveries included — when its
+        # receiver dies.
+        worker.done.connect(self._on_cartridges_loaded)
+        worker.failed.connect(self._on_cartridges_failed)
         start_worker(worker)
+
+    def _on_cartridges_loaded(self, cartridges: Any) -> None:
+        self._community_cartridges = list(cartridges or [])
+        self.cartridge_combo.clear()
+        self.cartridge_combo.addItems([c.name for c in self._community_cartridges])
+        model = self.selected_model()
+        if self._community_cartridges and model is not None:
+            self.cartridge_combo.setCurrentIndex(0)
+            self._sync_cartridge_default(model)
+
+    def _on_cartridges_failed(self, exc: Any) -> None:
+        self.status_label.setText(f"Could not load cartridges: {exc}")
 
     def selected_cartridge(self, model: Model) -> tuple[int, str]:
         """The community cartridge to publish under, else the local name with id 0."""
@@ -303,9 +312,17 @@ class ShareModelDialog(QDialog):
 
         worker = ApiWorker(None, work)
         worker.progress.connect(self.status_label.setText)
-        worker.done.connect(lambda result: self._on_shared(model, name, result))
+        # Receiver-bound, not a lambda — see _on_cartridges_loaded's note.
+        # The share context rides on the dialog so the slot signature stays
+        # a plain bound method Qt can drop with its receiver.
+        self._pending_share = (model, name)
+        worker.done.connect(self._on_share_done)
         worker.failed.connect(self._on_failed)
         start_worker(worker)
+
+    def _on_share_done(self, result: Any) -> None:
+        model, name = self._pending_share
+        self._on_shared(model, name, result)
 
     def _package_and_upload(
         self,
