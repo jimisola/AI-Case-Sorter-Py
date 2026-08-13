@@ -191,7 +191,8 @@ def _dump_environment(torch_mod: Any) -> None:
                 if not supported:
                     print(
                         f"[env] FIX: install a PyTorch build that bakes {sm_tag} "
-                        "in its arch list (e.g. the nightly cu128 build).",
+                        "in its arch list (a newer release, or a newer CUDA "
+                        "wheel index than the one it was installed from).",
                         file=sys.stderr,
                         flush=True,
                     )
@@ -213,11 +214,19 @@ def _dump_environment(torch_mod: Any) -> None:
             except Exception as exc:
                 print(f"[env] matmul benchmark failed: {exc}", file=sys.stderr, flush=True)
 
-            # ConvNeXt-Tiny forward — same model class our classify uses.
-            # If this matches our 800+ ms classify time, the bottleneck is
-            # purely cuDNN / Blackwell conv kernels. If it's much faster,
-            # the issue is something in our pipeline (.to(device) walks,
-            # tensor strides, etc.).
+            # ConvNeXt-Tiny forward — same model class our classify uses, so
+            # comparing it against the [classify] forward time separates "the
+            # GPU/cuDNN path itself is slow" from "something in our pipeline
+            # is slow" (.to(device) walks, tensor strides, etc.).
+            #
+            # The reference number below is a real measurement, not a target:
+            # torch 2.13 + cu130 (cuDNN 9.20) on an RTX 5060 Ti (sm_120).
+            # It is quoted with its hardware and version because that is the
+            # only way it stays falsifiable — the previous note here predicted
+            # 30-80 ms/iter on sm_120, which was true of the torch 2.9.1 /
+            # earlier-cuDNN pin this app used to install and became wrong by
+            # more than an order of magnitude when that pin moved. Re-measure
+            # rather than trusting it after a torch bump.
             try:
                 # torchvision is the optional `[ml]` extra — genuinely absent
                 # from this dev/CI environment by design.
@@ -238,7 +247,8 @@ def _dump_environment(torch_mod: Any) -> None:
                 ms_per = (time.perf_counter() - t) * 1000.0 / iters
                 print(
                     f"[env] convnext_tiny_fp32_synthetic: {ms_per:.1f} ms/iter "
-                    f"(expected ~10-30 on sm_80+, 30-80 on sm_120 with cuDNN 9.x)",
+                    f"(~3 ms measured on sm_120 with torch 2.13 + cuDNN 9.20; "
+                    f"hundreds of ms means a PTX JIT fallback or a CPU device)",
                     file=sys.stderr,
                     flush=True,
                 )
@@ -550,6 +560,66 @@ def is_installed() -> bool:
         # ImportError: a parent package is missing. ValueError: the module is
         # in sys.modules with a None __spec__. Both mean "not usable".
         return False
+
+
+# The oldest torch that may load a checkpoint this app did not produce.
+#
+# CVE-2026-24747 (GHSA-63cw-57p8-fm3p, fixed in torch 2.10.0): a crafted .pth
+# defeats the `weights_only=True` unpickler itself -- memory corruption, and
+# potentially code execution, from the very call `_load` relies on to make an
+# untrusted checkpoint safe (see the comment at that torch.load). Community
+# downloads and ZIP imports are exactly the delivery path, so a foreign model
+# on an older wheel is the one combination this app must refuse.
+#
+# Deliberately NOT derived from pyproject.toml's [ml] pin. The pin is "what a
+# fresh install gets" and moves on every routine bump; this is "below here the
+# safety property is gone", it moves only when a new advisory says so, and it
+# records which advisory. It also bounds any future opt-into-an-older-build
+# override (issue #67) -- and since it sits above the 2.3.0 floor where
+# torch.amp.GradScaler first appears, honouring it can't regress the trainer
+# onto the AttributeError that older wheels produce.
+MIN_TORCH_VERSION = "2.10.0"
+
+
+def installed_version() -> str | None:
+    """The installed torch's version string, *without* importing torch.
+
+    Reads distribution metadata, so it stays cheap enough for a button
+    handler -- same constraint as `is_installed()`. Returns None when torch
+    isn't installed, or is present with no metadata (a vendored or
+    source-built copy): callers must treat that as "unknown", not "old".
+    """
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("torch")
+    except PackageNotFoundError:
+        return None
+    except Exception:
+        # Metadata can be malformed on a half-written install; unknown rather
+        # than a crash on the UI thread.
+        return None
+
+
+def meets_min_version(minimum: str = MIN_TORCH_VERSION) -> bool:
+    """Is the installed torch at or above `minimum`?
+
+    **Fails open** -- an unreadable or unparseable version returns True. A
+    version we cannot determine is far more likely to be a developer's source
+    build than an exploit attempt, and hard-blocking those installs would
+    break legitimate setups to guard against a case the metadata says nothing
+    about. The check is defence in depth over the pinned installer, not the
+    only thing standing between a user and CVE-2026-24747.
+    """
+    from packaging.version import InvalidVersion, Version
+
+    raw = installed_version()
+    if raw is None:
+        return True
+    try:
+        return Version(raw) >= Version(minimum)
+    except InvalidVersion:
+        return True
 
 
 def is_available() -> bool:
