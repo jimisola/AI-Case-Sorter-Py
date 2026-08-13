@@ -218,3 +218,15 @@ include = ["src/sorter/qtui/*"]
 
 [tool.ty.overrides.rules]
 unused-ignore-comment = "ignore"
+
+# The qt tests have the same two states, but per-line ignores proved fragile
+# there: in a PySide6-present environment they read as unused and get cleaned
+# away, breaking the no-PySide6 lint CI (which is exactly what happened).
+# The whole directory guards with importorskip("PySide6") at runtime, so a
+# genuinely broken import still fails pytest collection loudly.
+[[tool.ty.overrides]]
+include = ["tests/unit/qtui/*"]
+
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"
+unused-ignore-comment = "ignore"
