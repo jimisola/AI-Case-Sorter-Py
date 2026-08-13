@@ -15,7 +15,6 @@ import types
 import pytest
 
 pytest.importorskip("PySide6")
-pytest.importorskip("tkinter")  # sorter.ui.theme (the palettes) imports it
 
 from PySide6.QtCore import Qt
 

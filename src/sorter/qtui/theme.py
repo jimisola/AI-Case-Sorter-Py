@@ -1,11 +1,10 @@
-"""Render a ``sorter.ui.theme`` palette as a Qt stylesheet.
+"""Render a theme palette (``qtui/palettes.py``) as a Qt stylesheet.
 
-The palettes stay where they are — one source of truth for both UIs — and this
-module is the Qt half of what ``ui/theme.py::apply_theme`` does for ttk. Every
-color comes from the palette argument; nothing here is hardcoded, so a theme
-added or edited on the Tk side themes the Qt shell too.
+This module is the Qt half of what ``ui/theme.py::apply_theme`` does for ttk.
+Every color comes from the palette argument; nothing here is hardcoded, so a
+theme added or edited on either side themes the Qt shell too.
 
-Key roles are documented in ``ui/theme.py``'s ``_DARK`` dict.
+Key roles are documented in ``qtui/palettes.py``'s ``_DARK`` dict.
 """
 
 from __future__ import annotations

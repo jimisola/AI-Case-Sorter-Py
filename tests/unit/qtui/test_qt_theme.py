@@ -5,11 +5,9 @@ from __future__ import annotations
 import pytest
 
 pytest.importorskip("PySide6")
-# The palettes live in the Tk theme module, which imports tkinter at import time.
-pytest.importorskip("tkinter")
 
+from sorter.qtui.palettes import BUILTIN_THEMES
 from sorter.qtui.theme import build_stylesheet
-from sorter.ui.theme import BUILTIN_THEMES
 
 
 @pytest.mark.parametrize("name", list(BUILTIN_THEMES))

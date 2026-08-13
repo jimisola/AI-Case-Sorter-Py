@@ -472,7 +472,9 @@ between them from the Run tab's template dropdown.
 This section is the **Tk** UI, which is what a launch still gives you. A
 second, opt-in **PySide6 UI** lives in `sorter/qtui/` (launch with `--qt` or
 `CASESORTER_QT=1`; PySide6 is the optional `[qt]` extra). It reuses the event
-bus, hardware layers, and `ui.theme`'s palettes (rendered as QSS), and must
+bus and hardware layers, renders the same theme palettes as QSS (from a
+drift-pinned copy in `qtui/palettes.py` — it imports **nothing** from
+`sorter/ui` at runtime), and must
 never require changes inside `sorter/ui/` — the two UIs evolve in parallel.
 Its own conventions are at the end of this section (*The Qt UI*); scope,
 findings and the port plan are in `docs/ui-modernization.md`.
@@ -653,8 +655,14 @@ a separate one, so a built-in is never the thing being written to),
 ### The Qt UI (`sorter/qtui/`)
 
 The second UI, opt-in behind `--qt` (§2). It reuses every non-UI layer as-is
-and **must never require a change inside `sorter/ui/`** — the only thing it
-imports from there is `ui.theme`'s palettes.
+and **must never require a change inside `sorter/ui/`** — nor import anything
+from it at runtime, so a PySide6-only install with no tkinter can run it. The
+two things it used to import are copies now, kept in lock-step by
+`tests/unit/qtui/test_qt_drift_pins.py`: `ui/theme.py`'s palette half is
+`qtui/palettes.py`, and `ui/serial_monitor.py`'s wire constants sit at the top
+of `qtui/serial_monitor.py`. Custom themes therefore register into the Qt
+registry, not Tk's — one process runs one UI, and the `ui.custom_themes`
+settings row is what the two actually share.
 
 - **Shell (`app.py`).** `QtMainWindow` = an **activity sidebar** (Sort, Train,
   Models, Community; Settings pinned below the stretch) driving a
@@ -680,7 +688,7 @@ imports from there is `ui.theme`'s palettes.
   is a main-thread-only deferral, not an escape hatch. A modal raised *from* a
   bus handler is queued with `singleShot(0, …)` so it can't re-enter the drain.
 - **Palette-only QSS.** `qtui/theme.py`'s `build_stylesheet(palette)` renders
-  one `ui.theme` palette into a stylesheet keyed on **objectNames**
+  one `qtui/palettes.py` palette into a stylesheet keyed on **objectNames**
   (`action`, `danger`, `update`, `slotCard`, `serialLog`, …) — set the
   objectName, never a hard-coded color. Halftone/ink-outline themes render
   flat here. The few places a stylesheet can't reach (rich text in the feed

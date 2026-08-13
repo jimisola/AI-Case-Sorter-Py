@@ -1,9 +1,10 @@
 """PySide6 spike shell, co-existing with the Tk UI in ``sorter/ui/``.
 
 Launched with ``python -m sorter --qt`` (or ``CASESORTER_QT=1``); the default
-launch is unchanged. Nothing under ``sorter/ui/`` is touched or imported except
-``ui.theme``'s palettes, which this renders as QSS — so both UIs share one set
-of colors and upstream Tk work keeps merging cleanly.
+launch is unchanged. Nothing under ``sorter/ui/`` is touched or imported at
+all: the palettes come from ``qtui/palettes.py``, a drift-pinned copy of
+``ui/theme.py``'s palette half, which this renders as QSS — so both UIs share
+one set of colors without the Qt UI needing tkinter installed.
 
 The non-UI layers are reused as-is: ``EventBus`` (drained by a 50 ms
 ``QTimer`` instead of ``root.after``, same threading contract — workers post,
@@ -64,7 +65,13 @@ from ..hardware.camera import Camera
 from ..hardware.serial_emulator import EMULATED_PORT, EmulatorBroker
 from ..ml import classifier
 from ..paths import app_data_dir
-from ..ui.theme import (
+from .community_page import build_community_page
+from .dialog_slot_assign import CATCH_ALL_HINT, SlotAssignDialog
+from .dialog_template import EditTemplateDialog, NewTemplateDialog
+from .help_viewer import build_help_window, topic_for
+from .history_view import build_history_view
+from .models_page import build_models_page
+from .palettes import (
     SETTING_CUSTOM_THEMES,
     SETTING_THEME,
     THEMES,
@@ -72,12 +79,6 @@ from ..ui.theme import (
     resolve_theme,
     theme_names,
 )
-from .community_page import build_community_page
-from .dialog_slot_assign import CATCH_ALL_HINT, SlotAssignDialog
-from .dialog_template import EditTemplateDialog, NewTemplateDialog
-from .help_viewer import build_help_window, topic_for
-from .history_view import build_history_view
-from .models_page import build_models_page
 from .serial_monitor import build_serial_monitor
 from .settings_ai import build_ai_section
 from .settings_camera import build_camera_section

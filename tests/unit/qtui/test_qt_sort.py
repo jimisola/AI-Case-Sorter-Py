@@ -13,7 +13,6 @@ import numpy as np
 import pytest
 
 pytest.importorskip("PySide6")
-pytest.importorskip("tkinter")  # sorter.ui.theme (the palettes) imports it
 
 from sorter.control.run_controller import RunController
 from sorter.hardware.serial_emulator import EMULATED_PORT, EmulatorBroker

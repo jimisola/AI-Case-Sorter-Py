@@ -10,7 +10,6 @@ from __future__ import annotations
 import pytest
 
 pytest.importorskip("PySide6")
-pytest.importorskip("tkinter")  # sorter.ui.theme (the palettes) imports it
 
 from sorter.qtui.dialog_template import EditTemplateDialog, NewTemplateDialog
 from sorter.qtui.slot_grid import EMPTY_HINT

@@ -22,7 +22,6 @@ from typing import Any
 import pytest
 
 pytest.importorskip("PySide6")
-pytest.importorskip("tkinter")  # sorter.ui.theme (the palettes) imports it
 
 from sorter import paths
 from sorter.data.models import Model

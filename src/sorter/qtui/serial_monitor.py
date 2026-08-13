@@ -44,7 +44,22 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QWidget,
 )
 
-from ..ui.serial_monitor import BAUD_RATES, DEFAULT_BAUD, DEFAULT_LINE_ENDING, LINE_ENDINGS
+# Copied verbatim from ``ui/serial_monitor.py`` rather than imported — qtui
+# imports nothing from the Tk package, which needs tkinter to load at all.
+# ``tests/unit/qtui/test_qt_drift_pins.py`` pins the two copies together.
+
+# The Arduino IDE's ladder, and its default.
+BAUD_RATES = (300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 74880, 115200, 230400, 250000)
+DEFAULT_BAUD = 9600
+
+# Label → what actually goes on the wire after the typed text.
+LINE_ENDINGS: dict[str, str] = {
+    "No line ending": "",
+    "New Line": "\n",
+    "Carriage Return": "\r",
+    "Both NL & CR": "\r\n",
+}
+DEFAULT_LINE_ENDING = "New Line"
 
 MAX_LINES = 4000  # scrollback cap; the oldest are dropped, not the newest — matches Tk
 MAX_HISTORY = 100

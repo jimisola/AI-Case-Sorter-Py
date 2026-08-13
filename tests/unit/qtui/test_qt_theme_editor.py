@@ -10,7 +10,7 @@ Two levels, both here:
   ``load_custom_themes`` at construction — which is what "it's still there next
   launch" actually means.
 
-Custom themes are module state in ``sorter.ui.theme``; ``_clean_registry``
+Custom themes are module state in ``sorter.qtui.palettes``; ``_clean_registry``
 restores whatever was registered before each test so none leaks into the next.
 """
 
@@ -23,7 +23,6 @@ from typing import Any
 import pytest
 
 pytest.importorskip("PySide6")
-pytest.importorskip("tkinter")  # sorter.ui.theme (the palettes) imports it
 
 from sorter import paths
 from sorter.data.config import Config
@@ -35,7 +34,7 @@ from sorter.qtui.dialog_theme_editor import (
     grouped_roles,
     preview_stylesheet,
 )
-from sorter.ui.theme import (
+from sorter.qtui.palettes import (
     BUILTIN_THEMES,
     CUSTOM_THEME_VERSION,
     DERIVED_ROLES,

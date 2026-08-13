@@ -19,7 +19,6 @@ from typing import Any
 import pytest
 
 pytest.importorskip("PySide6")
-pytest.importorskip("tkinter")  # sorter.ui.theme (the palettes) imports it
 
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest

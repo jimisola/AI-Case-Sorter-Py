@@ -13,7 +13,6 @@ from __future__ import annotations
 import pytest
 
 pytest.importorskip("PySide6")
-pytest.importorskip("tkinter")  # sorter.ui.theme (the palettes) imports it
 
 from sorter.data.config import Config
 from sorter.hardware.serial_emulator import EMULATED_PORT, EmulatorBroker

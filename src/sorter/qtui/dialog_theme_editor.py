@@ -1,7 +1,8 @@
 """Theme editor — build your own palette from one of the shipped themes.
 
-Qt port of ``ui/dialog_theme_editor.py``; same registry, same settings row, so
-a theme built here shows up in the Tk picker and vice versa. It starts from the
+Qt port of ``ui/dialog_theme_editor.py``; same registry code and the same
+``ui.custom_themes`` settings row, so a theme built here shows up in the Tk
+picker on its next launch and vice versa. It starts from the
 theme the window is currently showing, because a theme is always a *full*
 palette (``theme.normalize_palette``) and a user only wants to change a few
 roles.
@@ -42,7 +43,7 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QWidget,
 )
 
-from ..ui.theme import (
+from .palettes import (
     BUILTIN_THEMES,
     CUSTOM_THEME_VERSION,
     DERIVED_ROLES,

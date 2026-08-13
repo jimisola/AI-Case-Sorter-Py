@@ -23,7 +23,7 @@ import time
 import tomllib
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -230,49 +230,68 @@ def test_no_installer_at_all_builds_no_command() -> None:
     assert build_install_command(use_gpu=False, uv=None, pip_available=False) is None
 
 
+class _TkDialogStub:
+    """The attributes ``TorchInstallDialog._start_install`` reaches for.
+
+    Enough of the Tk dialog to run its argv-building method unbound, so this
+    test needs a tkinter *import* but never a display — which is what puts it
+    back under CI (the qt job has no X server; the Tk matrix has no PySide6).
+    Widget refactors on the Tk side will fail here loudly, which is the point.
+    """
+
+    def __init__(self) -> None:
+        self._installing = False
+        self._install_buttons: list[Any] = []
+        self._gpu = None
+        self._proc = None
+        self.gpu_btn = self
+        self.cpu_btn = self
+        self.appended: list[str] = []
+
+    def config(self, **_kwargs: Any) -> None: ...
+
+    def _append(self, text: str) -> None:
+        self.appended.append(text)
+
+    def _pump(self) -> None: ...  # the no-op Thread never calls it
+
+    def _finish(self, success: bool) -> None:
+        raise AssertionError(f"the Tk dialog gave up building a command (success={success})")
+
+
 @pytest.mark.parametrize("use_gpu", [False, True])
 def test_argv_matches_the_tk_dialog_exactly(use_gpu: bool, monkeypatch) -> None:
-    """Same argv, byte for byte — built by driving the real Tk dialog."""
+    """Same argv, byte for byte — built by the real Tk dialog's own method."""
     pytest.importorskip("tkinter")
-    import tkinter as tk
 
     from sorter.ui import dialog_install_torch as tk_dialog
 
-    try:
-        root = tk.Tk()
-    except tk.TclError as exc:
-        pytest.skip(f"no Tk display: {exc}")
-    root.withdraw()
-    try:
-        monkeypatch.setattr(tk_dialog, "detect_supported_nvidia_gpu", lambda: None)
-        monkeypatch.setattr(tk_dialog, "find_uv", lambda: "/fake/.uv/bin/uv")
-        captured: dict[str, list[str]] = {}
+    monkeypatch.setattr(tk_dialog, "find_uv", lambda: "/fake/.uv/bin/uv")
+    captured: dict[str, list[str]] = {}
 
-        class _FakeProc:
-            stdout = iter([])
+    class _FakeProc:
+        stdout = iter([])
 
-            def wait(self) -> int:
-                return 0
+        def wait(self) -> int:
+            return 0
 
-        def _fake_popen(cmd, **_kwargs):
-            captured["cmd"] = cmd
-            return _FakeProc()
+    def _fake_popen(cmd, **_kwargs):
+        captured["cmd"] = cmd
+        return _FakeProc()
 
-        class _NoOpThread:
-            def __init__(self, **_kwargs) -> None: ...
+    class _NoOpThread:
+        def __init__(self, **_kwargs) -> None: ...
 
-            def start(self) -> None: ...
+        def start(self) -> None: ...
 
-        monkeypatch.setattr(subprocess, "Popen", _fake_popen)
-        # The Tk pump marshals with after() from the thread — the pattern this
-        # port exists to avoid. Don't let it run against a torn-down root.
-        monkeypatch.setattr(tk_dialog.threading, "Thread", _NoOpThread)
+    monkeypatch.setattr(subprocess, "Popen", _fake_popen)
+    # The Tk pump marshals with after() from the thread — the pattern this port
+    # exists to avoid, and there is no main loop here to marshal into.
+    monkeypatch.setattr(tk_dialog.threading, "Thread", _NoOpThread)
 
-        dlg = tk_dialog.TorchInstallDialog(root)
-        dlg._start_install(use_gpu=use_gpu)
-        dlg.destroy()
-    finally:
-        root.destroy()
+    # Unbound, on a stand-in: the method only builds argv, and a real dialog
+    # would need a display.
+    tk_dialog.TorchInstallDialog._start_install(cast(Any, _TkDialogStub()), use_gpu=use_gpu)
 
     assert build_install_command(use_gpu=use_gpu, uv="/fake/.uv/bin/uv", pip_available=True) == captured["cmd"]
 
