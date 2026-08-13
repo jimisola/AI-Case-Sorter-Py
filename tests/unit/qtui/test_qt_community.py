@@ -732,13 +732,54 @@ def test_the_state_column_and_action_follow_the_local_library(window, api, confi
     assert row_button(page, 0).isEnabled()
     assert row_button(page, 0).objectName() == "action"
 
+    # Installed-and-current offers removal of the local copy (JL: the loop is
+    # install -> update -> remove), in destructive red.
     assert row_button(page, 1).text() == ACTION_LABELS[STATE_INSTALLED]
-    assert not row_button(page, 1).isEnabled()
+    assert row_button(page, 1).isEnabled()
+    assert row_button(page, 1).objectName() == "danger"
 
     assert row_button(page, 2).text() == ACTION_LABELS[STATE_UPDATE]
     assert row_button(page, 2).isEnabled()
     # Blue, not the download green: this replaces something already installed.
     assert row_button(page, 2).objectName() == "update"
+
+
+def test_the_installed_rows_button_removes_the_local_copy(window, api, config) -> None:
+    model = make_model(config, "Installed one", community_model_uid="uid-installed", model_version=2)
+    make_model(config, "Keeper")  # a second model, so the cartridge keeps one
+    api.models = [info("uid-installed", name="Installed one", version=2)]
+    page = build_page(window, api, auth=FakeAuth())
+    page.refresh_auth_state()
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 1)
+    asked: list[str] = []
+    page.confirm = lambda title, _text: asked.append(title) or True
+
+    row_button(page, 0).click()
+    assert drain_until(window, lambda: ModelRepo(config.db).get(model.id) is None)
+
+    assert asked == ["Remove installed model?"]
+    # The catalogue row survives and flips back to a plain download.
+    assert row_button(page, 0).text() == ACTION_LABELS[STATE_DOWNLOAD]
+    assert row_button(page, 0).objectName() == "action"
+
+
+def test_removing_the_active_model_is_refused(window, api, config) -> None:
+    from sorter.data.repository import SettingsRepo
+
+    model = make_model(config, "Installed one", community_model_uid="uid-installed", model_version=2)
+    SettingsRepo(config.db).set_active_model_id(model.id)
+    api.models = [info("uid-installed", name="Installed one", version=2)]
+    page = build_page(window, api, auth=FakeAuth())
+    page.refresh_auth_state()
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 1)
+    page.confirm = lambda _title, _text: True
+    notified = _Recorder()
+    window.notify = notified
+
+    row_button(page, 0).click()
+
+    assert drain_until(window, lambda: notified.titles == ["Cannot delete"])
+    assert ModelRepo(config.db).get(model.id) is not None  # still installed
 
 
 def test_a_row_button_installs_that_row_not_the_selected_one(window, api) -> None:

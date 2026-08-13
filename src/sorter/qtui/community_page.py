@@ -26,6 +26,7 @@ modal, no MSAL and no network.
 
 from __future__ import annotations
 
+import shutil
 import tempfile
 import traceback
 from collections.abc import Callable, Sequence
@@ -50,6 +51,7 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QWidget,
 )
 
+from .. import paths
 from ..community.community_api import CartridgeInfo, CommunityApi, ModelInfo
 from ..data.model_io import import_model
 from ..data.repository import ModelRepo
@@ -82,15 +84,17 @@ STATE_LABELS = {
 # carries the words. Unicode, not icon assets — themes recolor text for free.
 # Plain arrows only: exotic glyphs (⭳) render from a fallback font with
 # different metrics, so a state flip resized the button and the row (JL).
+# The full loop is install → update → remove (JL): an installed, current row
+# offers deletion of the local copy rather than a dead checkmark.
 ACTION_LABELS = {
     STATE_DOWNLOAD: "↓",
     STATE_UPDATE: "↻",
-    STATE_INSTALLED: "✓",
+    STATE_INSTALLED: "×",
 }
 ACTION_TOOLTIPS = {
     STATE_DOWNLOAD: "Download this model",
     STATE_UPDATE: "Update the installed copy to this version",
-    STATE_INSTALLED: "Already installed and up to date",
+    STATE_INSTALLED: "Remove the installed copy from this machine",
 }
 # Fixed in BOTH dimensions: sized for any glyph plus QSS padding, so neither
 # the trailing column (ResizeToContents ignores item widgets) nor a state
@@ -406,10 +410,12 @@ class CommunityPage(QWidget):
             state = self.installed_state(info) if info is not None else STATE_DOWNLOAD
             button.setText(ACTION_LABELS[state])
             button.setToolTip(ACTION_TOOLTIPS[state])
-            button.setEnabled(info is not None and state != STATE_INSTALLED and not self._busy)
-            # Blue for an update, green for a download — the theme's rule for
-            # "replace something installed" vs "primary/go" (ui/theme.py).
-            self._set_role(button, "update" if state == STATE_UPDATE else "action")
+            button.setEnabled(info is not None and not self._busy)
+            # Blue for an update, green for a download, red for removing the
+            # installed copy — the theme's rule for "replace something
+            # installed" / "primary, go" / "destructive" (ui/theme.py).
+            role = {STATE_UPDATE: "update", STATE_INSTALLED: "danger"}.get(state, "action")
+            self._set_role(button, role)
 
     def _set_role(self, button: QPushButton, object_name: str) -> None:
         """Swap a button's palette role. QSS matches on the objectName, and
@@ -734,12 +740,52 @@ class CommunityPage(QWidget):
         self.download(info)
 
     def download_row(self, uid: str) -> None:
-        """A row's own button: select that row, then the one download path."""
+        """A row's own button: select the row, then dispatch on its state —
+        download or update through the one download path, remove when the
+        installed copy is already current."""
         info = next((m for m in self._models if m.model_uid == uid), None)
         if info is None or self._busy:
             return
         self._select(uid)
-        self.download(info)
+        if self.installed_state(info) == STATE_INSTALLED:
+            self.remove_installed(info)
+        else:
+            self.download(info)
+
+    def remove_installed(self, info: ModelInfo) -> None:
+        """Delete the locally installed copy of a community model.
+
+        Mirrors ``ModelsPage.delete_selected``: the repo owns the rules (the
+        active model and the last model in a cartridge refuse) and this only
+        reports them; the model's whole directory goes on a worker. The
+        community listing is untouched — the row flips back to Download.
+        """
+        if self.db is None:
+            return
+        local = ModelRepo(self.db).find_by_community_uid(info.model_uid)
+        if local is None:
+            return
+        name = local.name or info.model_name
+        if not self.confirm(
+            "Remove installed model?",
+            f"Delete the installed copy of '{name}' and all associated headstamps "
+            "and training images? The community version stays available for download.",
+        ):
+            return
+        try:
+            with self.db.transaction():
+                ModelRepo(self.db).delete(local.id)
+        except ValueError as exc:
+            self._win.notify("Cannot delete", str(exc))
+            return
+        directory = paths.model_dir(local.id)
+        if directory.exists():
+            self._win.run_worker(lambda: shutil.rmtree(directory, ignore_errors=True))
+        models_page = getattr(self._win, "models_page", None)
+        if models_page is not None:
+            models_page.refresh()
+        self.refresh()
+        self._post_progress(f"Removed installed copy of {name}.")
 
     def _select(self, uid: str) -> None:
         for i in range(self.tree.topLevelItemCount()):
