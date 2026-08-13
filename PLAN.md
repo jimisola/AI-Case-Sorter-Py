@@ -210,18 +210,20 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
   Edit, Images, Headstamps, Evaluate, Export, Delete-in-danger-red;
   AI-row shows Activate only), bottom action bar dropped. Implement after
   the A24/A25 agent lands (same-file conflict).
-- 2026-08-13 — KNOWN ISSUE (win32 CI only): Qt's offscreen plugin takes an
-  access violation at whichever real event pump runs first in the qtui
-  suite on the Windows runner (deterministic, 6 runs; site moves when a
-  test is skipped). Four theories chased and shipped as hygiene — plain-
-  text preview label, timers stopped on close, per-test DeferredDelete
-  flush, receiver-bound worker slots in the share dialog (that one a REAL
-  app bug: a dialog closed mid-upload could crash) — none was the trigger.
-  Suite-position forensics also identified and fixed the separate Windows
-  "F": the elision test's Linux-tuned font allowance. Resolution:
-  `skip_win32_pump_av` marker in tests/unit/qtui/conftest.py on the two
-  pump sites; revisit on PySide6 upgrades. Not an app bug — real Windows
-  runs the native platform plugin; Linux (offscreen) pins the behaviors.
+- 2026-08-13 — RESOLVED (win32 CI crash saga, 8 runs): the qtui suite took
+  a deterministic access violation at the first real event pump on the
+  Windows offscreen runner; site moved when tests were skipped (cross-
+  module poison). Final resolution: the Windows qtui CI leg runs **one
+  pytest process per test module** (crash isolation, FULL coverage, zero
+  skips; Linux keeps single-process as the cross-module canary) — which
+  immediately localized the one REAL failure: `image_store.delete`
+  silently left files behind on Windows when a thumbnail worker still
+  held the image open (both UIs — shared layer). Fixed: bounded retry,
+  already-gone counts as gone, the browser reports a file that will not
+  go. Hygiene shipped along the hunt, all kept: plain-text preview label,
+  timers stopped on close, per-test DeferredDelete flush, receiver-bound
+  worker slots in the share dialog (itself a real close-mid-upload crash
+  bug), and the elision test freed of its Linux-tuned font allowance.
 - 2026-08-13 — fresh-eyes review (JL: "fix all"): Start/Stop one toggle;
   Sort controls one row (actions left, template right); camera dead-state
   actionable (preview link to Settings→Camera + one startup status msg);
