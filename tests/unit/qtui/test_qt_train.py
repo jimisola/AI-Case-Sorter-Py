@@ -377,7 +377,10 @@ def test_counts_list_uses_wrapping_top_to_bottom_flow(page) -> None:
 
 
 def test_a_wide_counts_list_shows_multiple_columns_without_scrolling(qapp, window, config) -> None:
-    activate(config, _many_headstamps(40))
+    # 12 items, not 40: the point is "multiple columns, all visible", and the
+    # per-item footprint follows the platform font — 40 columns' worth
+    # overflowed the fixed 1300px on Windows CI's wider fonts.
+    activate(config, _many_headstamps(12))
     window.train_page.refresh()
     window.show_page("Train")
     window.resize(1600, 250)
@@ -413,7 +416,9 @@ def test_a_narrow_counts_list_needs_a_scroll_past_the_first_column(qapp, window,
 
 
 def test_dragging_the_splitter_widens_the_list_and_the_scrollbar_follows(qapp, window, config) -> None:
-    activate(config, _many_headstamps(40))
+    # 12 items for the same platform-font reason as the wide test above: the
+    # wide state must genuinely fit everything on every platform.
+    activate(config, _many_headstamps(12))
     window.train_page.refresh()
     window.show_page("Train")
     window.resize(1600, 250)
