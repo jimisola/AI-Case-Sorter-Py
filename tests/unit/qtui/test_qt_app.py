@@ -84,6 +84,26 @@ def test_theme_section_hosts_the_theme_combo(window) -> None:
     assert window.theme_combo.parentWidget() is page
 
 
+def test_the_edit_theme_button_opens_the_editor(window, monkeypatch) -> None:
+    import sorter.qtui.dialog_theme_editor as dialog_theme_editor
+
+    opened = []
+
+    class FakeDialog:
+        def __init__(self, parent, win) -> None:
+            opened.append(win)
+
+        def exec(self) -> int:
+            return 0
+
+    monkeypatch.setattr(dialog_theme_editor, "ThemeEditorDialog", FakeDialog)
+    assert window.theme_edit_button.parentWidget() is window.theme_combo.parentWidget()
+
+    window.theme_edit_button.click()
+
+    assert opened == [window]
+
+
 def test_theme_switch_restyles_the_window(window) -> None:
     window.theme_combo.setCurrentText("Dark")
     dark = window.styleSheet()

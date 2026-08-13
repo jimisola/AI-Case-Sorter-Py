@@ -672,8 +672,17 @@ class QtMainWindow(QMainWindow):
         self.theme_combo.currentTextChanged.connect(self.set_theme)
         self.theme_combo.setMaximumWidth(240)
         column.addWidget(self.theme_combo)
+        self.theme_edit_button = QPushButton("Edit theme…", page)
+        self.theme_edit_button.setMaximumWidth(240)
+        self.theme_edit_button.clicked.connect(self._open_theme_editor)
+        column.addWidget(self.theme_edit_button)
         column.addStretch(1)
         return page
+
+    def _open_theme_editor(self) -> None:
+        from .dialog_theme_editor import ThemeEditorDialog
+
+        ThemeEditorDialog(self, self).exec()
 
     def _build_serial_page(self) -> QWidget:
         # Kept on self for tests and the serial/state reactions it subscribes.
