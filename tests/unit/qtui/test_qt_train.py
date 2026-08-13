@@ -446,8 +446,11 @@ def test_dragging_the_splitter_widens_the_list_and_the_scrollbar_follows(qapp, w
     # need follows the platform font (Windows CI overflowed a fixed 1300px).
     cell = lst.visualItemRect(lst.item(0))
     rows_per_column = max(1, lst.viewport().height() // cell.height())
-    columns = -(-lst.count() // rows_per_column)
-    required = columns * cell.width() + 40  # frame + scrollbar slack
+    # A full spare column of slack: frame widths and scrollbar-gutter
+    # arithmetic differ per platform (Windows CI came up exactly 2px short
+    # of a fixed +40).
+    columns = -(-lst.count() // rows_per_column) + 1
+    required = columns * cell.width()
 
     window.resize(required + 700, window.height())
     splitter.setSizes([600, required + 60])
