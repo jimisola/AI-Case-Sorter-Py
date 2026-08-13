@@ -94,6 +94,9 @@ class SerialSection(QWidget):
         # Reactive to any broker change, not just ones this page caused — the
         # window can also connect via auto-connect at startup.
         win.bus.subscribe("serial/state", lambda _payload: self._update_connection_state())
+        # The monitor's IDE-style picker announces its changes here; without
+        # this, a baud change over there left this combo stale (JL).
+        win.bus.subscribe("serial/baud", lambda _payload: self._sync_baud_from_config())
 
     # ----- connection ----------------------------------------------------------
 
@@ -112,6 +115,9 @@ class SerialSection(QWidget):
         if saved_baud not in [str(b) for b in BAUD_CHOICES]:
             self.baud_combo.addItem(saved_baud)
         self.baud_combo.setCurrentText(saved_baud)
+        # `activated` = user action only, so the serial/baud sync below can
+        # setCurrentText without feeding back into this handler.
+        self.baud_combo.activated.connect(self._on_baud_activated)
         self.probe_timeout_spin = QDoubleSpinBox(box)
         self.probe_timeout_spin.setRange(0.5, 10.0)
         self.probe_timeout_spin.setSingleStep(0.5)
@@ -252,17 +258,35 @@ class SerialSection(QWidget):
         if update_buttons is not None:
             update_buttons()
 
-    def _update_connection_state(self) -> None:
-        """Board-only actions need a live broker; everything else is offline-editable."""
-        # Two surfaces own a baud picker (this page and the serial monitor's
-        # IDE-style one); the config row is the truth, so follow it here on
-        # every state change — the monitor persists + reconnects, which posts
-        # serial/state, which lands us here (JL: the two must not drift).
+    def _on_baud_activated(self, index: int) -> None:
+        """User picked a speed: persist it, tell the monitor's picker, and —
+        matching its IDE-style behavior — re-open a live connection at the
+        new speed rather than silently running at the old one."""
+        try:
+            baud = int(self.baud_combo.itemText(index))
+        except (TypeError, ValueError):
+            return
+        if int(self._win.config.serial.get("baud", 9600) or 9600) == baud:
+            return
+        self._win.config.serial["baud"] = baud
+        self._win.config.save()
+        self._win.bus.post("serial/baud", baud)
+        broker = self._win.broker
+        if broker is not None and getattr(broker, "port", None):
+            self._win.connect_serial(port=broker.port)
+
+    def _sync_baud_from_config(self) -> None:
+        """The config row is the truth for both baud surfaces (JL: the two
+        pickers must not drift); follow it whenever anything announces it."""
         saved = str(int(self._win.config.serial.get("baud", 9600) or 9600))
         if self.baud_combo.currentText() != saved:
             if self.baud_combo.findText(saved) < 0:
                 self.baud_combo.addItem(saved)
             self.baud_combo.setCurrentText(saved)
+
+    def _update_connection_state(self) -> None:
+        """Board-only actions need a live broker; everything else is offline-editable."""
+        self._sync_baud_from_config()
         connected = self._win.broker is not None
         for widget in (
             self.disconnect_button,

@@ -129,6 +129,7 @@ class SerialMonitorWidget(QWidget):
         win.bus.subscribe("serial/tx", self._on_tx)
         win.bus.subscribe("serial/note", self._on_note)
         win.bus.subscribe("serial/state", self._on_state)
+        win.bus.subscribe("serial/baud", self._sync_baud_picker)
 
     # ----- construction ---------------------------------------------------
 
@@ -283,8 +284,11 @@ class SerialMonitorWidget(QWidget):
 
     def _on_state(self, _payload: Any = None) -> None:
         self.refresh_connection()
-        # Mirror the config's baud: a reconnect from Settings → Serial (which
-        # posts serial/state) must not leave this picker showing the old speed.
+        self._sync_baud_picker()
+
+    def _sync_baud_picker(self, _payload: Any = None) -> None:
+        """Mirror the config's baud — a change on the Settings page (serial/baud)
+        or a reconnect (serial/state) must not leave this picker stale."""
         saved = str(self._configured_baud())
         if self.baud_combo.currentText() != saved:
             if self.baud_combo.findText(saved) < 0:
@@ -309,6 +313,10 @@ class SerialMonitorWidget(QWidget):
             win.config.save()
         except Exception as exc:
             self._note(f"could not save baud: {exc}")
+        # Tell the other baud surface (Settings → Serial) directly: the
+        # serial/state route only fires when a reconnect happens, which
+        # leaves it stale while disconnected (JL live-testing).
+        win.bus.post("serial/baud", baud)
         port = self._current_port()
         self._note(f"baud set to {baud}")
         if port:

@@ -378,14 +378,32 @@ def test_the_page_opens_the_serial_monitor_dock(window) -> None:
 
 def test_a_monitor_baud_change_reaches_the_settings_combo(window, config) -> None:
     """Two surfaces show the baud (this page and the monitor's IDE-style
-    picker); the config row is the truth and neither may go stale (JL)."""
+    picker); the config row is the truth and neither may go stale (JL) —
+    including while DISCONNECTED, when no serial/state ever fires."""
     section = build_serial_section(window)
     assert section.baud_combo.currentText() == "9600"
 
-    # What the monitor's picker does: persist, then reconnect → serial/state.
-    config.serial["baud"] = 115200
-    config.save()
-    window.bus.post("serial/state", {"connected": False, "message": "Serial: disconnected"})
+    # Exactly what the monitor's picker does while disconnected.
+    monitor = window.serial_monitor
+    index = monitor.baud_combo.findText("115200")
+    monitor.baud_combo.setCurrentIndex(index)
+    monitor._on_baud_changed("115200")
     window.bus.drain()
 
+    assert config.serial["baud"] == 115200
     assert section.baud_combo.currentText() == "115200"
+
+
+def test_a_settings_baud_change_reaches_the_monitor_picker(window, config) -> None:
+    """...and the other direction (JL: 'and vice versa')."""
+    section = build_serial_section(window)
+    monitor = window.serial_monitor
+    assert monitor.baud_combo.currentText() == "9600"
+
+    index = section.baud_combo.findText("57600")
+    section.baud_combo.setCurrentIndex(index)
+    section._on_baud_activated(index)
+    window.bus.drain()
+
+    assert config.serial["baud"] == 57600
+    assert monitor.baud_combo.currentText() == "57600"
