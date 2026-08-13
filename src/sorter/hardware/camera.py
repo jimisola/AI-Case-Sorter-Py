@@ -62,6 +62,24 @@ def _preferred_backend() -> int:
 # ----- friendly-name lookup ---------------------------------------------------
 
 
+def _clean_v4l2_name(raw: str) -> str:
+    """Collapse the kernel card string's self-repeat.
+
+    V4L2 caps the card field at 32 bytes and drivers commonly fill it as
+    "<name>: <name>", so it arrives as "USB 2.0 Camera: USB 2.0 Camera" or,
+    truncated, "Integrated RGB Camera: Integrat". When the tail is the head
+    again (whole or cut off), it adds nothing — drop it. A tail that says
+    something new ("Vendor: Model") is kept.
+    """
+    head, sep, tail = raw.partition(":")
+    head, tail = head.strip(), tail.strip()
+    if not sep or not head or not tail:
+        return raw.strip()
+    if head.lower().startswith(tail.lower()) or tail.lower().startswith(head.lower()):
+        return head if len(head) >= len(tail) else tail
+    return raw.strip()
+
+
 def _linux_camera_names() -> dict[int, str]:
     """video device index -> human-readable name, from /sys."""
     names: dict[int, str] = {}
@@ -78,7 +96,7 @@ def _linux_camera_names() -> dict[int, str]:
         name_path = os.path.join(sysroot, entry, "name")
         try:
             with open(name_path, encoding="utf-8") as f:
-                names[idx] = f.read().strip()
+                names[idx] = _clean_v4l2_name(f.read())
         except OSError:
             pass
     return names
