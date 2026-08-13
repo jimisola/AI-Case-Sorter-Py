@@ -41,8 +41,11 @@ def test_sidebar_fits_the_widest_label(window) -> None:
 
 
 def test_sort_actions_are_disabled_without_a_board(window) -> None:
-    assert list(window.action_buttons) == ["Start", "Stop", "Manual feed"]
+    assert list(window.action_buttons) == ["Start/Stop", "Manual feed"]
     assert not any(button.isEnabled() for button in window.action_buttons.values())
+    # The idle face, so the row reads "Start" even when nothing can start.
+    assert window.run_button.text() == "Start"
+    assert window.run_button.objectName() == "action"
 
 
 def test_serial_dock_logs_traffic(window) -> None:

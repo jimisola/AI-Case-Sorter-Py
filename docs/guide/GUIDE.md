@@ -51,18 +51,18 @@ it was in before, and a filter box narrows a long headstamp list by name.
 
 ### Sorting templates
 
-The bar above the grid holds the active **sorting template** — a named
-snapshot of the whole slot layout, so one model can carry several bin
-arrangements ("Range brass" vs. "Match prep") and switch between them from
-the dropdown. **+ New** creates one (optionally copied from the current
-layout); **✎ Edit** renames or deletes the active one. Switching templates
+The right-hand end of the run-controls row holds the active **sorting
+template** — a named snapshot of the whole slot layout, so one model can
+carry several bin arrangements ("Range brass" vs. "Match prep") and switch
+between them from the dropdown. **+** creates one (optionally copied from the
+current layout); **✎** renames or deletes the active one. Switching templates
 replaces every slot assignment at once, so it's blocked while a run is in
 progress — stop first.
 
 ### Start, Stop, and Manual feed
 
 - **Start** begins the continuous sort loop: capture, classify, sort,
-  repeat.
+  repeat. It is one button: while the loop runs it reads **Stop**, in red.
 - **Stop** ends it — case counts are kept, not reset, so an operator can
   clear a jam and pick back up mid-tray.
 - **Manual feed** runs exactly one cycle without starting the loop, useful

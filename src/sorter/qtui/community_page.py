@@ -61,6 +61,8 @@ COLUMNS = ("Model", "Cartridge", "Version", "Includes", "Headstamps", "Images", 
 # The row's action button rides in one extra, unlabelled column past the data
 # ones. It carries no value, so it never sorts.
 ACTIONS_COLUMN = len(COLUMNS)
+# What the search box narrows the loaded rows against, in-place.
+LIVE_FILTER_COLUMNS = (COLUMNS.index("Model"), COLUMNS.index("Cartridge"), COLUMNS.index("Author"))
 
 # Display label -> the server's ModelType query value (empty = no filter).
 TYPE_FILTERS: dict[str, str] = {
@@ -325,18 +327,36 @@ class CommunityPage(QWidget):
         self.search_edit = QLineEdit(page)
         self.search_edit.setPlaceholderText("Search community models")
         self.search_edit.setClearButtonEnabled(True)
-        # Enter searches; typing does not — every keystroke would be a request.
+        # Enter (and the button) queries the server; typing only narrows what
+        # is already on screen — every keystroke would otherwise be a request.
         self.search_edit.returnPressed.connect(self.refresh)
+        self.search_edit.textChanged.connect(lambda _text: self.apply_live_filter())
         bar.addWidget(self.search_edit, 1)
 
-        search = QPushButton("Search", page)
-        search.setObjectName("action")
-        search.clicked.connect(self.refresh)
-        bar.addWidget(search)
-        reload_filters = QPushButton("Reload filters", page)
-        reload_filters.clicked.connect(self.load_cartridges)
-        bar.addWidget(reload_filters)
+        self.search_button = QPushButton("Search", page)
+        self.search_button.setObjectName("action")
+        self.search_button.clicked.connect(self.refresh)
+        bar.addWidget(self.search_button)
+        self.reload_button = QPushButton("Refresh", page)
+        self.reload_button.clicked.connect(self.load_cartridges)
+        bar.addWidget(self.reload_button)
         return bar
+
+    def apply_live_filter(self) -> None:
+        """Hide the rows that don't match what's typed — never drop them, so
+        clearing the box brings the whole catalogue straight back."""
+        needle = self.search_edit.text().strip().casefold()
+        total = self.tree.topLevelItemCount()
+        shown = 0
+        for index in range(total):
+            item = self.tree.topLevelItem(index)
+            if item is None:
+                continue
+            match = not needle or any(needle in item.text(c).casefold() for c in LIVE_FILTER_COLUMNS)
+            item.setHidden(not match)
+            shown += int(match)
+        if total:
+            self.set_page_status(f"{shown} of {total} shown" if needle else f"{total} model(s) available")
 
     def _build_table(self, page: QWidget) -> QTreeWidget:
         self.tree = QTreeWidget(page)
@@ -700,6 +720,7 @@ class CommunityPage(QWidget):
         self._apply_sort()
         self._restore_selection(selected)
         self._autosize_columns()
+        self.apply_live_filter()
         self._update_actions()
 
     def _autosize_columns(self) -> None:
@@ -908,7 +929,7 @@ class CommunityPage(QWidget):
         )
 
     def _batch_prefix(self) -> str:
-        """"(2 of 3) " once a queue exists; silent for a single download.
+        """ "(2 of 3) " once a queue exists; silent for a single download.
 
         A bare parenthetical, because the message it prefixes already leads
         with its own verb — "Downloading 1 of 2: Downloading X" read wrong

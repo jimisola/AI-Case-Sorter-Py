@@ -89,7 +89,10 @@ def test_quick_population_falls_back_when_no_names_available(window, monkeypatch
     section = settings_camera.build_camera_section(window)
 
     assert section.device_combo.count() == 1
-    assert "(0)" in section.device_combo.currentText()  # default device_index
+    # Name only — the list position was never the device index, so it is not
+    # shown; the real index rides in the item's data.
+    assert section.device_combo.currentText() == "Camera 0"
+    assert section.device_combo.currentData()["index"] == 0  # default device_index
 
 
 def test_detect_populates_devices_and_resolutions(window, monkeypatch) -> None:
@@ -371,6 +374,30 @@ def test_led_debounce_skips_a_repeat_of_the_same_value(window) -> None:
     section._apply_led()
 
     assert window.broker.sent == ["cameraledlevel:200"]
+
+
+def test_the_device_list_names_devices_and_the_status_line_carries_the_index(window, monkeypatch) -> None:
+    # The "(N)" prefix was the list position while the line below read the real
+    # device index — two different numbers for the same camera (JL).
+    monkeypatch.setattr(settings_camera, "camera_names", lambda: {4: "Integrated RGB Camera"})
+    window.camera = types.SimpleNamespace(device_index=4, width=1280, height=720, latest_frame=lambda: None)
+
+    section = settings_camera.build_camera_section(window)
+
+    assert section.device_combo.currentText() == "Integrated RGB Camera"
+    assert section.device_combo.currentData()["index"] == 4
+    assert section.current_label.text() == "Current: device 4 @ 1280x720"
+
+
+def test_the_camera_page_says_what_to_do_about_a_dead_feed(window) -> None:
+    section = settings_camera.build_camera_section(window)
+    window.camera = types.SimpleNamespace(latest_frame=lambda: None)
+    section._win = window
+    section.show()
+
+    section._refresh_preview()
+
+    assert section.preview_label.text() == settings_camera.NO_FEED_TEXT
 
 
 def test_camera_page_shows_a_live_preview(window) -> None:

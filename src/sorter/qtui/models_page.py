@@ -75,6 +75,8 @@ AI_CONFIG_NAME = "Use AI Config"
 AI_CONFIG_HINT = "Route classification through the AI Config page (HTTP server)."
 
 COLUMNS = ("Model", "Active", "Cartridge", "Type", "Mode", "Images", "Trained", "Last trained")
+# Breathing room over resizeColumnToContents — see _autosize_columns.
+COLUMN_PADDING = 12
 ACTIVE_MARK = "● ACTIVE"
 EMPTY_VALUE = "—"
 # GNOME's file-chooser portal strips the parenthesized "(*.zip)" from the
@@ -338,7 +340,11 @@ class ModelsPage(QWidget):
             return  # only before the user has had a chance to drag them
         self._columns_sized = True
         for i in range(len(COLUMNS)):
+            # resizeColumnToContents lands on the exact text width, which the
+            # view then elides anyway ("8/8/26 7:06 P…"). The pad is what makes
+            # a typical value fit; the header stays Interactive, so a drag wins.
             self.tree.resizeColumnToContents(i)
+            self.tree.setColumnWidth(i, self.tree.columnWidth(i) + COLUMN_PADDING)
         self.tree.setColumnWidth(0, max(self.tree.columnWidth(0), 260))
 
     def _build_action_row(self) -> QHBoxLayout:
@@ -487,7 +493,10 @@ class ModelsPage(QWidget):
             AI_CONFIG_SENTINEL_ID,
             None,
         )
-        item.setToolTip(0, AI_CONFIG_HINT)
+        # On every cell, not just the name: what this row does belongs to the
+        # row, so the bottom line is left to say what only it can (JL).
+        for index in range(len(COLUMNS)):
+            item.setToolTip(index, AI_CONFIG_HINT)
 
     def _add_model_row(
         self,
@@ -577,8 +586,11 @@ class ModelsPage(QWidget):
         self.hint_label.setText(self._hint_for(model, is_ai_row))
 
     def _hint_for(self, model: Model | None, is_ai_row: bool) -> str:
+        # The AI row explains itself in its own tooltip (see _add_ai_row); the
+        # line below the table is kept for what a row can't carry — the
+        # foreign-model notice.
         if is_ai_row:
-            return AI_CONFIG_HINT
+            return SELECT_HINT
         if model is None:
             return SELECT_HINT
         if not is_trainable(model):

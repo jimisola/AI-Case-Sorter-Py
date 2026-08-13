@@ -263,6 +263,15 @@ def names(page: Any) -> list[str]:
     return [cell(page, row, "Model") for row in range(page.tree.topLevelItemCount())]
 
 
+def visible_names(page: Any) -> list[str]:
+    """The rows the live filter left on screen, in view order."""
+    return [
+        cell(page, row, "Model")
+        for row in range(page.tree.topLevelItemCount())
+        if not page.tree.topLevelItem(row).isHidden()
+    ]
+
+
 def select_row(page: Any, index: int) -> None:
     item = page.tree.topLevelItem(index)
     assert item is not None, f"no row {index}"
@@ -681,6 +690,51 @@ def test_the_filters_are_what_the_server_is_asked_for(page, window, api) -> None
     assert last_query_is(("federal", "ModelOnly", ".223")), api.queries
 
 
+def test_typing_narrows_the_loaded_rows_without_re_querying(window, api) -> None:
+    api.models = [
+        info("uid-1", name="Range brass", cartridge="9mm", author="ada"),
+        info("uid-2", name="Match prep", cartridge=".223", author="publisher"),
+        info("uid-3", name="Mixed pickup", cartridge="45 ACP", author="ada"),
+    ]
+    page = build_page(window, api, auth=FakeAuth())
+    page.refresh_auth_state()
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 3)
+    api.queries.clear()
+
+    page.search_edit.setText("MATCH")  # case-insensitive, on the name
+
+    assert visible_names(page) == ["Match prep"]
+    assert page.status_label.text() == "1 of 3 shown"
+    assert api.queries == []  # nothing left the machine
+
+    page.search_edit.setText("ada")  # the author counts too
+    assert visible_names(page) == ["Range brass", "Mixed pickup"]
+
+    page.search_edit.setText("9mm")  # and the cartridge
+    assert visible_names(page) == ["Range brass"]
+
+    # Hidden, never dropped: clearing the box brings the catalogue straight back.
+    page.search_edit.clear()
+    assert visible_names(page) == ["Range brass", "Match prep", "Mixed pickup"]
+    assert page.tree.topLevelItemCount() == 3
+    assert page.status_label.text() == "3 model(s) available"
+
+
+def test_the_filter_survives_a_re_fill(page, window, api) -> None:
+    api.models = [info("uid-1", name="Range brass"), info("uid-2", name="Match prep")]
+    page.search_edit.setText("range")
+    page.refresh()
+
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 2)
+    # The server saw the term as well, so the count line is the plain one; the
+    # rows the fill rebuilt are still filtered by what is in the box.
+    assert visible_names(page) == ["Range brass"]
+
+
+def test_the_filter_reload_button_says_what_it_does(page) -> None:
+    assert page.reload_button.text() == "Refresh"
+
+
 def test_the_cartridge_filter_comes_from_the_server(page) -> None:
     values = [page.cartridge_combo.itemText(i) for i in range(page.cartridge_combo.count())]
 
@@ -907,7 +961,9 @@ def test_a_failed_download_does_not_strand_the_queue(page, window, api, config, 
     page.confirm = lambda _title, _text: True
     # First request explodes; the second must still run.
     real_request = api.request_download
-    api.request_download = lambda uid: (_ for _ in ()).throw(RuntimeError("boom")) if uid == "uid-a" else real_request(uid)
+    api.request_download = lambda uid: (
+        (_ for _ in ()).throw(RuntimeError("boom")) if uid == "uid-a" else real_request(uid)
+    )
 
     row_button(page, 0).click()
     row_button(page, 1).click()

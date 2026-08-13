@@ -103,6 +103,21 @@ BAUD_CHOICES = (9600, 19200, 38400, 57600, 115200)
 FEED_MAX = 12
 FEED_EMPTY_TEXT = "Recent classifications will appear here."
 
+# The Start/Stop toggle: one button, two faces. The key is what
+# `action_buttons` exposes it under.
+RUN_TOGGLE_KEY = "Start/Stop"
+RUN_START_TEXT = "Start"
+RUN_STOP_TEXT = "Stop"
+TEMPLATE_BUTTON_WIDTH = 36
+
+# The camera preview when there is nothing to show. The Sort page's version
+# links to where the device is chosen; `_camera_placeholder_html` colors the
+# link from the live palette.
+PREVIEW_INITIAL_TEXT = "No frame"
+CAMERA_DEAD_TEXT = "No camera feed"
+CAMERA_DEAD_LINK = "open Camera settings"
+CAMERA_FAILED_STATUS = "Camera failed to start — pick a device in Settings → Camera."
+
 # Run options (Tk reference: tab_run.py's run_opts frame). Same config keys,
 # same semantics — just grouped into one popover instead of three rows.
 STORE_IMAGES_LABELS = {
@@ -382,7 +397,6 @@ class QtMainWindow(QMainWindow):
         column.setContentsMargins(12, 12, 12, 12)
         column.setSpacing(10)
         column.addLayout(self._build_action_row(page))
-        column.addLayout(self._build_template_bar(page))
 
         splitter = QSplitter(Qt.Orientation.Horizontal, page)
         splitter.addWidget(self._build_preview_column(splitter))
@@ -482,57 +496,68 @@ class QtMainWindow(QMainWindow):
         self.sort_stack.setCurrentIndex(1 if (not connected and fresh_db) else 0)
 
     def _build_action_row(self, page: QWidget) -> QHBoxLayout:
+        """One row: what a run *does* on the left, what it runs *with* on the right."""
         actions = QHBoxLayout()
         self.action_buttons: dict[str, QPushButton] = {}
-        for text, object_name, handler in (
-            ("Start", "action", self.start_run),
-            ("Stop", "danger", self.stop_run),
-            ("Manual feed", "", self.manual_feed),
-        ):
-            button = QPushButton(text, page)
-            if object_name:
-                button.setObjectName(object_name)
-            button.clicked.connect(handler)
-            actions.addWidget(button)
-            self.action_buttons[text] = button
-        actions.addStretch(1)
+
+        # One button, two faces (JL): a run is on or it isn't, and the button
+        # that ends it is the one that started it. `_update_run_buttons` owns
+        # the label/role swap.
+        self.run_button = QPushButton(RUN_START_TEXT, page)
+        self.run_button.setObjectName("action")
+        self.run_button.clicked.connect(self.toggle_run)
+        actions.addWidget(self.run_button)
+        self.action_buttons[RUN_TOGGLE_KEY] = self.run_button
+
+        feed_button = QPushButton("Manual feed", page)
+        feed_button.clicked.connect(self.manual_feed)
+        actions.addWidget(feed_button)
+        self.action_buttons["Manual feed"] = feed_button
+
+        # No dedicated row for this (JL) — was its own bar under the
+        # template row. The run counter/reset live with the grid instead
+        # (see `_build_grid_column`), not here.
+        self.run_options_button = self._build_run_options_button(page)
+        actions.addWidget(self.run_options_button)
+
         # Visible whenever the active model has notes at all, acknowledged or
         # not — it is the history view as well as the ack flow.
         self.notes_button = QPushButton(NOTES_BUTTON.format(count=0), page)
         self.notes_button.clicked.connect(lambda: self.open_notes_dialog())
         self.notes_button.hide()
         actions.addWidget(self.notes_button)
-        # No dedicated row for this (JL) — was its own bar under the
-        # template row. The run counter/reset live with the grid instead
-        # (see `_build_grid_column`), not here.
-        self.run_options_button = self._build_run_options_button(page)
-        actions.addWidget(self.run_options_button)
+
+        actions.addStretch(1)
+        self._add_template_group(page, actions)
         self._update_run_buttons()
         return actions
 
-    def _build_template_bar(self, page: QWidget) -> QHBoxLayout:
-        """Template things only — run configuration lives in its own group.
+    def _add_template_group(self, page: QWidget, bar: QHBoxLayout) -> None:
+        """The template picker, right-aligned on the action row.
 
-        JL, increment 14: consolidate everything that configures how a run
-        behaves into one place (see ``_build_run_options_button``) instead
-        of scattering it across the tab, as Tk does.
+        JL: which layout a run uses belongs on the same row as Start, not on a
+        full-width bar of its own — the picker and its two edits are a group,
+        so New/Edit shrink to glyphs with tooltips.
         """
-        bar = QHBoxLayout()
-        bar.addWidget(self._muted_label("Sorting template", page))
+        self.template_hint = self._muted_label("", page)
+        bar.addWidget(self.template_hint)
+        bar.addWidget(self._muted_label("Template", page))
         self.template_combo = QComboBox(page)
         self.template_combo.setMinimumWidth(200)
+        self.template_combo.setMaximumWidth(240)
         # `activated` is user-only, so repopulating the combo can't look like a switch.
         self.template_combo.activated.connect(self._on_template_selected)
         bar.addWidget(self.template_combo)
-        for text, handler in (("+ New", self.new_template), ("✎ Edit", self.edit_template)):
-            button = QPushButton(text, page)
-            button.clicked.connect(handler)
+        self.template_new_button = QPushButton("+", page)
+        self.template_new_button.setToolTip("New template…")
+        self.template_new_button.clicked.connect(self.new_template)
+        self.template_edit_button = QPushButton("✎", page)
+        self.template_edit_button.setToolTip("Edit template…")
+        self.template_edit_button.clicked.connect(self.edit_template)
+        for button in (self.template_new_button, self.template_edit_button):
+            button.setMaximumWidth(TEMPLATE_BUTTON_WIDTH)
             bar.addWidget(button)
-        self.template_hint = self._muted_label("", page)
-        bar.addWidget(self.template_hint)
-        bar.addStretch(1)
         self._refresh_templates()
-        return bar
 
     def _build_run_options_button(self, page: QWidget) -> QToolButton:
         """Everything that configures how a run behaves, in one popover.
@@ -609,8 +634,12 @@ class QtMainWindow(QMainWindow):
         column = QVBoxLayout(holder)
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(6)
-        self.preview_label = QLabel("No frame", holder)
+        self.preview_label = QLabel(PREVIEW_INITIAL_TEXT, holder)
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # A dead camera is the one thing this panel can usefully say, so it
+        # says where to fix it rather than sitting black (JL).
+        self.preview_label.setTextFormat(Qt.TextFormat.RichText)
+        self.preview_label.linkActivated.connect(lambda _href: self._open_settings_section("Camera"))
         # Ignored + tiny minimum: the label must never report the pixmap as
         # its size hint, or each scaled frame grows the layout that the next
         # frame is scaled to — the window ratchets larger on every repaint.
@@ -1457,9 +1486,23 @@ class QtMainWindow(QMainWindow):
             (self.serial_label, self._serial_state),
         ):
             label.setText(self._indicator_html(message, connected=connected))
+        self._paint_preview_placeholder()
         # Every camera/serial connect-state change can flip the Sort page
         # between the guided empty state and the real dashboard.
         self._update_sort_empty_state()
+
+    def _camera_placeholder_html(self) -> str:
+        color = self.palette_colors["update"]
+        return f'{CAMERA_DEAD_TEXT} — <a href="#camera" style="color: {color};">{CAMERA_DEAD_LINK}</a>'
+
+    def _paint_preview_placeholder(self) -> None:
+        """A camera that isn't connected says so where the feed would be."""
+        if self._camera_state[1]:
+            return  # frames are arriving (or about to); the timer owns the label
+        # Painted before the Sort page exists on the very first indicator paint.
+        label = getattr(self, "preview_label", None)
+        if label is not None:
+            label.setText(self._camera_placeholder_html())
 
     def _set_camera_indicator(self, message: str, *, connected: bool) -> None:
         self._camera_state = (message, connected)
@@ -1480,10 +1523,11 @@ class QtMainWindow(QMainWindow):
                     connected=True,
                 )
             else:
-                self.set_status("Camera failed to start. Check the device index.")
+                # The red dot alone left the user with nowhere to go (JL).
+                self.bus.post("status", CAMERA_FAILED_STATUS)
                 self._set_camera_indicator("Camera: failed to start", connected=False)
         except Exception as exc:
-            self.set_status(f"Camera error: {exc}")
+            self.bus.post("status", f"Camera error: {exc} — pick a device in Settings → Camera.")
             self._set_camera_indicator("Camera: error", connected=False)
 
     @staticmethod
@@ -1733,6 +1777,24 @@ class QtMainWindow(QMainWindow):
             return None
         return controller
 
+    @staticmethod
+    def _set_button_role(button: QPushButton, object_name: str) -> None:
+        """Swap a button's palette role. QSS matches on the objectName, and a
+        live widget has to be re-polished for the new rule to take."""
+        if button.objectName() == object_name:
+            return
+        button.setObjectName(object_name)
+        style = button.style()
+        style.unpolish(button)
+        style.polish(button)
+
+    def toggle_run(self) -> None:
+        """The one button's handler; the run state decides which half it is."""
+        if self._is_running:
+            self.stop_run()
+        else:
+            self.start_run()
+
     def start_run(self) -> None:
         controller = self._ready_to_sort()
         if controller is None or self._is_running:
@@ -1763,13 +1825,13 @@ class QtMainWindow(QMainWindow):
 
     def _update_run_buttons(self) -> None:
         connected = self.broker is not None
-        for name, enabled in (
-            ("Start", connected and not self._is_running),
-            ("Manual feed", connected and not self._is_running),
-            ("Stop", self._is_running),
-        ):
-            button = self.action_buttons[name]
-            button.setEnabled(enabled)
+        running = self._is_running
+        # A run that outlives its board still has to be stoppable.
+        self.run_button.setEnabled(connected or running)
+        self.run_button.setText(RUN_STOP_TEXT if running else RUN_START_TEXT)
+        self._set_button_role(self.run_button, "danger" if running else "action")
+        self.action_buttons["Manual feed"].setEnabled(connected and not running)
+        for button in (self.run_button, self.action_buttons["Manual feed"]):
             button.setToolTip("" if connected else "Connect to the board first")
         # The Train page's Feed drives the same board.
         train_page = getattr(self, "train_page", None)

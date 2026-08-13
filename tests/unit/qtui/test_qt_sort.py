@@ -423,24 +423,48 @@ def test_manual_feed_runs_one_cycle_off_the_main_thread(window, connected) -> No
 
 
 def test_actions_enable_once_a_board_is_present(window, connected) -> None:
-    assert window.action_buttons["Start"].isEnabled()
+    assert window.run_button.isEnabled()
+    assert window.run_button.text() == "Start"
     assert window.action_buttons["Manual feed"].isEnabled()
-    assert not window.action_buttons["Stop"].isEnabled()
 
 
 def test_run_events_own_the_button_state(window, connected) -> None:
     window.bus.post("run/started", None)
     window.bus.drain()
 
-    assert not window.action_buttons["Start"].isEnabled()
+    # One button, both faces: the run's own events flip the label and the
+    # palette role, never the click handler.
+    assert window.run_button.text() == "Stop"
+    assert window.run_button.objectName() == "danger"
+    assert window.run_button.isEnabled()
     assert not window.action_buttons["Manual feed"].isEnabled()
-    assert window.action_buttons["Stop"].isEnabled()
 
     window.bus.post("run/stopped", None)
     window.bus.drain()
 
-    assert window.action_buttons["Start"].isEnabled()
-    assert not window.action_buttons["Stop"].isEnabled()
+    assert window.run_button.text() == "Start"
+    assert window.run_button.objectName() == "action"
+    assert window.run_button.isEnabled()
+    assert window.action_buttons["Manual feed"].isEnabled()
+
+
+def test_the_toggle_starts_and_then_stops_the_run(window, connected) -> None:
+    window.run_button.click()
+
+    assert connected.started == 1
+
+    # The controller's event is what puts the Stop face up; clicking it then
+    # stops rather than starting a second run.
+    window.bus.post("run/started", None)
+    window.bus.drain()
+    window.run_button.click()
+
+    assert connected.stopped == 1
+    assert connected.started == 1
+
+
+def test_the_toggle_is_the_same_button_under_both_keys(window) -> None:
+    assert window.action_buttons["Start/Stop"] is window.run_button
 
 
 def test_run_error_reaches_the_status_bar(window) -> None:
@@ -571,7 +595,7 @@ def test_connecting_the_emulator_wires_the_run_controller(window, config) -> Non
     assert isinstance(window.run_controller, RunController)
     assert window.run_controller.broker is window.broker
     assert "connected" in window.serial_label.text()
-    assert window.action_buttons["Start"].isEnabled()
+    assert window.run_button.isEnabled()
     # Persisted, not just remembered in the in-memory section.
     assert Config(config.db).load().serial["port"] == EMULATED_PORT
 
@@ -642,3 +666,78 @@ def test_auto_select_control_persists(window, config) -> None:
 
     window.auto_select_check.setChecked(False)
     assert config.run_auto_select_trays is False
+
+
+# ----- the action row --------------------------------------------------------
+
+
+def action_row(window):
+    """The one row the run controls and the template picker share."""
+    column = window._pages_by_name["Sort"].layout()
+    for index in range(column.count()):
+        row = column.itemAt(index).layout()
+        if row is not None and any(row.itemAt(i).widget() is window.run_button for i in range(row.count())):
+            return row
+    raise AssertionError("the run button is not on any row of the Sort page")
+
+
+def row_widgets(row) -> list:
+    return [row.itemAt(i).widget() for i in range(row.count())]
+
+
+def test_the_run_controls_and_the_template_picker_share_one_row(window) -> None:
+    row = action_row(window)
+    widgets = row_widgets(row)
+
+    for widget in (
+        window.action_buttons["Manual feed"],
+        window.run_options_button,
+        window.template_combo,
+        window.template_new_button,
+        window.template_edit_button,
+    ):
+        assert widget in widgets
+
+    # And it is the only row above the splitter — the standalone template bar
+    # is gone, not merely emptied.
+    column = window._pages_by_name["Sort"].layout()
+    assert sum(1 for i in range(column.count()) if column.itemAt(i).layout() is not None) == 1
+
+
+def test_the_template_edits_are_compact_and_explain_themselves(window) -> None:
+    assert window.template_new_button.toolTip() == "New template…"
+    assert window.template_edit_button.toolTip() == "Edit template…"
+    assert window.template_combo.maximumWidth() <= 240
+
+
+# ----- a camera that isn't there ---------------------------------------------
+
+
+def test_the_preview_says_where_to_fix_a_dead_camera(window) -> None:
+    window._set_camera_indicator("Camera: failed to start", connected=False)
+
+    text = window.preview_label.text()
+    assert "No camera feed" in text
+    assert "open Camera settings" in text
+
+    window.preview_label.linkActivated.emit("#camera")
+
+    assert window.pages.currentWidget() is window._pages_by_name["Settings"]
+    assert window.settings_list.currentItem().text() == "Camera"
+
+
+def test_a_failed_camera_start_reaches_the_status_bar(window) -> None:
+    window.camera = types.SimpleNamespace(
+        start_preview=lambda: False,
+        latest_frame=lambda: None,
+        stop=lambda: None,
+        width=640,
+        height=480,
+    )
+
+    window.start_camera()
+    window.bus.drain()
+
+    assert "Settings" in window.statusBar().currentMessage()
+    assert "Camera" in window.statusBar().currentMessage()
+    assert window._camera_state[1] is False

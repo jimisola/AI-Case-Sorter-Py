@@ -210,6 +210,16 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
   Edit, Images, Headstamps, Evaluate, Export, Delete-in-danger-red;
   AI-row shows Activate only), bottom action bar dropped. Implement after
   the A24/A25 agent lands (same-file conflict).
+- 2026-08-13 — fresh-eyes review (JL: "fix all"): Start/Stop one toggle;
+  Sort controls one row (actions left, template right); camera dead-state
+  actionable (preview link to Settings→Camera + one startup status msg);
+  Models truncated columns fixed; AI-row hint → row tooltip; Community
+  "Reload filters"→"Refresh" + live search filter with "N of M shown";
+  camera combo drops the misleading "(N)" list-position prefix. Deferred
+  by choice: last-cropped-as-overlay, drawn sidebar icon set. Batch in
+  flight. Earlier same day: Community icon row-button lifecycle
+  (↓/↻/×, queue with "(N of M)" progress, Includes column decoded,
+  cross-page models/changed sync).
 - 2026-08-13 — Seth drops implemented same-day: #29 A24+A25 (model-settings
   fetch, version-update notification, moderator notes) landed as `1640704`
   (50 new tests; server floor = the FEEDBACK floor per the contract's field

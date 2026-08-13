@@ -186,20 +186,22 @@ def test_demo_a_full_sorting_session(config, window_factory, monkeypatch) -> Non
     window.sidebar_buttons["Sort"].click()
     assert window.slot_grid.cards[2].names_label.text() == "9mm FC"
     assert window.slot_grid.cards[3].names_label.text() == ".223 LC"
-    assert window.action_buttons["Start"].isEnabled()
+    assert window.run_button.isEnabled()
+    assert window.run_button.text() == "Start"
 
-    # 3. Run several cases.
-    window.action_buttons["Start"].click()
+    # 3. Run several cases. The one button turns into Stop as the run starts.
+    window.run_button.click()
     assert drain_until(window, lambda: window._is_running)
-    assert not window.action_buttons["Start"].isEnabled()
-    assert window.action_buttons["Stop"].isEnabled()
+    assert window.run_button.text() == "Stop"
+    assert window.run_button.objectName() == "danger"
+    assert not window.action_buttons["Manual feed"].isEnabled()
     assert drain_until(window, lambda: window._master_count >= 4, timeout_s=30), "the run never sorted four cases"
 
-    # 4. Stop cleanly.
-    window.action_buttons["Stop"].click()
+    # 4. Stop cleanly — same button, its other face.
+    window.run_button.click()
     assert drain_until(window, lambda: not window._is_running), "the run never stopped"
-    assert window.action_buttons["Start"].isEnabled()
-    assert not window.action_buttons["Stop"].isEnabled()
+    assert window.run_button.text() == "Start"
+    assert window.run_button.objectName() == "action"
 
     # What the demo shows, in the order a viewer reads it.
     sorted_cases = window._master_count
@@ -546,7 +548,7 @@ def test_demo_e_start_refuses_a_model_that_cannot_classify(config, window_factor
     serial_page.connect_button.click()
 
     window.sidebar_buttons["Sort"].click()
-    window.action_buttons["Start"].click()
+    window.run_button.click()
 
     assert window.notify.titles == ["Model not ready"]
     assert not window.run_controller.is_running

@@ -22,3 +22,4 @@ dist/
 /data/
 # Marker that pins the data root to <app>/data — a local choice, never committed.
 portable.txt
+.coverage

@@ -29,10 +29,15 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
 
 from ..hardware.camera import Camera, camera_names, list_cameras_with_metadata
 
+PREVIEW_INITIAL_TEXT = "No frame"
+NO_FEED_TEXT = "No camera feed — press Detect / Refresh or check the device."
+
 
 def _format_camera_choice(cam: dict[str, Any]) -> str:
-    name = cam.get("name") or f"Camera {cam['index']}"
-    return f"({cam['index']}) {name}"
+    """Just the name: the list position is not the device index, and showing
+    a "(0)" next to a status line reading "device 4" only ever misled (JL).
+    The real index rides in the item's data."""
+    return cam.get("name") or f"Camera {cam['index']}"
 
 
 def _format_resolution(wh: tuple[int, int]) -> str:
@@ -81,7 +86,7 @@ class CameraSection(QWidget):
         # Live feed, so Apply isn't blind — same as the Tk camera tab. Ignored
         # policy + tiny minimum: the scaled pixmap must not drive the layout
         # (the Sort-preview window-growth bug, same fix).
-        self.preview_label = QLabel("No frame", self)
+        self.preview_label = QLabel(PREVIEW_INITIAL_TEXT, self)
         self.preview_label.setObjectName("cropPanel")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
@@ -102,6 +107,10 @@ class CameraSection(QWidget):
             return  # don't decode frames for a page nobody is looking at
         frame = self._win.camera.latest_frame()
         if frame is None:
+            # Nothing has ever been grabbed off this device — say what to do
+            # about it instead of leaving an empty panel (JL).
+            if self.preview_label.text() != NO_FEED_TEXT:
+                self.preview_label.setText(NO_FEED_TEXT)
             return
         pixmap = QPixmap.fromImage(self._win.frame_to_image(frame))
         self.preview_label.setPixmap(
