@@ -8,7 +8,6 @@ config would only test the stub.
 from __future__ import annotations
 
 import os
-import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -18,21 +17,6 @@ import pytest
 
 # Must be set before anything constructs a QApplication.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-
-# Marks the few tests whose event-loop pump takes an access violation inside
-# Qt's offscreen plugin on the *Windows CI runner only* (deterministic across
-# many runs; survived rich-text removal, timer shutdown on close, per-test
-# DeferredDelete flushing and receiver-bound worker slots — all kept, each
-# correct hygiene on its own). The poison detonates at whichever real pump
-# runs first, so skipping one site moves the crash to the next; the class is
-# marked instead. An offscreen-runner artifact, not an app bug — the real
-# Windows app runs the native windows platform plugin, and Linux (offscreen)
-# pins the same behaviors green. Revisit on PySide6 upgrades.
-skip_win32_pump_av = pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="Qt offscreen event pump takes an access violation on the Windows CI runner",
-)
 
 
 @pytest.fixture(scope="session")

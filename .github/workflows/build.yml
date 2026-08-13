@@ -137,12 +137,32 @@ jobs:
         run: uv sync --locked --extra qt --python ${{ matrix.python-version }}
 
       - name: Run the qtui tests
+        if: runner.os == 'Linux'
         run: >
           uv run --locked --extra qt --python ${{ matrix.python-version }}
           pytest tests/unit/qtui -q --junitxml=build/junit.xml
 
+      # Windows runs one pytest process per test module. Qt's offscreen
+      # plugin on this runner takes an access violation at the first real
+      # event pump after some mid-suite state accumulates (deterministic;
+      # site moves as tests are skipped, so it is cross-module, and every
+      # module is green in isolation). Process-per-module keeps FULL
+      # coverage — no skips — at the cost of interpreter startup per file.
+      # Revisit on PySide6 upgrades; Linux above stays one process and
+      # would catch any genuine cross-module regression.
+      - name: Run the qtui tests (process per module)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $failed = @()
+          Get-ChildItem tests/unit/qtui/test_*.py | ForEach-Object {
+            uv run --locked --extra qt --python ${{ matrix.python-version }} pytest $_.FullName -q
+            if ($LASTEXITCODE -ne 0) { $failed += $_.Name }
+          }
+          if ($failed.Count -gt 0) { Write-Error ("failing modules: " + ($failed -join ', ')); exit 1 }
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
+        if: always() && runner.os == 'Linux'
         with:
           name: junit-qtui-${{ matrix.os }}
           path: build/junit.xml

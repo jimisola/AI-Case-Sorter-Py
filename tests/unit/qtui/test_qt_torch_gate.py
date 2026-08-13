@@ -41,8 +41,6 @@ from sorter.qtui.dialog_install_torch import (
 )
 from sorter.qtui.torch_gate import TorchGate
 
-from .conftest import skip_win32_pump_av
-
 # A loop that keeps printing until it is killed — the stand-in for a long pip.
 LOOP_SCRIPT = "import time\nfor i in range(10000):\n    print('line', i, flush=True)\n    time.sleep(0.01)\n"
 
@@ -301,7 +299,6 @@ def test_argv_matches_the_tk_dialog_exactly(use_gpu: bool, monkeypatch) -> None:
 # ----- the dialog ------------------------------------------------------------
 
 
-@skip_win32_pump_av
 def test_gpu_probe_runs_off_the_main_thread_and_lands_through_the_queue(qapp, dialog_factory) -> None:
     gpu = GpuInfo(name="NVIDIA GeForce RTX 4090", compute_capability=8.9)
     dialog = dialog_factory(gpu=gpu)
