@@ -465,10 +465,11 @@ class ThemeEditorDialog(QDialog):
         row = QHBoxLayout()
         row.setSpacing(8)
         if self.editing:
-            self.delete_button: QPushButton | None = QPushButton("Delete", self)
-            self.delete_button.setObjectName("danger")
-            self.delete_button.clicked.connect(self.delete_theme)
-            row.addWidget(self.delete_button)
+            delete = QPushButton("Delete", self)
+            delete.setObjectName("danger")
+            delete.clicked.connect(self.delete_theme)
+            row.addWidget(delete)
+            self.delete_button: QPushButton | None = delete
         else:
             self.delete_button = None
         for text, slot in (("Import…", self.import_theme), ("Export…", self.export_theme)):

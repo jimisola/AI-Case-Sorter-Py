@@ -138,11 +138,10 @@ class EditTemplateDialog(_TemplateDialog):
 
         buttons = QDialogButtonBox(self)
         if can_delete:
-            self.delete_button: QPushButton | None = buttons.addButton(
-                "Delete", QDialogButtonBox.ButtonRole.DestructiveRole
-            )
-            self.delete_button.setObjectName("danger")
-            self.delete_button.clicked.connect(self.delete_template)
+            delete = buttons.addButton("Delete", QDialogButtonBox.ButtonRole.DestructiveRole)
+            delete.setObjectName("danger")
+            delete.clicked.connect(self.delete_template)
+            self.delete_button: QPushButton | None = delete
         else:
             self.delete_button = None
         save = buttons.addButton("Save", QDialogButtonBox.ButtonRole.AcceptRole)
