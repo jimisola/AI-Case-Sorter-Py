@@ -48,9 +48,11 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QListView,
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -110,11 +112,17 @@ class TrainPage(QWidget):
         column.setContentsMargins(12, 12, 12, 12)
         column.setSpacing(8)
         column.addLayout(self._build_top_row())
-        body = QHBoxLayout()
-        body.setSpacing(12)
-        body.addWidget(self._build_capture_group(), 1)
-        body.addWidget(self._build_counts_group())
-        column.addLayout(body, 1)
+        # A splitter, not a fixed HBox: the counts list carries 150+ classes on
+        # some models and wraps into columns as it widens (see
+        # _build_counts_group), so the user needs to be able to drag it wider
+        # rather than being stuck with whatever share a stretch factor gave it.
+        self.body_splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        self.body_splitter.setChildrenCollapsible(False)
+        self.body_splitter.addWidget(self._build_capture_group())
+        self.body_splitter.addWidget(self._build_counts_group())
+        self.body_splitter.setStretchFactor(0, 1)
+        self.body_splitter.setStretchFactor(1, 1)
+        column.addWidget(self.body_splitter, 1)
 
         # A run ending re-enables the Train button even if the console is left
         # open; the manager posts these from its wait thread.
@@ -211,6 +219,15 @@ class TrainPage(QWidget):
         self.counts_list = QListWidget(box)
         self.counts_list.setObjectName("countsList")
         self.counts_list.setToolTip("Click a headstamp to save the captured case under it and feed the next one.")
+        # Wrapping top-to-bottom flow: fills a column alphabetically, then
+        # starts the next one — reads like a directory listing, and a model
+        # with 150+ classifications actually uses the width dragged into it
+        # (see the splitter above) instead of scrolling one long column.
+        # Adjust recomputes the column count on every resize, which is also
+        # what collapses it back to a single column on a narrow window.
+        self.counts_list.setFlow(QListView.Flow.TopToBottom)
+        self.counts_list.setWrapping(True)
+        self.counts_list.setResizeMode(QListView.ResizeMode.Adjust)
         self.counts_list.itemClicked.connect(self._on_count_clicked)
         column.addWidget(self.counts_list, 1)
         return box

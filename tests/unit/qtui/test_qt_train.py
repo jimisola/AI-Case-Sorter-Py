@@ -23,6 +23,8 @@ import pytest
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtWidgets import QListView
+
 from sorter import paths
 from sorter.data.models import TrainingConfig
 from sorter.data.repository import HeadstampRepo, ModelRepo, SettingsRepo
@@ -343,6 +345,100 @@ def test_clicking_a_count_row_before_a_feed_says_so(page, config) -> None:
 
     assert "Feed first" in page.status_label.text()
     assert image_names(model_id) == []
+
+
+def test_a_clicked_row_is_still_visually_selected(connected, config) -> None:
+    activate(config, {"9mm FC": 1, "S&B": 2})
+    connected.refresh()
+
+    connected.counts_list.setCurrentItem(connected.counts_list.item(1))
+
+    assert connected.counts_list.item(1).isSelected()
+
+
+# ----- the counts list reflows into columns ----------------------------------
+#
+# A model can carry 150+ classifications, so the list wraps top-to-bottom into
+# columns instead of scrolling forever. QListView's TopToBottom+wrapping flow
+# picks how many ROWS fit a column from the viewport's *height*; width then
+# decides how many of those columns are visible without a horizontal scroll —
+# so "wide" is asserted by the absence of that scrollbar, "narrow" by its
+# presence, rather than by an item's column index moving.
+
+
+def _many_headstamps(n: int) -> dict[str, int]:
+    return {f"Label {i:03d}": i % 20 for i in range(n)}
+
+
+def test_counts_list_uses_wrapping_top_to_bottom_flow(page) -> None:
+    assert page.counts_list.flow() == QListView.Flow.TopToBottom
+    assert page.counts_list.isWrapping()
+    assert page.counts_list.resizeMode() == QListView.ResizeMode.Adjust
+
+
+def test_a_wide_counts_list_shows_multiple_columns_without_scrolling(qapp, window, config) -> None:
+    activate(config, _many_headstamps(40))
+    window.train_page.refresh()
+    window.show_page("Train")
+    window.resize(1600, 250)
+    # Set before the first show(): a splitter resize on an already-shown list
+    # updates its geometry but not this Qt version's cached item layout, so
+    # only the size in place for the first real layout pass is trustworthy.
+    window.train_page.body_splitter.setSizes([200, 1300])
+    window.show()
+    for _ in range(10):
+        qapp.processEvents()
+
+    lst = window.train_page.counts_list
+    first = lst.visualItemRect(lst.item(0))
+    later = lst.visualItemRect(lst.item(lst.count() - 1))
+
+    assert later.x() > first.x()  # a later item landed in a further column
+    assert later.x() + later.width() <= lst.viewport().width()  # and it's on screen
+    assert lst.horizontalScrollBar().maximum() == 0  # every column fits — nothing to scroll
+
+
+def test_a_narrow_counts_list_needs_a_scroll_past_the_first_column(qapp, window, config) -> None:
+    activate(config, _many_headstamps(40))
+    window.train_page.refresh()
+    window.show_page("Train")
+    window.resize(1600, 250)
+    window.train_page.body_splitter.setSizes([1300, 200])
+    window.show()
+    for _ in range(10):
+        qapp.processEvents()
+
+    lst = window.train_page.counts_list
+    assert lst.horizontalScrollBar().maximum() > 0  # later columns exist but aren't all visible
+
+
+def test_dragging_the_splitter_widens_the_list_and_the_scrollbar_follows(qapp, window, config) -> None:
+    activate(config, _many_headstamps(40))
+    window.train_page.refresh()
+    window.show_page("Train")
+    window.resize(1600, 250)
+    window.show()
+    for _ in range(5):
+        qapp.processEvents()
+
+    splitter = window.train_page.body_splitter
+    lst = window.train_page.counts_list
+
+    splitter.setSizes([1300, 200])
+    for _ in range(5):
+        qapp.processEvents()
+    narrow_width = lst.width()
+    narrow_hbar_max = lst.horizontalScrollBar().maximum()
+
+    splitter.setSizes([200, 1300])
+    for _ in range(5):
+        qapp.processEvents()
+    wide_width = lst.width()
+    wide_hbar_max = lst.horizontalScrollBar().maximum()
+
+    assert wide_width > narrow_width  # dragging left actually widened the list
+    assert narrow_hbar_max > 0  # narrow: later columns needed a scroll...
+    assert wide_hbar_max == 0  # ...wide: the reflow followed and the scroll is gone
 
 
 # ----- the torch offer -------------------------------------------------------
