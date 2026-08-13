@@ -202,6 +202,25 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
 - 2026-08-13 — JL: PR body notes the serial monitor is a dock — pops out to
   a free-floating, resizable window and docks back (Arduino-IDE-style at the
   bottom); list with the small-improvements section.
+- 2026-08-13 — JL (live testing): table row actions increment. Community:
+  per-row action button (Download/Update/Installed, trailing non-sortable
+  column, replacing the bottom button); model description as a row tooltip
+  (NOT a column — prose doesn't fit); selected-row detail line stays.
+  Models: per-row buttons on the right like the Windows table (Activate,
+  Edit, Images, Headstamps, Evaluate, Export, Delete-in-danger-red;
+  AI-row shows Activate only), bottom action bar dropped. Implement after
+  the A24/A25 agent lands (same-file conflict).
+- 2026-08-13 — Seth drops implemented same-day: #29 A24+A25 (model-settings
+  fetch, version-update notification, moderator notes) landed as `1640704`
+  (50 new tests; server floor = the FEEDBACK floor per the contract's field
+  docs). Wish-list balancing spec re-checked against Seth's handoff:
+  already fully conformant (case-insensitive, fail-open, once-per-run).
+  Camera-name cleanup `59039fd` (V4L2 self-repeat collapse — shared
+  hardware layer, benefits Tk too; Windows already clean via DirectShow,
+  macOS keeps generic fallback). Seth: much of the old parity backlog
+  won't be done — #29 header now says unchecked pre-1.3.5 items await a
+  keep/drop pass. Monitor ring-grid restored per Seth (`bd8b220`).
+  Row-actions increment in flight.
 - 2026-08-13 — JL: PR's top "How to run" section gets a note: on Linux/
   Wayland desktops, full window functionality (moving/resizing floated
   docks) needs the xcb cursor util lib — `libxcb-cursor0` on Ubuntu/Debian,
