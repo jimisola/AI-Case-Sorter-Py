@@ -28,28 +28,20 @@ def qapp():
 
 
 @pytest.fixture(autouse=True)
-def _flush_deferred_deletes():
-    """Run Qt's own deletions before the repo-wide between-tests gc.collect().
+def _collect_between_tests():
+    """Override the repo-wide forced gc between tests (tests/conftest.py).
 
-    tests/conftest.py forces a collection after every test (a Tk necessity).
-    For Qt that means shiboken wrappers can be finalized while their C++
-    objects still sit in the deleteLater queue — on Windows that lands as
-    heap corruption (0xc0000374) inside the collector. Draining the
-    DeferredDelete queue first lets Qt delete through its own machinery, so
-    the collector only ever sees wrappers that are already settled. This
-    teardown runs before the parent conftest's (child fixtures tear down
-    first), which is exactly the ordering that makes it work.
+    That fixture exists for Tk: Variables only die in the cyclic collector,
+    and one finalized on a worker thread calls into Tcl from the wrong
+    thread. Nothing in this directory makes Tk objects, so the reason does
+    not apply — and forcing the collector over half-torn-down Qt widget
+    trees is actively harmful: shiboken wrappers finalize against C++
+    objects mid-teardown, which reproducibly corrupted the heap on the
+    Windows CI runner (0xc0000374), and flushing deferred deletions first
+    only moved the crash to Linux. Qt test suites (pytest-qt included) run
+    without forced collection; so do these.
     """
     yield
-    try:
-        from PySide6.QtCore import QEvent
-        from PySide6.QtWidgets import QApplication
-    except ImportError:  # no [qt] extra: the test modules all skip anyway
-        return
-    app = QApplication.instance()
-    if app is not None:
-        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-        app.processEvents()
 
 
 @pytest.fixture
