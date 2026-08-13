@@ -80,9 +80,11 @@ STATE_LABELS = {
 # Icon-only buttons (JL live-testing): a text label was clipped by the
 # narrow trailing column, so the glyph carries the action and the tooltip
 # carries the words. Unicode, not icon assets — themes recolor text for free.
+# Plain arrows only: exotic glyphs (⭳) render from a fallback font with
+# different metrics, so a state flip resized the button and the row (JL).
 ACTION_LABELS = {
-    STATE_DOWNLOAD: "⭳",
-    STATE_UPDATE: "⟳",
+    STATE_DOWNLOAD: "↓",
+    STATE_UPDATE: "↻",
     STATE_INSTALLED: "✓",
 }
 ACTION_TOOLTIPS = {
@@ -90,9 +92,11 @@ ACTION_TOOLTIPS = {
     STATE_UPDATE: "Update the installed copy to this version",
     STATE_INSTALLED: "Already installed and up to date",
 }
-# Wide enough for the glyph plus QSS padding; fixed so the trailing column
-# never squeezes it (ResizeToContents ignores item widgets).
+# Fixed in BOTH dimensions: sized for any glyph plus QSS padding, so neither
+# the trailing column (ResizeToContents ignores item widgets) nor a state
+# flip's glyph swap can change the button — or the row height under it.
 ACTION_BUTTON_WIDTH = 36
+ACTION_BUTTON_HEIGHT = 22
 # Sort order for the State column: needs-action states first, "nothing to do"
 # last — alphabetizing the labels ("Available", "Installed", "Update
 # available") would not read as a sane order.
@@ -316,6 +320,9 @@ class CommunityPage(QWidget):
         self.tree = QTreeWidget(page)
         # Shares the models table's palette role — one table look in the app.
         self.tree.setObjectName("modelTable")
+        # Every row the same height, whatever a row widget's font fallback
+        # does — belt to the fixed-size braces on the action buttons.
+        self.tree.setUniformRowHeights(True)
         self.tree.setColumnCount(len(COLUMNS) + 1)
         self.tree.setHeaderLabels([*COLUMNS, ""])
         self.tree.setRootIsDecorated(False)
@@ -363,7 +370,7 @@ class CommunityPage(QWidget):
 
     def _build_row_action(self, uid: str) -> QPushButton:
         button = QPushButton("")
-        button.setFixedWidth(ACTION_BUTTON_WIDTH)
+        button.setFixedSize(ACTION_BUTTON_WIDTH, ACTION_BUTTON_HEIGHT)
         button.clicked.connect(lambda _checked=False, u=uid: self.download_row(u))
         return button
 
