@@ -210,6 +210,21 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
   Edit, Images, Headstamps, Evaluate, Export, Delete-in-danger-red;
   AI-row shows Activate only), bottom action bar dropped. Implement after
   the A24/A25 agent lands (same-file conflict).
+- 2026-08-13 — DESIGN DECISION (history case-number color; argument on file
+  for Seth): the WinForms History paints the running case number **green**;
+  ours renders it in the **accent** role instead. Why: the theme system's
+  "hue is meaning" rule (ui/theme.py, enforced by tests) reserves green
+  (`success`/`action`) for go/success/connected states — but every case
+  gets a number, *including below-floor misses routed to the catch-all*,
+  so a green "121" next to a 29% miss visually asserts success about a
+  failure. Accent is the neutral-emphasis family (same one focus/selection
+  and the recency snake use): equally prominent, no false verdict, and it
+  degrades correctly in themes that have no green at all (Comic Book,
+  where blue is "go" — a hard green would be the only green in that whole
+  theme). WinForms could use green freely because it has one fixed skin;
+  we have seven-plus palettes with hue carrying meaning. If Seth wants
+  literal parity anyway it is a one-word change (`accent` → `success`) at
+  the commented site in history_view.py.
 - 2026-08-13 — Seth (Sort page, via Discord screenshot): use the space
   better. The one-line classification feed duplicates the Monitor — replace
   with the CURRENT case only (headstamp + confidence, Windows-style). The
