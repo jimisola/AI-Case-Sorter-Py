@@ -322,9 +322,15 @@ class ModelsPage(QWidget):
         """
         if not data:
             return False
-        ok = bool(self.tree.header().restoreState(QByteArray(data)))
+        header = self.tree.header()
+        ok = bool(header.restoreState(QByteArray(data)))
         if ok:
             self._columns_sized = True
+        # restoreState() also restores clickable/indicator-shown — and a blob
+        # saved by a pre-sorting build restores them *off*, which silently
+        # kills header-click sorting. Re-assert them whatever the blob said.
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
         return ok
 
     def _autosize_columns(self) -> None:

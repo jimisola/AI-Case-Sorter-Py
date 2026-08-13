@@ -831,3 +831,30 @@ def test_a_broken_archive_reports_instead_of_raising(page, window, tmp_path) -> 
     page.import_archive()
 
     assert drain_until(window, lambda: window.notify.titles == ["Import failed"])
+
+
+def test_restoring_saved_column_widths_keeps_headers_sortable(page, window, config) -> None:
+    """Regression (JL live-testing): ``QHeaderView.restoreState`` also restores
+    clickable/indicator-shown — and a blob saved by a pre-sorting build
+    restores them *off*, which killed header-click sorting in the real app
+    while every test (none of which restored saved state) stayed green.
+    """
+    from PySide6.QtWidgets import QTreeWidget
+
+    legacy = QTreeWidget()
+    legacy.setColumnCount(len(COLUMNS))
+    legacy.setHeaderLabels(list(COLUMNS))
+    assert not legacy.header().sectionsClickable()  # what the old build saved
+    blob = bytes(legacy.header().saveState().data())
+
+    assert page.restore_header_state(blob)
+
+    header = page.tree.header()
+    assert header.sectionsClickable()
+    assert header.isSortIndicatorShown()
+    seed_model(config, {"9mm FC": 1}, name="Bravo")
+    seed_model(config, {"9mm FC": 1}, name="Alpha")
+    page.refresh()
+    click_header(page, "Model", window)
+    assert names(page)[0] == "Use AI Config"  # pinned row survives the sort
+    assert names(page)[1] == "Alpha"
