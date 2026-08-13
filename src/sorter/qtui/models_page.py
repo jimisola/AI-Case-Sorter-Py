@@ -408,6 +408,10 @@ class ModelsPage(QWidget):
         self._restore_selection(selected)
         self._autosize_columns()
         self._update_actions()
+        # Every mutation funnels through a refresh, so this is the one place
+        # to tell the Community page that "what's installed" may have changed
+        # (its State cells and buttons follow without a catalogue re-fetch).
+        self._win.bus.post("models/changed", None)
         if announce:
             self._announce_active(active_id)
 

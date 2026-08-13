@@ -230,6 +230,10 @@ class CommunityPage(QWidget):
         self._active_download_uid: str | None = None
         self._batch_total = 0
         self._batch_done = 0
+        # The Models page posts this on every refresh: what's installed may
+        # have changed (delete/import/activate there), and this table's State
+        # cells and buttons must follow without a catalogue re-fetch.
+        win.bus.subscribe("models/changed", lambda _payload: self.refresh_local_states())
         self._cartridges: list[CartridgeInfo] = []
         self._loaded = False
         self._busy = False
@@ -714,6 +718,30 @@ class CommunityPage(QWidget):
         target = next((item for item in rows if uid and item.data(0, Qt.ItemDataRole.UserRole) == uid), rows[0])
         self.tree.setCurrentItem(target)
 
+    def refresh_local_states(self) -> None:
+        """Re-derive every row's State cell and action button from the local
+        library — no network, the catalogue listing itself is unchanged.
+
+        What changes out from under the table is what's *installed*: a delete,
+        import or update on the Models page (JL's lifecycle finding — a model
+        deleted there kept showing the remove icon here). Subscribed to
+        ``models/changed``, which the Models page posts on every refresh.
+        """
+        state_column = COLUMNS.index("State")
+        by_uid = {m.model_uid: m for m in self._models}
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            if item is None:
+                continue
+            info = by_uid.get(str(item.data(0, Qt.ItemDataRole.UserRole) or ""))
+            if info is None:
+                continue
+            state = self.installed_state(info)
+            item.setText(state_column, STATE_LABELS[state])
+            if isinstance(item, _SortableItem) and len(item.sort_values) > state_column:
+                item.sort_values[state_column] = _STATE_SORT_RANK[state]
+        self._update_actions()
+
     def installed_state(self, info: ModelInfo) -> str:
         """Download / update / installed, decided by the local library.
 
@@ -815,8 +843,9 @@ class CommunityPage(QWidget):
             self._win.run_worker(lambda: shutil.rmtree(directory, ignore_errors=True))
         models_page = getattr(self._win, "models_page", None)
         if models_page is not None:
-            models_page.refresh()
-        self.refresh()
+            models_page.refresh()  # posts models/changed → our State cells follow
+        else:
+            self.refresh_local_states()
         self._post_progress(f"Removed installed copy of {name}.")
 
     def _select(self, uid: str) -> None:
@@ -879,10 +908,15 @@ class CommunityPage(QWidget):
         )
 
     def _batch_prefix(self) -> str:
-        """"Downloading 2 of 3: " once a queue exists; silent for a single."""
+        """"(2 of 3) " once a queue exists; silent for a single download.
+
+        A bare parenthetical, because the message it prefixes already leads
+        with its own verb — "Downloading 1 of 2: Downloading X" read wrong
+        (JL live-testing).
+        """
         if self._batch_total <= 1:
             return ""
-        return f"Downloading {self._batch_done} of {self._batch_total}: "
+        return f"({self._batch_done} of {self._batch_total}) "
 
     def _finish_download(self) -> None:
         """One transfer ended (either way): start the next or stand down."""

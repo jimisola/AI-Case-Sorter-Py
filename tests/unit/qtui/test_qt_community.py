@@ -784,6 +784,62 @@ def test_removing_the_active_model_is_refused(window, api, config) -> None:
     assert ModelRepo(config.db).get(model.id) is not None  # still installed
 
 
+# ----- the install lifecycle, cross-page (JL) ---------------------------------
+#
+# The row's State cell and button must follow "what is installed" wherever it
+# changes — the Models page included, which posts models/changed on refresh.
+
+
+def test_deleting_on_the_models_page_flips_the_community_row(window, api, config) -> None:
+    model = make_model(config, "Installed one", community_model_uid="uid-installed", model_version=2)
+    make_model(config, "Keeper")  # the cartridge keeps a model, so delete is legal
+    api.models = [info("uid-installed", name="Installed one", version=2)]
+    page = build_page(window, api, auth=FakeAuth())
+    page.refresh_auth_state()
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 1)
+    assert row_button(page, 0).text() == ACTION_LABELS[STATE_INSTALLED]
+
+    with config.db.transaction():
+        ModelRepo(config.db).delete(model.id)
+    window.models_page.refresh()  # any Models-page mutation ends in a refresh
+    window.bus.drain()
+
+    assert cell(page, 0, "State") == STATE_LABELS[STATE_DOWNLOAD]
+    assert row_button(page, 0).text() == ACTION_LABELS[STATE_DOWNLOAD]
+    assert row_button(page, 0).objectName() == "action"
+
+
+def test_an_install_appearing_flips_the_community_row(window, api, config) -> None:
+    api.models = [info("uid-x", name="Range brass", version=1)]
+    page = build_page(window, api, auth=FakeAuth())
+    page.refresh_auth_state()
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 1)
+    assert row_button(page, 0).text() == ACTION_LABELS[STATE_DOWNLOAD]
+
+    make_model(config, "Range brass", community_model_uid="uid-x", model_version=1)
+    window.models_page.refresh()
+    window.bus.drain()
+
+    assert cell(page, 0, "State") == STATE_LABELS[STATE_INSTALLED]
+    assert row_button(page, 0).text() == ACTION_LABELS[STATE_INSTALLED]
+    assert row_button(page, 0).objectName() == "danger"
+
+
+def test_an_older_install_appearing_flips_the_row_to_update(window, api, config) -> None:
+    api.models = [info("uid-x", name="Range brass", version=3)]
+    page = build_page(window, api, auth=FakeAuth())
+    page.refresh_auth_state()
+    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 1)
+
+    make_model(config, "Range brass", community_model_uid="uid-x", model_version=1)
+    window.models_page.refresh()
+    window.bus.drain()
+
+    assert cell(page, 0, "State") == STATE_LABELS[STATE_UPDATE]
+    assert row_button(page, 0).text() == ACTION_LABELS[STATE_UPDATE]
+    assert row_button(page, 0).objectName() == "update"
+
+
 def test_a_row_button_installs_that_row_not_the_selected_one(window, api) -> None:
     api.models = [info(uid="first", name="First"), info(uid="second", name="Second")]
     page = build_page(window, api, auth=FakeAuth())
@@ -836,7 +892,7 @@ def test_a_second_download_queues_and_both_install(page, window, api, config, tm
     assert drain_until(window, lambda: not page._busy)
     assert api.download_requests == ["uid-a", "uid-b"]  # queue order preserved
     assert any(s.startswith("Queued Second") for s in statuses)
-    assert any("Downloading 2 of 2: " in s for s in statuses)
+    assert any(s.startswith("(2 of 2) Downloading") for s in statuses)
     # Stand-down after the batch: counters reset, buttons live again.
     assert page._download_queue == [] and page._active_download_uid is None
     assert row_button(page, 0).isEnabled()
