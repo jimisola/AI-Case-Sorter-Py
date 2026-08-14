@@ -16,6 +16,31 @@ permissions:
   contents: read
 
 jobs:
+  # The deploy job builds strictly too, but that is the wrong place to learn
+  # about a dead link: it runs at release time, and now also on every push to
+  # main for the dev slot. Failing here fails the PR that broke it.
+  docs:
+    name: mkdocs (strict build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Install the docs toolchain
+        run: uv sync --locked --only-group docs --no-install-project
+
+      # The PLAIN config, matching the deploy job's pre-flight: the PDF
+      # plugin's WeasyPrint warnings count as errors under --strict even when
+      # the PDF renders, and links and anchors are identical in both configs.
+      - name: Build the site strictly
+        run: uv run --no-sync mkdocs build --strict
+
   ruff:
     name: ruff (check + format)
     runs-on: ubuntu-latest

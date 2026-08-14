@@ -81,6 +81,28 @@ class CartridgeInfo:
         return cls(id=int(d.get("Id", d.get("id", 0))), name=d.get("Name", d.get("name", "")))
 
 
+_EXPORT_MODE_NAMES = {0: "ModelOnly", 1: "ModelAndImages", 2: "ImagesOnly"}
+
+
+def _export_mode_name(raw: Any) -> str:
+    """The catalogue's export mode as its WinForms enum *name*.
+
+    The server serializes the enum as its integer value (ModelOnly=0,
+    ModelAndImages=1, ImagesOnly=2) — and 0 is falsy, which is exactly how
+    every ModelOnly row rendered as "—" in the table (JL live-testing).
+    Older payloads and our own exports carry the name; both are accepted.
+    """
+    if isinstance(raw, str) and raw.strip():
+        text = raw.strip()
+        try:
+            return _EXPORT_MODE_NAMES[int(text)]
+        except (KeyError, ValueError):
+            return text
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return _EXPORT_MODE_NAMES.get(int(raw), "ModelAndImages")
+    return "ModelAndImages"
+
+
 @dataclass
 class ModelInfo:
     model_uid: str
@@ -115,7 +137,7 @@ class ModelInfo:
             image_count=int(get("ImageCount", 0) or 0),
             headstamp_count=int(get("HeadstampCount", 0) or 0),
             download_size=int(get("DownloadSize", 0) or 0),
-            export_mode=get("ModelExportMode", "ModelAndImages"),
+            export_mode=_export_mode_name(get("ModelExportMode", None)),
             feedback_loop_enabled=bool(get("FeedbackLoopEnabled", False)),
             feedback_loop_confidence_floor=int(get("FeedbackLoopConfidenceFloor", 0) or 0),
         )
@@ -206,6 +228,90 @@ class SasResponse:
     def blob_put_url(self) -> str:
         """``{ContainerURI}/{BlobPath}?{SasToken}`` — the blob to PUT to."""
         return f"{self.container_uri}/{self.blob_path}?{self.sas_token}"
+
+
+@dataclass
+class ModeratorNote:
+    """One note a moderator left the calling user about this model.
+
+    ``id`` is stable server-side and is what an acknowledgement is recorded
+    against (client-side only — the server keeps no ack state). ``note`` may
+    contain hyperlinks.
+    """
+
+    id: int
+    note: str
+    created: str = ""
+
+
+@dataclass
+class ModelSettings:
+    """Server-side settings for one community model (``FetchModelSettings``).
+
+    The server's ``uploadmode`` is deliberately not carried: the client ignores
+    it and the local upload-mode preference wins.
+
+    Defaults are the "server said nothing" values, i.e. what leaves the client
+    behaving as it does offline: no floor override, feedback enabled, not
+    blocked, no version to compare against, no notes.
+    """
+
+    wish_list: list[str] = field(default_factory=list)
+    confidence_floor: int = 0
+    feedback_enabled: bool = True
+    blocked: bool = False
+    version: int = 0
+    notes: list[ModeratorNote] = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, d: dict[str, Any]) -> ModelSettings:
+        # The contract spells every property lowercase; folding the keys keeps
+        # a PascalCase serializer working too, as the rest of this file does.
+        low = {str(k).lower(): v for k, v in d.items()}
+
+        def as_int(key: str, default: int) -> int:
+            try:
+                value = low.get(key, default)
+                return default if isinstance(value, bool) else int(value)
+            except (TypeError, ValueError):
+                return default
+
+        raw_wish = low.get("wishlist") or []
+        wish = [n.strip() for n in raw_wish if isinstance(n, str) and n.strip()] if isinstance(raw_wish, list) else []
+        raw_notes = low.get("notes") or []
+        notes: list[ModeratorNote] = []
+        if isinstance(raw_notes, list):
+            for entry in raw_notes:
+                note = _note_from_json(entry)
+                if note is not None:
+                    notes.append(note)
+        return cls(
+            wish_list=wish,
+            confidence_floor=as_int("confidencefloor", 0),
+            feedback_enabled=bool(low.get("feedbackenabled", True)),
+            blocked=bool(low.get("blocked", False)),
+            version=as_int("version", 0),
+            notes=notes,
+        )
+
+
+def _note_from_json(entry: Any) -> ModeratorNote | None:
+    """One note, or ``None`` for anything without an id and a body."""
+    if not isinstance(entry, dict):
+        return None
+    low = {str(k).lower(): v for k, v in entry.items()}
+    text = low.get("note")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    raw_id = low.get("id")
+    if isinstance(raw_id, bool) or not isinstance(raw_id, (int, str)):
+        return None
+    try:
+        note_id = int(raw_id)
+    except ValueError:
+        return None
+    created = low.get("created")
+    return ModeratorNote(id=note_id, note=text.strip(), created=str(created or ""))
 
 
 @dataclass
@@ -459,6 +565,48 @@ class CommunityApi:
         names = [item.strip() for item in data if isinstance(item, str) and item.strip()]
         debug_log(f"  wish list ({len(names)}): {names}")
         return names
+
+    def fetch_model_settings(self, community_model_uid: str) -> ModelSettings | None:
+        """Server-side settings for one community model, or ``None``.
+
+        ``GET /Models/FetchModelSettings?communityModelId={uid}`` answers with
+        the wish list, the publisher's confidence floor, the feedback
+        shutoff/block flags, the currently published version and any moderator
+        notes for the calling user.
+
+        Fails open exactly like ``fetch_wish_list``, but with ``None`` rather
+        than a neutral value so a caller can tell "the server said nothing"
+        from "the server said no": an empty UID, not being signed in, a network
+        error, a non-200 or an unparseable body all answer ``None``, and the
+        caller then behaves as it does offline — local floor, local opt-in, no
+        version prompt, no notes.
+        """
+        if not community_model_uid:
+            return None
+        try:
+            resp = self._get(f"/Models/FetchModelSettings?communityModelId={quote_plus(community_model_uid)}")
+        except Exception as exc:
+            debug_log(f"GET /Models/FetchModelSettings failed ({exc.__class__.__name__}: {exc})")
+            return None
+        debug_log(f"GET /Models/FetchModelSettings -> HTTP {resp.status_code}")
+        if resp.status_code != 200:
+            debug_log(f"  non-200 body: {(resp.text or '')[:200]!r}")
+            return None
+        try:
+            data = resp.json()
+        except ValueError:
+            debug_log(f"  non-JSON body: {(resp.text or '')[:200]!r}")
+            return None
+        if not isinstance(data, dict):
+            debug_log(f"  unexpected JSON shape: {type(data).__name__}")
+            return None
+        settings = ModelSettings.from_json(data)
+        debug_log(
+            f"  settings: version={settings.version} floor={settings.confidence_floor} "
+            f"enabled={settings.feedback_enabled} blocked={settings.blocked} "
+            f"wish={len(settings.wish_list)} notes={len(settings.notes)}"
+        )
+        return settings
 
     def upload_feedback_blob(
         self,
