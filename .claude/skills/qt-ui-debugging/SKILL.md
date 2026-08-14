@@ -5,9 +5,9 @@ description: Debugging playbook for the PySide6 UI (sorter/qtui) — crash class
 
 # Qt UI debugging playbook
 
-Hard-won findings from the qtui port (2026-08, PLAN.md has the full
-post-mortems). Every rule here was paid for with a multi-run CI saga —
-check this list before theorizing from scratch.
+Hard-won findings from the qtui port (2026-08). Every rule here was paid
+for with a multi-run CI saga — check this list before theorizing from
+scratch.
 
 ## Crash classes we have hit, in symptom order
 
