@@ -135,6 +135,22 @@ jobs:
         if: ${{ steps.kind.outputs.prerelease != 'true' }}
         run: uv run --no-sync mike set-default -F mkdocs-pdf.yml --push latest
 
+      # The same PDF the site serves, attached to the GitHub release (JL):
+      # the manual lands next to the sdist, versioned by the release it
+      # documents. Built fresh here because mike renders into gh-pages, not
+      # site/. --clobber so a re-dispatched Docs run replaces rather than
+      # fails; best-effort so a missing release (a bare tag) can't fail a
+      # deploy that already succeeded.
+      - name: Attach the PDF to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          uv run --no-sync mkdocs build -f mkdocs-pdf.yml
+          cp site/pdf/ai-case-sorter-docs.pdf "ai-case-sorter-docs-${VERSION}.pdf"
+          gh release upload "$VERSION" "ai-case-sorter-docs-${VERSION}.pdf" --clobber \
+            || echo "::warning::No release named $VERSION to attach the PDF to."
+
       # The stable that ends an rc cycle supersedes the candidate's docs, so
       # the rolling slot is retired with it. `|| true`: most stables were
       # never preceded by a candidate and have nothing to delete.

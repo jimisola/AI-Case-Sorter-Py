@@ -118,6 +118,8 @@ stay reachable forever at their own URL.
   retired when the stable that ends the cycle publishes. `latest/` and the site root keep
   pointing at the newest stable release throughout, same rule `/releases/latest` follows.
 - **Every deployed version carries its own PDF** at `<version>/pdf/ai-case-sorter-docs.pdf`,
+  and the same PDF is attached to the GitHub release as
+  `ai-case-sorter-docs-<version>.pdf` (the manual next to the sdist). It is
   linked from the landing page, rendered by mkdocs-with-pdf/WeasyPrint during the deploy. The
   PDF machinery lives in `mkdocs-pdf.yml` (used with `-F` by the workflow), NOT in
   `mkdocs.yml`: the plugin's dormant-notice and its WeasyPrint CSS complaints would fail
