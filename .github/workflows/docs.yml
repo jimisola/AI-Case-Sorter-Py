@@ -1,0 +1,144 @@
+name: Docs
+
+# Publishes the MkDocs site (mkdocs.yml, docs/) to the `gh-pages` branch, one
+# directory per release, with the version dropdown reading mike's versions.json.
+#
+# Deliberately NOT `on: release: published`, for the same reason
+# installer-smoke.yml isn't: that event fires while the release is still a
+# prerelease, before release.yml has decided whether it becomes `latest` at
+# all. Publishing the docs off it would move the `latest` alias for every
+# release candidate. So this is a `workflow_call` that release.yml makes at
+# the point of promotion, plus a `workflow_dispatch` for re-publishing a
+# version by hand.
+#
+# It always builds from the release's own tag, never from the branch that
+# dispatched it -- the docs at version N have to be the docs that shipped in N.
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Release tag to publish the docs for. Must exist as a tag."
+        required: true
+        type: string
+
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag to publish the docs for, e.g. 1.2.0 or 1.2.0rc1. Must exist as a tag."
+        required: true
+        type: string
+
+# Never cancel: a cancelled run can leave gh-pages with a version directory
+# deployed but versions.json not yet updated, which is the dropdown missing an
+# entry that exists. Serialised instead, so two releases queue rather than race.
+concurrency:
+  group: docs-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: deploy versioned docs
+    runs-on: ubuntu-latest
+    permissions:
+      # gh-pages is an ordinary branch; mike commits and pushes to it. Nothing
+      # else is needed -- this does not use the Pages deployment API, so no
+      # `pages:` or `id-token:` scope.
+      contents: write
+    steps:
+      # persist-credentials left on (the default), unlike every other workflow
+      # here: pushing to gh-pages is this job's entire purpose, and mike runs
+      # `git push origin` itself.
+      #
+      # fetch-depth: 0 is load-bearing and not just "be thorough": it is the
+      # only setting under which actions/checkout fetches
+      # `+refs/heads/*:refs/remotes/origin/*` rather than the requested ref
+      # alone, and origin/gh-pages is what mike reads the existing versions
+      # from. At any other depth mike would find no branch, build a gh-pages
+      # holding this version and nothing else, and the push would be rejected
+      # as non-fast-forward -- loud, but only after the build.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.version }}
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
+      # --only-group docs: mkdocs and mike need nothing from the app itself, and
+      # --no-install-project keeps hatch-vcs's build hook out of a job that has
+      # no reason to run it.
+      - name: Install the docs toolchain
+        run: uv sync --locked --only-group docs --no-install-project
+
+      - name: Configure git for mike's commits
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      # mike's own build is not strict, so a broken link or a dead anchor would
+      # publish silently. Run the strict build first and fail before gh-pages is
+      # touched at all -- the cost is one extra second, and the alternative is
+      # noticing from the published site.
+      - name: Build the site strictly
+        run: uv run --no-sync mkdocs build --strict
+
+      # Same expression release.yml resolves `prerelease` from, so the two
+      # cannot disagree about what a version string means.
+      - name: Classify the version
+        id: kind
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if echo "$VERSION" | grep -qE '(a|b|rc)[0-9]+$'; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A release candidate gets its own directory and its own dropdown entry,
+      # but does NOT take the `latest` alias -- the same rule /releases/latest
+      # applies to the release itself, so someone landing on the docs root
+      # never reads a candidate's documentation by accident.
+      - name: Deploy the release candidate
+        if: ${{ steps.kind.outputs.prerelease == 'true' }}
+        env:
+          VERSION: ${{ inputs.version }}
+        run: uv run --no-sync mike deploy --push "$VERSION"
+
+      # --update-aliases is what moves `latest` off the previous release;
+      # without it mike refuses to reassign an alias that already exists.
+      - name: Deploy the release and move `latest`
+        if: ${{ steps.kind.outputs.prerelease != 'true' }}
+        env:
+          VERSION: ${{ inputs.version }}
+        run: uv run --no-sync mike deploy --push --update-aliases "$VERSION" latest
+
+      # Writes the redirect at the site root. Idempotent -- re-running it on an
+      # already-correct gh-pages is a no-op commit at worst -- so it is simpler
+      # to run it on every stable deploy than to detect the first one.
+      - name: Point the site root at `latest`
+        if: ${{ steps.kind.outputs.prerelease != 'true' }}
+        run: uv run --no-sync mike set-default --push latest
+
+      - name: Summary
+        if: always()
+        env:
+          VERSION: ${{ inputs.version }}
+          PRERELEASE: ${{ steps.kind.outputs.prerelease }}
+          REPO: ${{ github.repository }}
+        run: |
+          OWNER="${REPO%%/*}"
+          NAME="${REPO##*/}"
+          SITE="https://${OWNER}.github.io/${NAME}"
+          {
+            echo "### Documentation"
+            echo ""
+            echo "- Version: [\`$VERSION\`](${SITE}/${VERSION}/)"
+            if [ "$PRERELEASE" = "true" ]; then
+              echo "- \`latest\` is unchanged -- a release candidate is reachable only from the version dropdown."
+            else
+              echo "- [\`latest\`](${SITE}/latest/) now points at \`$VERSION\`, and so does the site root."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

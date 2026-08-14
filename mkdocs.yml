@@ -1,0 +1,106 @@
+# The published documentation site: https://sjseth.github.io/AI-Case-Sorter-Py/
+#
+# docs_dir is the repo's existing `docs/` as-is -- nothing was moved to build
+# this. `docs/guide/GUIDE.md` in particular is also the in-app F1 guide
+# (sorter/qtui/help_viewer.py loads that exact path into a QTextBrowser), so it
+# stays where it is and stays plain Markdown: no Material-only syntax in it, or
+# the app renders the source text at the user.
+#
+# Versioning is mike's (see .github/workflows/docs.yml). It writes each release
+# into its own subdirectory of the gh-pages branch plus a `versions.json` that
+# the theme's version dropdown reads -- which is what `extra.version.provider`
+# below switches on.
+
+site_name: AI Case Sorter
+site_description: Sorts spent brass cartridge casings by headstamp -- camera, image classifier, serial-connected sorting machine.
+site_url: https://sjseth.github.io/AI-Case-Sorter-Py/
+repo_url: https://github.com/sjseth/AI-Case-Sorter-Py
+repo_name: sjseth/AI-Case-Sorter-Py
+# Spelled out because Material's default guesses `edit/master/docs/`.
+edit_uri: edit/main/docs/
+copyright: GPL-3.0-or-later
+
+docs_dir: docs
+
+nav:
+  - Home: index.md
+  - User Guide: guide/GUIDE.md
+  - UI Modernization: ui-modernization.md
+# docs/images/ is deliberately absent: images are resolvable assets, not pages.
+# MkDocs copies every non-Markdown file under docs_dir to the site regardless of
+# nav, so links to them keep working.
+
+theme:
+  name: material
+  # Stock Material, no custom CSS. Both palettes are declared so the site
+  # follows the reader's OS setting, with an explicit toggle either way -- the
+  # same dark/light contract the app's own themes have.
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Follow system
+  features:
+    - navigation.top
+    - navigation.tracking
+    - content.action.edit
+    - toc.follow
+    - search.suggest
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+  # Listed explicitly only to override two of its defaults. mike adds this
+  # plugin itself when it drives the build, so a plain `mkdocs build` behaves
+  # the same as a deploy.
+  - mike:
+      # NOT the default `symlink`. mike 2.0 made symlinks the default and
+      # GitHub Pages does not reliably serve them -- the symptom is `latest/`
+      # 404ing while the versioned directory beside it is fine. `copy`
+      # duplicates the files, which costs a few MB and keeps every deep link
+      # under `latest/` a real URL (a `redirect` alias would bounce
+      # `latest/guide/GUIDE/#serial` to the versioned path instead).
+      alias_type: copy
+      # `latest/` is a copy of some version, so without this every page would
+      # exist at two URLs with neither claiming to be the canonical one.
+      canonical_version: latest
+
+markdown_extensions:
+  # Heading anchors. `permalink` adds the hover link; the slugs themselves are
+  # Python-Markdown's default, which agrees with GitHub's (and therefore with
+  # help_viewer._slugify) for every heading in the guide --
+  # tests/unit/qtui/test_qt_help.py pins the in-app half of that agreement.
+  - toc:
+      permalink: true
+  - admonition
+  - attr_list
+  - tables
+  - pymdownx.superfences
+
+# Every cross-reference and every intra-page anchor is checked, and --strict
+# turns these into errors. `anchors` is the load-bearing one: the guide's
+# table of contents is 22 same-page links, and a broken one there breaks the
+# in-app navigation identically.
+validation:
+  links:
+    absolute_links: relative_to_docs
+    unrecognized_links: warn
+    anchors: warn
+
+extra:
+  version:
+    provider: mike
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/sjseth/AI-Case-Sorter-Py

@@ -183,6 +183,15 @@ dev = [
     "ruff==0.16.2",
     "ty==0.0.69",
 ]
+# The published documentation site (mkdocs.yml, docs/). Its own group, not
+# `dev`: nothing in the test loop needs it, and mkdocs-material pulls a dozen
+# packages a contributor running pytest has no use for.
+docs = [
+    "mkdocs-material==9.7.7",
+    # Versioned deploys to gh-pages, and the dropdown the Material theme renders
+    # from mike's own versions.json (extra.version.provider in mkdocs.yml).
+    "mike==2.2.0",
+]
 
 [tool.coverage.run]
 branch = true
