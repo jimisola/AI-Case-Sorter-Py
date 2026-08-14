@@ -125,6 +125,9 @@ class TrainPage(QWidget):
         self.body_splitter.addWidget(self._build_counts_group())
         self.body_splitter.setStretchFactor(0, 1)
         self.body_splitter.setStretchFactor(1, 1)
+        # 50/50 by default (JL): equal oversized hints scale down to an even
+        # split of whatever width the page actually gets.
+        self.body_splitter.setSizes([10000, 10000])
         column.addWidget(self.body_splitter, 1)
         column.addWidget(self._build_training_group())
 
@@ -161,7 +164,9 @@ class TrainPage(QWidget):
         self.crop_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.crop_label.setWordWrap(True)
         self.crop_label.setFixedSize(CROP_SIZE, CROP_SIZE)
-        column.addWidget(self.crop_label)
+        # Centered over the full group width (JL), which is also what lets
+        # the label input below run wider than the image.
+        column.addWidget(self.crop_label, 0, Qt.AlignmentFlag.AlignHCenter)
 
         # Right-aligned so Feed sits directly above Save image (JL): the two
         # buttons the loop alternates between stack on one edge.
@@ -208,8 +213,7 @@ class TrainPage(QWidget):
         column.addStretch(1)
         # The column hugs the image's width; the group's leftover width stays
         # empty rather than stretching the input to the horizon.
-        outer.addLayout(column)
-        outer.addStretch(1)
+        outer.addLayout(column, 1)
         return box
 
     def _build_training_group(self) -> QGroupBox:

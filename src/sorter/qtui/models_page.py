@@ -348,16 +348,18 @@ class ModelsPage(QWidget):
         self.tree.setColumnWidth(0, max(self.tree.columnWidth(0), 260))
 
     def _build_action_row(self) -> QHBoxLayout:
+        # Destructive alone on the far left, the green primary on the far
+        # right (JL) — the two can't end up neighbours.
         row = QHBoxLayout()
         self.buttons: dict[str, QPushButton] = {}
         for text, object_name, handler in (
-            ("Activate", "action", self.activate_selected),
+            ("Delete", "danger", self.delete_selected),
             ("Edit…", "", self.edit_selected),
             ("Images…", "", self.images_selected),
             ("Headstamps…", "", self.headstamps_selected),
             ("Evaluate…", "", self.evaluate_selected),
             ("Export…", "", self.export_selected),
-            ("Delete", "danger", self.delete_selected),
+            ("Activate", "action", self.activate_selected),
         ):
             button = QPushButton(text, self)
             if object_name:
@@ -365,8 +367,9 @@ class ModelsPage(QWidget):
             button.clicked.connect(handler)
             row.addWidget(button)
             self.buttons[text] = button
+            if text == "Delete":
+                row.addStretch(1)
         self.buttons["Images…"].setVisible(False)
-        row.addStretch(1)
         return row
 
     def set_images_hook(self, open_images: Callable[[Model], None] | None) -> None:

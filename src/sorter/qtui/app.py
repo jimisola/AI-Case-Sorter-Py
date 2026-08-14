@@ -652,14 +652,12 @@ class QtMainWindow(QMainWindow):
         self.action_buttons: dict[str, QPushButton] = {}
         actions.addStretch(1)
 
-        # One button, two faces (JL): a run is on or it isn't, and the button
-        # that ends it is the one that started it. `_update_run_buttons` owns
-        # the label/role swap.
-        self.run_button = QPushButton(RUN_START_TEXT, page)
-        self.run_button.setObjectName("action")
-        self.run_button.clicked.connect(self.toggle_run)
-        actions.addWidget(self.run_button)
-        self.action_buttons[RUN_TOGGLE_KEY] = self.run_button
+        # Visible whenever the active model has notes at all, acknowledged or
+        # not — it is the history view as well as the ack flow.
+        self.notes_button = QPushButton(NOTES_BUTTON.format(count=0), page)
+        self.notes_button.clicked.connect(lambda: self.open_notes_dialog())
+        self.notes_button.hide()
+        actions.addWidget(self.notes_button)
 
         feed_button = QPushButton("Manual feed", page)
         feed_button.clicked.connect(self.manual_feed)
@@ -672,12 +670,15 @@ class QtMainWindow(QMainWindow):
         self.run_options_button = self._build_run_options_button(page)
         actions.addWidget(self.run_options_button)
 
-        # Visible whenever the active model has notes at all, acknowledged or
-        # not — it is the history view as well as the ack flow.
-        self.notes_button = QPushButton(NOTES_BUTTON.format(count=0), page)
-        self.notes_button.clicked.connect(lambda: self.open_notes_dialog())
-        self.notes_button.hide()
-        actions.addWidget(self.notes_button)
+        # One button, two faces (JL): a run is on or it isn't, and the button
+        # that ends it is the one that started it. `_update_run_buttons` owns
+        # the label/role swap. Last on the strip: the green primary sits at
+        # the far right, matching the Training strip (JL).
+        self.run_button = QPushButton(RUN_START_TEXT, page)
+        self.run_button.setObjectName("action")
+        self.run_button.clicked.connect(self.toggle_run)
+        actions.addWidget(self.run_button)
+        self.action_buttons[RUN_TOGGLE_KEY] = self.run_button
 
         self._update_run_buttons()
         return actions

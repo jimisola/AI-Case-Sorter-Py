@@ -50,7 +50,9 @@ def test_sidebar_fits_the_widest_label(window) -> None:
 
 
 def test_sort_actions_are_disabled_without_a_board(window) -> None:
-    assert list(window.action_buttons) == ["Start/Stop", "Manual feed"]
+    # Dict order follows the strip: Start/Stop last = the green primary at
+    # the far right (JL), matching the Training strip.
+    assert list(window.action_buttons) == ["Manual feed", "Start/Stop"]
     assert not any(button.isEnabled() for button in window.action_buttons.values())
     # The idle face, so the row reads "Start" even when nothing can start.
     assert window.run_button.text() == "Start"
