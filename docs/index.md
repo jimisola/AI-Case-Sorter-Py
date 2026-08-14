@@ -34,6 +34,15 @@ This site is published per release. The selector in the header switches
 between them; `latest` always points at the newest stable release, and a
 release candidate is published under its own version without moving it.
 
+## Download as PDF
+
+<!-- Raw HTML, not a Markdown link: the PDF only exists on the published,
+     versioned site (the deploy builds it), so MkDocs' link validation must
+     not try to resolve it against the docs tree. -->
+<a href="pdf/ai-case-sorter-docs.pdf">This documentation as a single PDF</a>
+— built per version, so the PDF you download always matches the version
+you're reading.
+
 ## Elsewhere
 
 - [Source, issues and releases](https://github.com/sjseth/AI-Case-Sorter-Py) on GitHub

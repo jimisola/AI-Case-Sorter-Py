@@ -191,6 +191,10 @@ docs = [
     # Versioned deploys to gh-pages, and the dropdown the Material theme renders
     # from mike's own versions.json (extra.version.provider in mkdocs.yml).
     "mike==2.2.0",
+    # One PDF of the whole site per deployed version, linked from the landing
+    # page. Env-gated (ENABLE_PDF_EXPORT=1): WeasyPrint needs system pango,
+    # which CI installs and a laptop running `mkdocs serve` shouldn't need.
+    "mkdocs-with-pdf==0.9.3",
 ]
 
 [tool.coverage.run]

@@ -112,9 +112,16 @@ stay reachable forever at their own URL.
 - **It publishes itself.** `docs.yml` is called by `release.yml` right after the promote step,
   building from the release's *tag* -- not from the branch the release was dispatched from, so
   the docs at version N are the docs that shipped in N.
-- **A release candidate does not move `latest`.** It gets its own directory and its own entry
-  in the dropdown; `latest/` and the site root keep pointing at the newest stable release. Same
-  rule `/releases/latest` follows, for the same reason.
+- **A release candidate does not move `latest`.** Candidates share one rolling
+  **prerelease** entry in the dropdown (URL `/prerelease/`, title showing the actual tag) --
+  always the newest candidate's docs, never an accumulating rc1/rc2/... list -- and the slot is
+  retired when the stable that ends the cycle publishes. `latest/` and the site root keep
+  pointing at the newest stable release throughout, same rule `/releases/latest` follows.
+- **Every deployed version carries its own PDF** at `<version>/pdf/ai-case-sorter-docs.pdf`,
+  linked from the landing page, rendered by mkdocs-with-pdf/WeasyPrint during the deploy. The
+  PDF machinery lives in `mkdocs-pdf.yml` (used with `-F` by the workflow), NOT in
+  `mkdocs.yml`: the plugin's dormant-notice and its WeasyPrint CSS complaints would fail
+  `--strict`, and a laptop's `mkdocs serve` needs none of it (WeasyPrint wants system pango).
 - **`docs/guide/GUIDE.md` is also the in-app F1 guide** (`sorter/qtui/help_viewer.py` loads
   that exact file into a `QTextBrowser`). It must stay at that path and stay plain Markdown --
   Material-only syntax would render as source text at the user. Its heading anchors are
@@ -140,16 +147,21 @@ uninstalls the `qt` extra if you had it, and `tests/unit/qtui/` then skips inste
 it from a laptop is the same thing the workflow runs, and needs push rights to `gh-pages`:
 
 ```bash
-uv run --group docs mike deploy --push --update-aliases 1.2.0 latest   # a release
-uv run --group docs mike deploy --push 1.2.0rc1                        # a candidate: no alias
+uv run --group docs mike deploy -F mkdocs-pdf.yml --push --update-aliases 1.2.0 latest  # a release
+uv run --group docs mike deploy -F mkdocs-pdf.yml --push --title "1.2.0rc1 (pre-release)" prerelease  # a candidate
 uv run --group docs mike set-default --push latest                     # the site-root redirect
 uv run --group docs mike list                                          # what is published now
 ```
 
-**One-time setup, and it is manual:** GitHub Pages is not something
-[`.github/settings.yml`](.github/settings.yml) can manage -- see the block in that file. After
-the first successful Docs run, set Settings -> Pages -> Source to "Deploy from a branch",
-`gh-pages`, `/ (root)`. Until then the branch exists and nothing serves it.
+(`-F mkdocs-pdf.yml` builds the per-version PDF too; dropping it publishes without one.)
+
+**One-time setup is automated:** GitHub Pages is not something
+[`.github/settings.yml`](.github/settings.yml) can manage -- see the block in that file -- but
+the Docs workflow enables it itself: after the first deploy pushes `gh-pages` into existence,
+an idempotent API call switches Pages on in branch mode (`gh-pages`, `/ (root)`). mike also
+creates the branch itself on that first push, so a fresh repo (this fork or upstream) needs no
+pre-created branch and no clicking. Only if a policy denies the workflow token does it fall
+back to printing the manual step as a warning.
 
 ## Versioning
 
