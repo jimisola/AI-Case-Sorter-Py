@@ -5,9 +5,9 @@ Three properties are pinned here, and each has cost real breakage before:
 
 * an AI Config user is never prompted (the gate short-circuits on
   ``local_inference.is_installed`` — a ``find_spec`` probe, never an import);
-* the argv is the *same* argv the Tk dialog builds, pinned in turn to
-  pyproject's ``[ml]`` extra, so a version bump can't drift the runtime install
-  away from the declared one;
+* the argv is the *same* argv the Tk dialog builds, and both read their pins
+  out of pyproject's ``[ml]`` extra at install time (CLAUDE.md §8), so a
+  version bump can't drift the runtime install away from the declared one;
 * worker output crosses to the widgets through a queue drained by a main-thread
   timer, never ``after()``-style calls from the thread itself (CLAUDE.md §8).
 
@@ -35,9 +35,10 @@ from sorter.ml.gpu_detect import GpuInfo
 from sorter.qtui import torch_gate
 from sorter.qtui.dialog_install_torch import (
     _CUDA_INDEX,
-    _TARGETS,
+    _CUDA_INDEX_BY_OS,
     TorchInstallDialog,
     build_install_command,
+    ml_pin_targets,
 )
 from sorter.qtui.torch_gate import TorchGate
 
@@ -189,22 +190,25 @@ def _pyproject_ml_pins() -> list[str]:
     return list(data["project"]["optional-dependencies"]["ml"])
 
 
-def test_targets_match_the_pyproject_ml_extra() -> None:
-    """CLAUDE.md: the runtime install and the declared extra move together."""
-    assert list(_TARGETS) == _pyproject_ml_pins()
+def test_the_pin_reader_returns_the_pyproject_ml_extra() -> None:
+    """CLAUDE.md §8: the [ml] extra is the only place the torch version lives."""
+    targets = ml_pin_targets()
+    assert targets is not None
+    assert list(targets) == _pyproject_ml_pins()
 
 
-def test_targets_match_the_tk_dialog() -> None:
+def test_the_pin_reader_matches_the_tk_dialogs() -> None:
     pytest.importorskip("tkinter")
     from sorter.ui import dialog_install_torch as tk_dialog
 
-    assert _TARGETS == tk_dialog._TARGETS
+    assert ml_pin_targets() == tk_dialog.ml_pin_targets()
+    assert _CUDA_INDEX_BY_OS == tk_dialog._CUDA_INDEX_BY_OS
     assert _CUDA_INDEX == tk_dialog._CUDA_INDEX
 
 
 def test_cpu_command_prefers_uv_over_bare_pip() -> None:
     cmd = build_install_command(use_gpu=False, uv="/fake/.uv/bin/uv", pip_available=True)
-    assert cmd == ["/fake/.uv/bin/uv", "pip", "install", "--python", sys.executable, *_TARGETS]
+    assert cmd == ["/fake/.uv/bin/uv", "pip", "install", "--python", sys.executable, *_pyproject_ml_pins()]
 
 
 def test_cuda_command_appends_the_wheel_index() -> None:
@@ -215,7 +219,7 @@ def test_cuda_command_appends_the_wheel_index() -> None:
         "install",
         "--python",
         sys.executable,
-        *_TARGETS,
+        *_pyproject_ml_pins(),
         "--index-url",
         _CUDA_INDEX,
     ]
@@ -223,11 +227,31 @@ def test_cuda_command_appends_the_wheel_index() -> None:
 
 def test_falls_back_to_pip_when_uv_is_absent() -> None:
     cmd = build_install_command(use_gpu=False, uv=None, pip_available=True)
-    assert cmd == [sys.executable, "-u", "-m", "pip", "install", *_TARGETS]
+    assert cmd == [sys.executable, "-u", "-m", "pip", "install", *_pyproject_ml_pins()]
 
 
 def test_no_installer_at_all_builds_no_command() -> None:
     assert build_install_command(use_gpu=False, uv=None, pip_available=False) is None
+
+
+def test_an_unreadable_pin_builds_no_command(monkeypatch) -> None:
+    """A tree whose pyproject.toml is gone installs nothing rather than a guess."""
+    from sorter.qtui import dialog_install_torch as qt_dialog
+
+    monkeypatch.setattr(qt_dialog, "ml_pin_targets", lambda: None)
+    assert build_install_command(use_gpu=False, uv="/fake/.uv/bin/uv", pip_available=True) is None
+
+
+def test_the_pin_reader_rejects_another_projects_pyproject(monkeypatch, tmp_path: Path) -> None:
+    """The guard is `project.name` — parents[3] could be anything on disk."""
+    from sorter.qtui import dialog_install_torch as qt_dialog
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "something-else"\n[project.optional-dependencies]\nml = ["torch==1.0.0"]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(qt_dialog, "__file__", str(tmp_path / "src" / "sorter" / "qtui" / "dialog_install_torch.py"))
+    assert qt_dialog.ml_pin_targets() is None
 
 
 class _TkDialogStub:
@@ -434,6 +458,22 @@ def test_no_uv_and_no_pip_reports_instead_of_spawning(qapp, dialog_factory, monk
     assert spawned == []
     assert dialog._installing is False
     assert "Could not find uv or pip" in dialog.console.toPlainText()
+
+
+def test_an_unreadable_pin_reports_instead_of_spawning(qapp, dialog_factory, monkeypatch) -> None:
+    from sorter.qtui import dialog_install_torch as qt_dialog
+
+    monkeypatch.setattr(qt_dialog, "ml_pin_targets", lambda: None)
+    spawned: list[Any] = []
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: spawned.append(a))
+
+    dialog = dialog_factory(gpu=None)
+    assert pump_until(qapp, lambda: dialog.gpu_known)
+    dialog.start_install(use_gpu=False)
+
+    assert spawned == []
+    assert dialog._installing is False
+    assert "Could not read the pinned PyTorch version" in dialog.console.toPlainText()
 
 
 def test_a_command_that_cannot_spawn_fails_without_hanging(qapp, dialog_factory, tmp_path: Path) -> None:

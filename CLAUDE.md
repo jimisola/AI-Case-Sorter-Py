@@ -112,9 +112,10 @@ one-for-one (`tests/unit/hardware/`, `tests/unit/data/`, …), plus a handful of
 modules that test something at the package's own top level (`test_paths.py`,
 `test_bootstrap.py`, `test_version.py`, `test_installer_scripts.py`) and stay
 directly under `tests/unit/`. Everything in `tests/unit/` uses synthetic
-fixtures only; `tests/integration/` stays flat — the two files that shell out
-to a real external tool (`uv build`, `git-cliff`) instead, each self-skipping
-if that tool is missing; `pytest -m "not integration"` skips them outright.
+fixtures only; `tests/integration/` stays flat — the files that exercise a
+real external tool or service (`uv build`, `git-cliff`, the PyTorch wheel
+index) instead, each self-skipping if that tool — or, for the wheel index,
+the network — is missing; `pytest -m "not integration"` skips them outright.
 `tests/unit/qtui/` is the exception to "mirrors a subpackage one-for-one" only
 in that it needs the `[qt]` extra: without PySide6 every module there skips
 itself, which is what a plain `pytest` on a normal install does. With the
@@ -337,7 +338,12 @@ between them from the Run tab's template dropdown.
 - **`camera.py`** — `Camera`: `cv2.VideoCapture` with a background **grab thread**
   keeping the latest frame; platform backends (CAP_DSHOW on Windows w/ optional
   pygrabber for friendly names + resolution probing, CAP_V4L2 on Linux, MJPG for
-  ≥1080p). `enumerate_devices` / `list_cameras_with_metadata` for the Camera tab.
+  ≥1080p). `list_cameras_with_metadata` enumerates for the Camera tab.
+  Enumeration is deliberately noisy about what it *rejects*: only real V4L2
+  capture nodes are probed (a UVC camera also exposes a metadata node, which
+  OpenCV can only fail to open, loudly), and a device that overruns
+  `PROBE_TIMEOUT_S` is dropped **with a note on stderr** — silence there once
+  cost a hardware investigation to explain a camera missing from the list.
 
 ### The sort loop (`sorter/control/run_controller.py`)
 - **`run_controller.py`** — `RunController`: the production loop on a daemon
@@ -556,6 +562,28 @@ if not ensure_torch(self, self._start, reason="Sorting needs PyTorch"):
     return
 ```
 
+**A second rule sits on top of presence, and it is a security floor.**
+`local_inference.MIN_TORCH_VERSION` (2.10.0) is the oldest torch allowed to
+load a checkpoint this app did not produce: CVE-2026-24747 lets a crafted
+`.pth` defeat the `weights_only=True` unpickler that `_load` relies on, and
+the Community tab and ZIP import are exactly that delivery path. So
+`ensure_torch` takes the `model` the action will load and picks the policy
+from `models.is_foreign_model`: a **foreign** model **blocks** until the user
+upgrades; the user's **own** model gets an **offer** that proceeds on decline,
+remembered for the session (their own checkpoint isn't an attack, and a
+multi-GB download shouldn't stand between them and sorting). Omitting `model`
+takes the blocking branch — unknown provenance is treated as foreign.
+The floor is deliberately **not** derived from the `[ml]` pin: the pin is
+"what a fresh install gets" and moves on every routine bump, while this is
+"below here the safety property is gone", moves only when an advisory says
+so, and records which one. It also bounds any future opt-into-an-older-build
+override (#67), and since it sits above the 2.3.0 floor where
+`torch.amp.GradScaler` first appears, honouring it cannot regress
+`train_convnext.py` onto the `AttributeError` older wheels produce.
+`meets_min_version()` **fails open** on unreadable metadata — a source build
+is likelier than an exploit, and bricking those installs would trade a real
+breakage for a speculative one.
+
 Gated: Run tab Start + Manual feed (only when `classifier.uses_local_inference`
 is True), the evaluator, and training. The Train tab's Feed *offers* rather
 than gates — capturing and labelling images is exactly the workflow that
@@ -571,15 +599,16 @@ modal), and never gate on `is_available()`.
 | **Train** | `tab_train.py` | Feed→capture→classify→label→save loop; "Sort While Training"; launches training (Install-PyTorch dialog if needed → progress dialog). |
 | **AI Config** | `tab_ai.py` | HTTP server config (endpoint/key/model/prompt/encoding), headstamp manager, single-shot test. Visible only in AI Config mode. |
 | **Camera** | `tab_camera.py` | Device + resolution detection and live preview. |
-| **Serial** | `tab_serial.py` | Connection, 14 board init settings, sort-arm test, airdrop config, in-tab traffic log + "Open monitor ↗" (see `serial_monitor.py`). |
+| **Serial** | `tab_serial.py` | Connection, 14 board init settings, sort-arm test, airdrop config, and a `SerialConsole` + "Open monitor ↗" (see `serial_console.py`). |
 | **Image Proc** | `tab_imageproc.py` | Tune Hough params + primer mask + LED brightness against a captured frame (before/after preview). |
 | **Community** | `tab_community.py` | Browse/search/download community models; share entry point. Auth-gated. |
 
 ### Dialogs (`dialog_*.py`)
 `dialog_training_progress` (live training console), `dialog_training_config`
 (hyperparameters), `dialog_model_editor` (create/edit model + feedback-loop
-opt-in), `dialog_install_torch` (installs torch/torchvision into the venv via
-uv, falling back to pip),
+opt-in), `dialog_install_torch` (installs the torch/torchvision pinned by
+pyproject.toml's `[ml]` extra — read at install time; the extra is the pins'
+single source of truth — into the venv via uv, falling back to pip),
 `dialog_login` (MSAL interactive sign-in), `dialog_model_evaluator` (run eval +
 HTML report + history), `dialog_model_images` + `dialog_image_preview` (training
 image browser/reclassify/delete), `dialog_share_model` (publish to community),
@@ -655,13 +684,14 @@ a separate one, so a built-in is never the thing being written to),
   `NumericField`, labeled-entry/button-row helpers.
 - **`monitor.py`** — detachable history window: ring buffer of recent
   classifications with a color "snake" trailing the latest. Subscribes `run/history`.
-- **`serial_monitor.py`** — detachable Arduino-IDE-style serial monitor,
-  opened by clicking the status bar's `● Serial: …` indicator (or the Serial
-  tab's button); `app.open_serial_monitor()` keeps it to one instance.
+- **`serial_console.py`** — `SerialConsole`, the Arduino-IDE-style traffic log.
+  **The Serial Config tab's "Serial monitor / debug" panel and the detached
+  monitor window are the same widget**, embedded twice, so neither can grow a
+  feature the other lacks — which is exactly how they had already drifted (the
+  tab log was one colour, uncoloured, unfilterable and capped at 500 lines).
   Autoscroll / timestamps / pause (held lines flush on resume, they are not
   dropped), Clear, Save…, a line-ending selector that sends through
-  `broker.send_raw`, command history, and a baud picker that persists to
-  `config.serial["baud"]` and reconnects. A case-insensitive substring filter
+  `broker.send_raw`, and command history. A case-insensitive substring filter
   and per-direction (RX/TX/notes) toggles narrow the view: `matches()` is the
   single predicate, applied by `_render` as lines arrive, by `_rerender` when
   the filter changes, and by `dump()` so Save… writes what's on screen. It
@@ -670,13 +700,29 @@ a separate one, so a built-in is never the thing being written to),
   everything — the filter hides, never deletes. **The log is never re-ordered**
   (no column sort): serial traffic only reads correctly in the order it
   happened, since a command and its reply are one exchange. Subscribes
-  `serial/rx`, `serial/tx`,
-  `serial/note` (probe commentary) and `serial/state` (indicator mirror).
-  **On open it replays `MainWindow.serial_backlog`** — the rolling deque the
-  bus subscriptions fill — because the traffic worth reading (a failed
-  auto-connect probe) happens seconds before anyone can click. Text tags bake
-  their colours in and `retheme_widgets` can't reach them, so `set_theme`
-  calls the window's `apply_palette()`.
+  `serial/rx`, `serial/tx` and `serial/note` (probe commentary) itself, and
+  **replays `MainWindow.serial_backlog`** on construction — the rolling deque
+  `app._log_serial` fills — because the traffic worth reading (a failed
+  auto-connect probe) happens seconds before anyone can open a window.
+  The **speed picker is part of the component**, not something a host bolts
+  on, and it is the *only* baud control in the app — the Serial tab's
+  Connection panel deliberately has none, so one widget owns
+  `config.serial["baud"]`, persisting and reconnecting as it is picked (which
+  is also why `SerialTab.save()` does not write that key). `BAUD_RATES` is
+  what a 16 MHz AVR can generate inside 8N1's ±2% tolerance — **not** the
+  Arduino IDE's ladder, so don't re-add 230400. Two consoles can still be
+  live at once (the tab's and an open window's), so `_sync_baud` re-reads the
+  setting on `serial/state` and they can't drift apart; `on_baud_changed`
+  tells a host that wants to react (the window repaints its header). The one
+  host-specific option is `detach_command` (the tab's "Open monitor ↗", on
+  the control row rather than a row of its own). Text tags bake their colours
+  in and `retheme_widgets` can't reach them, so `set_theme` calls
+  `apply_palette()` on every live console.
+- **`serial_monitor.py`** — `SerialMonitorWindow`: a `SerialConsole` in its own
+  window, under a connection header (port, baud, firmware behind a dot
+  mirroring the status bar's — it subscribes `serial/state` for that). Opened
+  by clicking the status bar's `● Serial: …` indicator or the Serial tab's
+  button; `app.open_serial_monitor()` keeps it to one instance.
 - **`torch_gate.py`** — `ensure_torch(parent, proceed, reason=…)`: the only
   sanctioned way to front a local-model action with the PyTorch install dialog.
   See *The PyTorch install gate* above.
@@ -689,7 +735,7 @@ and **must never require a change inside `sorter/ui/`** — nor import anything
 from it at runtime, so a PySide6-only install with no tkinter can run it. The
 two things it used to import are copies now, kept in lock-step by
 `tests/unit/qtui/test_qt_drift_pins.py`: `ui/theme.py`'s palette half is
-`qtui/palettes.py`, and `ui/serial_monitor.py`'s wire constants sit at the top
+`qtui/palettes.py`, and `ui/serial_console.py`'s wire constants sit at the top
 of `qtui/serial_monitor.py`. Custom themes therefore register into the Qt
 registry, not Tk's — one process runs one UI, and the `ui.custom_themes`
 settings row is what the two actually share.
@@ -793,6 +839,10 @@ settings row is what the two actually share.
 - **Gates and help.** `qtui/torch_gate.TorchGate` is bound once as
   `win.ensure_torch` (`__call__` = hard gate, `offer` = once-per-session
   soft gate) and is the only sanctioned front door for a local-model action.
+  `qtui/dialog_install_torch.py` carries its own `ml_pin_targets()` — same
+  reader, same None-on-failure contract as the Tk dialog's (§8), copied
+  because qtui may not import from `ui/`; `test_qt_torch_gate.py` pins the two
+  readers and the resulting argv together.
   `help_viewer.topic_for(page, section)` maps "where the user is" to an anchor
   in `docs/guide/GUIDE.md`, which `QTextBrowser` renders directly; F1 and
   Help → User Guide open the dock at that topic, falling back to the top of
@@ -1120,6 +1170,18 @@ flowchart TD
   `[ml]` extra. Any **new** entry point that runs a model locally must go
   through `ui/torch_gate.ensure_torch` (§5) — a bare `LocalInferenceError`
   reaching the user is the bug that gate exists to prevent.
+- **The `[ml]` extra is the only place the torch version lives.**
+  Both `dialog_install_torch` modules (Tk and Qt) read the pins out of
+  `pyproject.toml` at install time — never re-declare them as a constant,
+  which is how the runtime
+  install once drifted from the lockfile and went invisible to dependency
+  scanning (#67). The one coupling to keep by hand: the GPU build installs
+  from a per-OS CUDA wheel index (`_CUDA_INDEX_BY_OS`, in each of them —
+  Linux and Windows differ because upstream never builds Windows cu129
+  wheels), and each index only carries the torch versions built for it, so
+  a torch bump must check every index still serves the new pin for its
+  platform — `tests/integration/test_torch_wheel_index.py` verifies
+  exactly that.
 - **DB access is shared across threads** via one connection + RLock. Wrap
   multi-statement work in `db.transaction()` (reentrant via SAVEPOINT).
 - **Headstamps are read fresh, not cached** — don't reintroduce a cached

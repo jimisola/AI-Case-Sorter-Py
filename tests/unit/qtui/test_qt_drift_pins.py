@@ -3,7 +3,7 @@
 The Qt UI must run in an environment that has PySide6 and no tkinter at all, so
 the two things it used to import from the Tk package are now copied into it:
 ``ui/theme.py``'s palette half → ``qtui/palettes.py``, and
-``ui/serial_monitor.py``'s four wire constants → ``qtui/serial_monitor.py``.
+``ui/serial_console.py``'s four wire constants → ``qtui/serial_monitor.py``.
 
 A copy that nothing checks is a copy that drifts, so this module pins them:
 the shipped data by value, and every copied function by the **bytes of its
@@ -70,9 +70,10 @@ def tk_theme() -> ModuleType:
 @pytest.fixture(scope="module")
 def tk_serial() -> ModuleType:
     pytest.importorskip("tkinter")
-    from sorter.ui import serial_monitor
+    # The constants live with the shared widget, not the window that embeds it.
+    from sorter.ui import serial_console
 
-    return serial_monitor
+    return serial_console
 
 
 def test_copied_constants_are_identical(tk_theme: ModuleType) -> None:
@@ -124,7 +125,7 @@ def test_serial_constants_are_identical(tk_serial: ModuleType) -> None:
 
     for name in ("BAUD_RATES", "DEFAULT_BAUD", "DEFAULT_LINE_ENDING", "LINE_ENDINGS"):
         assert getattr(qt_serial, name) == getattr(tk_serial, name), (
-            f"{name} drifted — re-sync src/sorter/qtui/serial_monitor.py from src/sorter/ui/serial_monitor.py"
+            f"{name} drifted — re-sync src/sorter/qtui/serial_monitor.py from src/sorter/ui/serial_console.py"
         )
 
 

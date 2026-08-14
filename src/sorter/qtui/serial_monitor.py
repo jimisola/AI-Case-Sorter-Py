@@ -1,8 +1,9 @@
 """Serial monitor: the content of the bottom panel (View → Serial Monitor).
 
-Behavior reference: ``sorter/ui/serial_monitor.py`` (the Tk port of upstream
-PRs #78/#86) — read that file's module docstring for the feature rationale;
-this is the same feature set on ``QPlainTextEdit`` instead of ``tk.Text``.
+Behavior reference: ``sorter/ui/serial_console.py`` (the Tk widget the Serial
+tab and the detachable ``ui/serial_monitor.py`` window both embed) — read that
+file's module docstring for the feature rationale; this is the same feature set
+on ``QPlainTextEdit`` instead of ``tk.Text``.
 
 One deliberate difference: the Tk window is opened lazily from the status bar,
 long after the app started, so it replays ``app.serial_backlog`` on open to
@@ -51,13 +52,14 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QWidget,
 )
 
-# Copied verbatim from ``ui/serial_monitor.py`` rather than imported — qtui
+# Copied verbatim from ``ui/serial_console.py`` rather than imported — qtui
 # imports nothing from the Tk package, which needs tkinter to load at all.
 # ``tests/unit/qtui/test_qt_drift_pins.py`` pins the two copies together.
 
-# The Arduino IDE's ladder, and its default.
-BAUD_RATES = (300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 74880, 115200, 230400, 250000)
-DEFAULT_BAUD = 9600
+# What a 16 MHz AVR's U2X divisor can actually hit inside 8N1's ±2% tolerance:
+# 230400 misses by -3.55%, and 250000 (16 MHz / 64) is exact despite looking odd.
+BAUD_RATES = (9600, 19200, 38400, 57600, 115200, 250000)
+DEFAULT_BAUD = 9600  # the rate the firmware's Serial.begin() runs at
 
 # Label → what actually goes on the wire after the typed text.
 LINE_ENDINGS: dict[str, str] = {

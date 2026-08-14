@@ -12,6 +12,7 @@ from tkinter import messagebox, ttk
 from ..control.events import EventBus
 from ..hardware import serial_broker
 from ..hardware.serial_emulator import EMULATED_PORT
+from .serial_console import SerialConsole
 from .widgets import NumericField, build_button_row
 
 # (UI label, init-settings key, min, max, default). Defaults are the
@@ -61,12 +62,8 @@ class SerialTab(ttk.Frame):
         self.port_combo.grid(row=0, column=1, padx=6, pady=4, sticky=tk.W)
         ttk.Button(connect, text="Refresh ports", command=self.refresh_ports).grid(row=0, column=2, padx=6)
 
-        ttk.Label(connect, text="Baud").grid(row=0, column=3, padx=6, pady=4, sticky=tk.W)
-        self.baud_var = tk.IntVar(value=int(ser_cfg.get("baud", 9600)))
-        ttk.Spinbox(connect, from_=1200, to=2_000_000, increment=100, textvariable=self.baud_var, width=10).grid(
-            row=0, column=4, padx=6, sticky=tk.W
-        )
-
+        # No baud control here: the console below owns the setting, picker and
+        # all, so there is exactly one of them in this window.
         ttk.Label(connect, text="Probe timeout (s)").grid(row=0, column=5, padx=6, pady=4, sticky=tk.W)
         self.probe_timeout_var = tk.DoubleVar(value=float(ser_cfg.get("handshake_timeout_s", 4.0)))
         ttk.Spinbox(
@@ -168,23 +165,16 @@ class SerialTab(ttk.Frame):
             self.init_widgets[key] = field
 
         # ---- monitor & debug ----
+        # The same widget the detached window uses, baud picker included.
         monitor = ttk.LabelFrame(self, text="Serial monitor / debug")
         monitor.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=8, pady=8)
-
-        cmd_row = ttk.Frame(monitor)
-        cmd_row.pack(side=tk.TOP, fill=tk.X, padx=4, pady=4)
-        ttk.Label(cmd_row, text="Command").pack(side=tk.LEFT, padx=4)
-        self.cmd_var = tk.StringVar()
-        entry = ttk.Entry(cmd_row, textvariable=self.cmd_var, width=40)
-        entry.pack(side=tk.LEFT, padx=4)
-        entry.bind("<Return>", lambda _e: self.send_command())
-        ttk.Button(cmd_row, text="Send", command=self.send_command).pack(side=tk.LEFT)
-        ttk.Button(cmd_row, text="Open monitor ↗", command=self.app.open_serial_monitor).pack(
-            side=tk.LEFT, padx=(12, 0)
+        self.console = SerialConsole(
+            monitor,
+            app=self.app,
+            height=10,
+            detach_command=self.app.open_serial_monitor,
         )
-
-        self.log = tk.Text(monitor, height=10, wrap=tk.NONE, state=tk.DISABLED)
-        self.log.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=4, pady=4)
+        self.console.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=6, pady=6)
 
         self.refresh_ports()
 
@@ -207,8 +197,8 @@ class SerialTab(ttk.Frame):
             self.port_var.set(ports[0])
 
     def save(self) -> None:
+        # Not baud — the console's picker persists that one as it is chosen.
         self.cfg.serial["port"] = self.port_var.get()
-        self.cfg.serial["baud"] = int(self.baud_var.get())
         self.cfg.serial["handshake_timeout_s"] = float(self.probe_timeout_var.get())
         self.cfg.serial["slot_quantity"] = int(self.slot_count_var.get())
         self.cfg.serial["init_on_startup"] = bool(self.init_on_startup_var.get())
@@ -298,26 +288,3 @@ class SerialTab(ttk.Frame):
                 except (TypeError, ValueError, tk.TclError):
                     pass
         self.app.set_status(f"Loaded {applied} value(s) from board.")
-
-    def send_command(self) -> None:
-        broker = self.app.broker
-        if broker is None:
-            messagebox.showerror("Not connected", "Connect to the board first.")
-            return
-        cmd = self.cmd_var.get().strip()
-        if not cmd:
-            return
-        broker.send_command(cmd)
-        self.cmd_var.set("")
-
-    # ----- log API used by the App --------------------------------------------
-
-    def append_log(self, line: str) -> None:
-        self.log.configure(state=tk.NORMAL)
-        self.log.insert(tk.END, line + "\n")
-        self.log.see(tk.END)
-        # Trim to last ~500 lines.
-        line_count = int(self.log.index("end-1c").split(".")[0])
-        if line_count > 600:
-            self.log.delete("1.0", f"{line_count - 500}.0")
-        self.log.configure(state=tk.DISABLED)

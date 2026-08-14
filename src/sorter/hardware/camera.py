@@ -10,6 +10,7 @@ when available) and the resolutions the device accepts.
 
 from __future__ import annotations
 
+import ctypes
 import os
 import sys
 import threading
@@ -34,6 +35,13 @@ COMMON_RESOLUTIONS: list[tuple[int, int]] = [
     (2560, 1440),
     (3840, 2160),
 ]
+
+# How long `list_cameras_with_metadata` waits for one device to open, report its
+# resolutions and hand over a frame. Sized off the slowest camera seen so far, an
+# autofocus USB webcam that needs ~2.6 s for all three, having previously been
+# dropped by a 2.5 s budget. The cost of a generous value is bounded because only
+# genuine capture nodes are ever probed (see `_candidate_indices`).
+PROBE_TIMEOUT_S = 6.0
 
 
 class CameraInfo(TypedDict):
@@ -232,53 +240,79 @@ def _windows_dshow_device_count() -> int | None:
 
 # ----- enumeration ------------------------------------------------------------
 
+# VIDIOC_QUERYCAP is _IOR('V', 0, struct v4l2_capability) from linux/videodev2.h,
+# which encodes as (read=2 << 30) | (sizeof << 16) | (ord('V') << 8) | 0.
+_VIDIOC_QUERYCAP = 0x80685600
+_V4L2_CAP_VIDEO_CAPTURE = 0x00000001
+_V4L2_CAP_DEVICE_CAPS = 0x80000000
+
+
+class _V4l2Capability(ctypes.Structure):
+    """`struct v4l2_capability` — the reply VIDIOC_QUERYCAP fills in.
+
+    Sized to match the kernel's 104-byte struct exactly; `_VIDIOC_QUERYCAP`
+    above bakes that size into the request number.
+    """
+
+    _fields_ = (
+        ("driver", ctypes.c_char * 16),
+        ("card", ctypes.c_char * 32),
+        ("bus_info", ctypes.c_char * 32),
+        ("version", ctypes.c_uint32),
+        ("capabilities", ctypes.c_uint32),
+        ("device_caps", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32 * 3),
+    )
+
+
+def _is_v4l2_capture_node(path: str) -> bool:
+    """Whether `path` is a capture node, defaulting to True when unknowable.
+
+    A UVC camera claims *two* /dev/videoN nodes: the capture node and a
+    metadata node that OpenCV can only ever fail to open, loudly. Nothing in
+    /sys tells them apart — the capability bits are only reachable by ioctl.
+    Anything that stops us asking (permissions, a non-V4L2 driver) returns
+    True so the device still gets probed; this narrows the candidate list, it
+    is not authoritative about what will open.
+    """
+    import fcntl  # POSIX-only, and this function is Linux-only
+
+    try:
+        # O_NONBLOCK so a wedged device can't stall enumeration on open().
+        fd = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+    except OSError:
+        return True
+    cap = _V4l2Capability()
+    try:
+        fcntl.ioctl(fd, _VIDIOC_QUERYCAP, cap)
+    except OSError:
+        return True
+    finally:
+        os.close(fd)
+    # device_caps describes this node; capabilities describes the whole
+    # physical device, so on a metadata node it still advertises capture.
+    caps = cap.device_caps if cap.capabilities & _V4L2_CAP_DEVICE_CAPS else cap.capabilities
+    return bool(caps & _V4L2_CAP_VIDEO_CAPTURE)
+
 
 def _candidate_indices(max_index: int) -> list[int]:
     """Indices worth probing.
 
-    On Linux, skip indices with no /dev/videoN node at all — probing them
-    just produces OpenCV's noisy "can't open camera by index" V4L2 warnings.
-    On Windows, ask DirectShow how many capture devices are attached so
-    we don't fire OpenCV at indices 1-9 when only camera 0 exists (each
-    miss prints "VIDEOIO(DSHOW): backend is generally available but can't
-    be used to capture by index").
+    On Linux, skip indices with no /dev/videoN node, and those whose node is
+    not a capture node — probing either just produces OpenCV's noisy "can't
+    open camera by index" V4L2 warnings. On Windows, ask DirectShow how many
+    capture devices are attached so we don't fire OpenCV at indices 1-9 when
+    only camera 0 exists (each miss prints "VIDEOIO(DSHOW): backend is
+    generally available but can't be used to capture by index").
     """
     if sys.platform.startswith("linux"):
-        return [i for i in range(max_index) if os.path.exists(f"/dev/video{i}")]
+        nodes = ((i, f"/dev/video{i}") for i in range(max_index))
+        return [i for i, path in nodes if os.path.exists(path) and _is_v4l2_capture_node(path)]
     if sys.platform.startswith("win"):
         count = _windows_dshow_device_count()
         if count is not None:
             return list(range(min(count, max_index)))
     return list(range(max_index))
-
-
-def enumerate_devices(max_index: int = 10, probe_timeout_s: float = 1.5) -> list[int]:
-    """Return camera indices that successfully opened and returned a frame.
-
-    Each probe runs in a worker thread; we move on if it exceeds probe_timeout_s
-    (some V4L2 devices hang indefinitely on open).
-    """
-    backend = _preferred_backend()
-    found: list[int] = []
-    for idx in _candidate_indices(max_index):
-        result: list[bool] = [False]
-
-        def _probe(i: int = idx, res: list[bool] = result) -> None:
-            cap = cv2.VideoCapture(i, backend)
-            try:
-                if cap.isOpened():
-                    ok, _ = cap.read()
-                    if ok:
-                        res[0] = True
-            finally:
-                cap.release()
-
-        t = threading.Thread(target=_probe, daemon=True)
-        t.start()
-        t.join(probe_timeout_s)
-        if result[0]:
-            found.append(idx)
-    return found
 
 
 def _probe_resolutions(cap: cv2.VideoCapture) -> list[tuple[int, int]]:
@@ -317,7 +351,7 @@ def _probe_resolutions(cap: cv2.VideoCapture) -> list[tuple[int, int]]:
     return sorted(supported, key=lambda wh: wh[0] * wh[1])
 
 
-def list_cameras_with_metadata(max_index: int = 10, probe_timeout_s: float = 2.5) -> list[CameraInfo]:
+def list_cameras_with_metadata(max_index: int = 10, probe_timeout_s: float = PROBE_TIMEOUT_S) -> list[CameraInfo]:
     """Enumerate cameras and return [{'index': int, 'name': str, 'resolutions': [(w,h), ...]}].
 
     Resolutions are sorted ascending by pixel count, so `resolutions[-1]` is the
@@ -367,6 +401,16 @@ def list_cameras_with_metadata(max_index: int = 10, probe_timeout_s: float = 2.5
         t = threading.Thread(target=_probe, daemon=True)
         t.start()
         t.join(probe_timeout_s)
+        if t.is_alive():
+            # A device that opens and then times out used to vanish from the
+            # list in silence, which is exactly what made a camera 60 ms over
+            # budget so hard to account for. bootstrap.py pipes stderr into
+            # launch.log, so this lands where someone would go looking.
+            print(
+                f"[camera] index {idx} ({names.get(idx, 'unnamed')}) did not finish "
+                f"probing within {probe_timeout_s:g}s — not listing it",
+                file=sys.stderr,
+            )
         if result["opened"]:
             out.append(
                 {

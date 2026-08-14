@@ -32,7 +32,7 @@ dependencies = [
     "Pillow==12.3.0",
     "requests==2.34.2",
     "msal==1.37.0",
-    "platformdirs==4.11.1",
+    "platformdirs==4.11.2",
     # PEP 440 parsing/ordering for the updater's version comparison.
     "packaging==26.3",
     # Schema migrations: sorter/data/db.py runs its migration steps through
@@ -50,10 +50,16 @@ Issues = "https://github.com/sjseth/AI-Case-Sorter-Py/issues"
 
 [project.optional-dependencies]
 # Local PyTorch training/inference. Install with `pip install .[ml]`.
-# Must match _TARGETS in sorter/ui/dialog_install_torch.py, which is how
-# PyTorch actually gets installed at runtime. Bump both together.
-ml = ["torch==2.9.1", "torchvision==0.24.1"]
-# PySide6 spike UI (`python -m sorter --qt`); see docs/ui-modernization.md.
+# This is the single authoritative pin: sorter/ui/dialog_install_torch.py
+# reads it at runtime (that dialog is how PyTorch actually reaches a user's
+# venv), so bumping it here is the whole bump — and it keeps the versions
+# users really run visible to Renovate and vulnerability scanning, which a
+# constant in a .py file never was. One coupling to check when bumping: the
+# GPU build installs from a fixed CUDA index (_CUDA_INDEX in that dialog),
+# and each index only carries the torch versions built for it —
+# tests/integration/test_torch_wheel_index.py verifies the pair resolves.
+ml = ["torch==2.13.0", "torchvision==0.28.0"]
+# PySide6 UI (`python -m sorter --qt`); see docs/ui-modernization.md.
 # Essentials, not the PySide6 meta-package: the meta adds pyside6-addons
 # (~175 MB of WebEngine/3D/Charts/Multimedia) that nothing uses.
 # QtAds (LGPL-2.1+) is the dock system; it pins the same Essentials build, so
@@ -166,7 +172,7 @@ addopts = "-ra --cov=sorter --cov-report=term"
 # Generous: the slowest legitimate tests spawn real training subprocesses.
 timeout = 120
 markers = [
-    "integration: exercises a real external tool (uv build, git-cliff) instead of a synthetic fixture",
+    "integration: exercises a real external tool or service (uv build, git-cliff, the PyTorch wheel index) instead of a synthetic fixture",
 ]
 # The suite is threading-fragile by design (see tests/conftest.py): Tk widget
 # garbage collected on a worker thread calls into Tcl from the wrong thread
@@ -181,7 +187,7 @@ dev = [
     "pytest-timeout==2.4.0",
     "pytest-cov==7.0.0",
     "ruff==0.16.2",
-    "ty==0.0.69",
+    "ty==0.0.70",
 ]
 # The published documentation site (mkdocs.yml, docs/). Its own group, not
 # `dev`: nothing in the test loop needs it, and mkdocs-material pulls a dozen

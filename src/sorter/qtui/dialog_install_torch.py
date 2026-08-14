@@ -25,7 +25,9 @@ import queue
 import subprocess
 import sys
 import threading
+import tomllib
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QTimer  # ty: ignore[unresolved-import]
@@ -43,14 +45,37 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
 from ..ml.gpu_detect import GpuInfo, detect_supported_nvidia_gpu
 from ..paths import find_uv
 
-# Pin exactly the versions the legacy project validates against. Floating
-# versions (`torch>=2.2`) let pip pull the latest — which is a moving target
-# and has been observed to regress ConvNeXt inference on the RTX 50-series.
-# Kept in lock-step with pyproject.toml's [ml] extra and ui/dialog_install_torch.py;
-# tests/unit/qtui/test_qt_torch_gate.py pins all three together.
-_TARGETS = ("torch==2.9.1", "torchvision==0.24.1")
-_CPU_TARGETS = _TARGETS
-_CUDA_INDEX = "https://download.pytorch.org/whl/cu128"
+# The torch/torchvision pins live in pyproject.toml's [ml] extra and are read
+# from there at install time, never re-declared here (CLAUDE.md §8). Only the
+# per-OS CUDA index for the GPU build is decided in code; see
+# ui/dialog_install_torch.py's comment for why the two indexes differ.
+# tests/unit/qtui/test_qt_torch_gate.py pins this half against the Tk dialog.
+_CUDA_INDEX_BY_OS = {
+    "linux": "https://download.pytorch.org/whl/cu129",
+    "win32": "https://download.pytorch.org/whl/cu130",
+}
+_CUDA_INDEX = _CUDA_INDEX_BY_OS.get(sys.platform, _CUDA_INDEX_BY_OS["linux"])
+
+
+def ml_pin_targets() -> tuple[str, ...] | None:
+    """The exact requirement strings pyproject.toml's [ml] extra pins.
+
+    Byte-for-byte the Tk dialog's reader (same resolution rule, same guards,
+    same None on any failure) — see its docstring; qtui may not import it.
+    """
+    path = Path(__file__).resolve().parents[3] / "pyproject.toml"
+    try:
+        with path.open("rb") as fh:
+            data = tomllib.load(fh)
+        if data["project"]["name"] != "ai-case-sorter":
+            return None
+        targets = data["project"]["optional-dependencies"]["ml"]
+    except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError, KeyError, TypeError):
+        return None
+    if not isinstance(targets, list) or not targets or not all(isinstance(t, str) for t in targets):
+        return None
+    return tuple(targets)
+
 
 # Shown when the caller doesn't name the action. Deliberately generic: this
 # dialog fronts inference as well as training.
@@ -71,6 +96,12 @@ NO_INSTALLER_TEXT = (
     "on first launch — try restarting the app via start.sh/start.bat, or "
     "install uv yourself from https://docs.astral.sh/uv/.\n"
 )
+NO_PINS_TEXT = (
+    "Could not read the pinned PyTorch version from pyproject.toml "
+    "(expected next to bootstrap.py, at the top of the app folder). "
+    "The install can't proceed without it — restart via start.sh/start.bat, "
+    "or reinstall the app if the file is really gone.\n"
+)
 
 DRAIN_MS = 50
 # Grace given to a cancelled install between SIGTERM and SIGKILL.
@@ -78,17 +109,22 @@ TERMINATE_GRACE_S = 5.0
 
 
 def build_install_command(*, use_gpu: bool, uv: str | None, pip_available: bool) -> list[str] | None:
-    """The argv for one install, or None when neither installer is available.
+    """The argv for one install, or None when it can't be built.
 
-    uv first, because a uv-managed venv (the launcher's default) has no pip in
-    it at all. But a plain ``python -m venv`` + ``pip install -e .`` checkout is
-    a documented way to run this app, and there uv may legitimately be absent
-    while pip is right there — so fall back rather than refusing to install.
+    Two ways there is no command: the pins are unreadable, or neither installer
+    is available. uv first, because a uv-managed venv (the launcher's default)
+    has no pip in it at all. But a plain ``python -m venv`` + ``pip install -e .``
+    checkout is a documented way to run this app, and there uv may legitimately
+    be absent while pip is right there — so fall back rather than refusing to
+    install.
     """
+    targets = ml_pin_targets()
+    if targets is None:
+        return None
     if uv is not None:
-        cmd = [uv, "pip", "install", "--python", sys.executable, *_CPU_TARGETS]
+        cmd = [uv, "pip", "install", "--python", sys.executable, *targets]
     elif pip_available:
-        cmd = [sys.executable, "-u", "-m", "pip", "install", *_CPU_TARGETS]
+        cmd = [sys.executable, "-u", "-m", "pip", "install", *targets]
     else:
         return None
     if use_gpu:
@@ -228,10 +264,23 @@ class TorchInstallDialog(QDialog):
     # ----- install flow -------------------------------------------------------
 
     def _default_command(self, use_gpu: bool) -> list[str] | None:
+        """The real argv — and, when there is none, the console line saying why.
+
+        The reason lives here rather than in ``start_install`` because only the
+        real builder knows which precondition failed; a replaced
+        ``build_command`` speaks for itself.
+        """
+        if ml_pin_targets() is None:
+            self._append(NO_PINS_TEXT)
+            return None
         uv = find_uv()
         pip_available = importlib.util.find_spec("pip") is not None
-        if uv is None and pip_available:
-            self._append("uv not found; falling back to pip in the running interpreter.\n")
+        if uv is None:
+            self._append(
+                "uv not found; falling back to pip in the running interpreter.\n"
+                if pip_available
+                else NO_INSTALLER_TEXT
+            )
         return build_install_command(use_gpu=use_gpu, uv=uv, pip_available=pip_available)
 
     def start_install(self, *, use_gpu: bool) -> None:
@@ -239,8 +288,7 @@ class TorchInstallDialog(QDialog):
             return
         cmd = self.build_command(use_gpu)
         if cmd is None:
-            self._append(NO_INSTALLER_TEXT)
-            return
+            return  # the builder already put the reason on the console
         self._installing = True
         self._set_buttons_enabled(False)
         (self.gpu_button if (use_gpu and self.gpu is not None) else self.cpu_button).setText("Installing…")
