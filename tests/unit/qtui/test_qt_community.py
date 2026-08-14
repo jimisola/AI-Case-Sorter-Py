@@ -41,9 +41,11 @@ from sorter.data.models import Model, is_trainable
 from sorter.data.repository import CartridgeRepo, HeadstampRepo, ModelRepo
 from sorter.qtui.community_page import (
     ACTION_LABELS,
-    ACTIONS_COLUMN,
+    ACTION_TOOLTIPS,
     ALL_CARTRIDGES,
     COLUMNS,
+    DOWNLOADING_LABEL,
+    REMOVE_LABEL,
     STATE_DOWNLOAD,
     STATE_INSTALLED,
     STATE_LABELS,
@@ -278,17 +280,20 @@ def select_row(page: Any, index: int) -> None:
     page.tree.setCurrentItem(item)
 
 
-def row_button(page: Any, index: int) -> Any:
-    """The trailing action button on a row, looked up fresh every time.
+def primary_for(page: Any, index: int) -> Any:
+    """The bar's primary button, with row ``index`` selected.
 
-    Never cached in a local: a sort destroys the item's widget and the page
-    installs a replacement (see ``_sync_row_actions``).
+    Everything about it — label, palette role, enabled state — is scoped to
+    the selection, so selecting is part of reading it.
     """
-    item = page.tree.topLevelItem(index)
-    assert item is not None, f"no row {index}"
-    button = page.tree.itemWidget(item, ACTIONS_COLUMN)
-    assert button is not None, f"row {index} has no action button"
-    return button
+    select_row(page, index)
+    return page.download_button
+
+
+def remove_for(page: Any, index: int) -> Any:
+    """The bar's Remove button, with row ``index`` selected."""
+    select_row(page, index)
+    return page.remove_button
 
 
 def pump(qapp: Any, predicate: Any, timeout_s: float = 10.0) -> bool:
@@ -764,6 +769,17 @@ def test_an_empty_catalogue_says_so(window, api) -> None:
 # ----- installed state ---------------------------------------------------------
 
 
+def test_the_bar_is_dead_with_nothing_selected(window, api) -> None:
+    api.models = []
+    page = build_page(window, api, auth=FakeAuth())
+    page.refresh_auth_state()
+    assert drain_until(window, lambda: page.status_label.text().startswith("No community models"))
+
+    assert page.selected_uid() is None
+    assert not page.download_button.isEnabled()
+    assert not page.remove_button.isEnabled()
+
+
 def test_the_state_column_and_action_follow_the_local_library(window, api, config) -> None:
     make_model(config, "Installed one", community_model_uid="uid-installed", model_version=2)
     make_model(config, "Older one", community_model_uid="uid-old", model_version=1)
@@ -782,25 +798,31 @@ def test_the_state_column_and_action_follow_the_local_library(window, api, confi
         STATE_LABELS[STATE_UPDATE],
     ]
 
-    # Each row's own button, no selection involved: label, enabled state and
-    # palette role all follow that row.
-    assert row_button(page, 0).text() == ACTION_LABELS[STATE_DOWNLOAD]
-    assert row_button(page, 0).isEnabled()
-    assert row_button(page, 0).objectName() == "action"
+    # The bar follows the selection: label, enabled state and palette role all
+    # come from the selected row's state.
+    assert primary_for(page, 0).text() == ACTION_LABELS[STATE_DOWNLOAD]
+    assert primary_for(page, 0).isEnabled()
+    assert primary_for(page, 0).objectName() == "action"
+    assert primary_for(page, 0).toolTip() == ACTION_TOOLTIPS[STATE_DOWNLOAD]
+    assert not remove_for(page, 0).isEnabled()
 
-    # Installed-and-current offers removal of the local copy (JL: the loop is
-    # install -> update -> remove), in destructive red.
-    assert row_button(page, 1).text() == ACTION_LABELS[STATE_INSTALLED]
-    assert row_button(page, 1).isEnabled()
-    assert row_button(page, 1).objectName() == "danger"
+    # Installed-and-current leaves the primary dead and hands the action to
+    # Remove (JL: the loop is install -> update -> remove), in destructive red.
+    assert primary_for(page, 1).text() == ACTION_LABELS[STATE_INSTALLED]
+    assert not primary_for(page, 1).isEnabled()
+    assert remove_for(page, 1).isEnabled()
+    assert remove_for(page, 1).text() == REMOVE_LABEL
+    assert remove_for(page, 1).objectName() == "danger"
 
-    assert row_button(page, 2).text() == ACTION_LABELS[STATE_UPDATE]
-    assert row_button(page, 2).isEnabled()
+    assert primary_for(page, 2).text() == ACTION_LABELS[STATE_UPDATE]
+    assert primary_for(page, 2).isEnabled()
     # Blue, not the download green: this replaces something already installed.
-    assert row_button(page, 2).objectName() == "update"
+    assert primary_for(page, 2).objectName() == "update"
+    # An update is not a removal — the local copy is being replaced, not dropped.
+    assert not remove_for(page, 2).isEnabled()
 
 
-def test_the_installed_rows_button_removes_the_local_copy(window, api, config) -> None:
+def test_the_bar_removes_the_installed_copy(window, api, config) -> None:
     model = make_model(config, "Installed one", community_model_uid="uid-installed", model_version=2)
     make_model(config, "Keeper")  # a second model, so the cartridge keeps one
     api.models = [info("uid-installed", name="Installed one", version=2)]
@@ -810,13 +832,14 @@ def test_the_installed_rows_button_removes_the_local_copy(window, api, config) -
     asked: list[str] = []
     page.confirm = lambda title, _text: asked.append(title) or True
 
-    row_button(page, 0).click()
+    remove_for(page, 0).click()
     assert drain_until(window, lambda: ModelRepo(config.db).get(model.id) is None)
 
     assert asked == ["Remove installed model?"]
     # The catalogue row survives and flips back to a plain download.
-    assert row_button(page, 0).text() == ACTION_LABELS[STATE_DOWNLOAD]
-    assert row_button(page, 0).objectName() == "action"
+    assert primary_for(page, 0).text() == ACTION_LABELS[STATE_DOWNLOAD]
+    assert primary_for(page, 0).objectName() == "action"
+    assert not remove_for(page, 0).isEnabled()
 
 
 def test_removing_the_active_model_is_refused(window, api, config) -> None:
@@ -832,7 +855,7 @@ def test_removing_the_active_model_is_refused(window, api, config) -> None:
     notified = _Recorder()
     window.notify = notified
 
-    row_button(page, 0).click()
+    remove_for(page, 0).click()
 
     assert drain_until(window, lambda: notified.titles == ["Cannot delete"])
     assert ModelRepo(config.db).get(model.id) is not None  # still installed
@@ -840,7 +863,7 @@ def test_removing_the_active_model_is_refused(window, api, config) -> None:
 
 # ----- the install lifecycle, cross-page (JL) ---------------------------------
 #
-# The row's State cell and button must follow "what is installed" wherever it
+# The row's State cell and the bar must follow "what is installed" wherever it
 # changes — the Models page included, which posts models/changed on refresh.
 
 
@@ -851,7 +874,7 @@ def test_deleting_on_the_models_page_flips_the_community_row(window, api, config
     page = build_page(window, api, auth=FakeAuth())
     page.refresh_auth_state()
     assert drain_until(window, lambda: page.tree.topLevelItemCount() == 1)
-    assert row_button(page, 0).text() == ACTION_LABELS[STATE_INSTALLED]
+    assert primary_for(page, 0).text() == ACTION_LABELS[STATE_INSTALLED]
 
     with config.db.transaction():
         ModelRepo(config.db).delete(model.id)
@@ -859,8 +882,9 @@ def test_deleting_on_the_models_page_flips_the_community_row(window, api, config
     window.bus.drain()
 
     assert cell(page, 0, "State") == STATE_LABELS[STATE_DOWNLOAD]
-    assert row_button(page, 0).text() == ACTION_LABELS[STATE_DOWNLOAD]
-    assert row_button(page, 0).objectName() == "action"
+    assert primary_for(page, 0).text() == ACTION_LABELS[STATE_DOWNLOAD]
+    assert primary_for(page, 0).objectName() == "action"
+    assert not remove_for(page, 0).isEnabled()
 
 
 def test_an_install_appearing_flips_the_community_row(window, api, config) -> None:
@@ -868,15 +892,16 @@ def test_an_install_appearing_flips_the_community_row(window, api, config) -> No
     page = build_page(window, api, auth=FakeAuth())
     page.refresh_auth_state()
     assert drain_until(window, lambda: page.tree.topLevelItemCount() == 1)
-    assert row_button(page, 0).text() == ACTION_LABELS[STATE_DOWNLOAD]
+    assert primary_for(page, 0).text() == ACTION_LABELS[STATE_DOWNLOAD]
 
     make_model(config, "Range brass", community_model_uid="uid-x", model_version=1)
     window.models_page.refresh()
     window.bus.drain()
 
     assert cell(page, 0, "State") == STATE_LABELS[STATE_INSTALLED]
-    assert row_button(page, 0).text() == ACTION_LABELS[STATE_INSTALLED]
-    assert row_button(page, 0).objectName() == "danger"
+    assert primary_for(page, 0).text() == ACTION_LABELS[STATE_INSTALLED]
+    assert not primary_for(page, 0).isEnabled()
+    assert remove_for(page, 0).isEnabled()
 
 
 def test_an_older_install_appearing_flips_the_row_to_update(window, api, config) -> None:
@@ -890,33 +915,30 @@ def test_an_older_install_appearing_flips_the_row_to_update(window, api, config)
     window.bus.drain()
 
     assert cell(page, 0, "State") == STATE_LABELS[STATE_UPDATE]
-    assert row_button(page, 0).text() == ACTION_LABELS[STATE_UPDATE]
-    assert row_button(page, 0).objectName() == "update"
+    assert primary_for(page, 0).text() == ACTION_LABELS[STATE_UPDATE]
+    assert primary_for(page, 0).objectName() == "update"
 
 
-def test_a_row_button_installs_that_row_not_the_selected_one(window, api) -> None:
+def test_the_primary_installs_the_selected_row(window, api) -> None:
     api.models = [info(uid="first", name="First"), info(uid="second", name="Second")]
     page = build_page(window, api, auth=FakeAuth())
     started: list[str] = []
     page.download = lambda entry: started.append(entry.model_uid)
     page.refresh_auth_state()
     assert drain_until(window, lambda: page.tree.topLevelItemCount() == 2)
-    select_row(page, 0)
 
-    row_button(page, 1).click()
+    select_row(page, 1)
+    page.download_button.click()
 
-    # The same `download()` the bottom button used to call — one path, and it
-    # acts on the button's row, which the click also selects.
     assert started == ["second"]
-    assert page.selected_uid() == "second"
 
 
-def test_the_row_button_runs_the_real_download_path(page, window, api, config, tmp_path) -> None:
+def test_the_bar_runs_the_real_download_path(page, window, api, config, tmp_path) -> None:
     source = seed_exportable(config, "Source")
     api.archive = write_archive(config, tmp_path / "m.zip", source, name="Range brass")
     page.confirm = lambda _title, _text: True
 
-    row_button(page, 0).click()
+    primary_for(page, 0).click()
 
     assert drain_until(window, lambda: window.notify.titles == ["Download complete"])
     assert api.download_requests == ["uid-1"]
@@ -924,11 +946,11 @@ def test_the_row_button_runs_the_real_download_path(page, window, api, config, t
 
 
 def test_a_second_download_queues_and_both_install(page, window, api, config, tmp_path) -> None:
-    """JL: clicking a second row mid-download must visibly queue, not vanish.
+    """JL: clicking a second model mid-download must visibly queue, not vanish.
 
     Both rows install from one FakeApi archive; the queue is observed through
     the status stream ("Queued", then the "2 of 2" prefix on the second) and
-    through the queued row's disabled button.
+    through the bar, which says where the selected row sits in the queue.
     """
     source = seed_exportable(config, "Source")
     api.archive = write_archive(config, tmp_path / "m.zip", source, name="Range brass")
@@ -939,17 +961,24 @@ def test_a_second_download_queues_and_both_install(page, window, api, config, tm
     statuses: list[str] = []
     window.bus.subscribe("community/status", statuses.append)
 
-    row_button(page, 0).click()
-    row_button(page, 1).click()  # while the first is (at least logically) in flight
+    primary_for(page, 0).click()
+    primary_for(page, 1).click()  # while the first is (at least logically) in flight
+
+    # Row 1 is selected and queued behind row 0: the bar says so rather than
+    # offering the click again, and row 0 says it is the one downloading.
+    assert not page.download_button.isEnabled()
+    assert page.download_button.toolTip().startswith("Queued (#1)")
+    assert primary_for(page, 0).text() == DOWNLOADING_LABEL
+    assert not primary_for(page, 0).isEnabled()
 
     assert drain_until(window, lambda: len(api.download_requests) == 2)
     assert drain_until(window, lambda: not page._busy)
     assert api.download_requests == ["uid-a", "uid-b"]  # queue order preserved
     assert any(s.startswith("Queued Second") for s in statuses)
     assert any(s.startswith("(2 of 2) Downloading") for s in statuses)
-    # Stand-down after the batch: counters reset, buttons live again.
+    # Stand-down after the batch: counters reset, the bar live again.
     assert page._download_queue == [] and page._active_download_uid is None
-    assert row_button(page, 0).isEnabled()
+    assert primary_for(page, 0).isEnabled()
 
 
 def test_a_failed_download_does_not_strand_the_queue(page, window, api, config, tmp_path) -> None:
@@ -965,39 +994,32 @@ def test_a_failed_download_does_not_strand_the_queue(page, window, api, config, 
         (_ for _ in ()).throw(RuntimeError("boom")) if uid == "uid-a" else real_request(uid)
     )
 
-    row_button(page, 0).click()
-    row_button(page, 1).click()
+    primary_for(page, 0).click()
+    primary_for(page, 1).click()
 
     assert drain_until(window, lambda: "uid-b" in api.download_requests)
     assert drain_until(window, lambda: not page._busy)
     assert "Download failed" in window.notify.titles
 
 
-def test_the_action_column_is_not_sortable(window, api) -> None:
+def test_the_bar_follows_the_selection_through_a_header_click_sort(window, api, config) -> None:
+    make_model(config, "Zed", community_model_uid="z", model_version=1)
     api.models = [info(uid="z", name="Zed"), info(uid="a", name="Alpha")]
     page = build_page(window, api, auth=FakeAuth())
     page.refresh_auth_state()
     assert drain_until(window, lambda: page.tree.topLevelItemCount() == 2)
-
-    page.tree.header().sectionClicked.emit(ACTIONS_COLUMN)
-
-    assert page._sort_column is None
-    assert names(page) == ["Zed", "Alpha"], "the button column sorted the table"
-
-
-def test_row_buttons_survive_a_real_header_click_sort(window, api) -> None:
-    api.models = [info(uid="z", name="Zed"), info(uid="a", name="Alpha")]
-    page = build_page(window, api, auth=FakeAuth())
-    page.refresh_auth_state()
-    assert drain_until(window, lambda: page.tree.topLevelItemCount() == 2)
+    select_row(page, 0)
+    assert page.selected_uid() == "z"
 
     click_header(page, "Model")
 
     assert names(page) == ["Alpha", "Zed"]
-    # Qt destroys an item's widgets when the row moves; every row must still
-    # have a live, correctly-labelled button afterwards.
-    assert [row_button(page, row).text() for row in range(2)] == [ACTION_LABELS[STATE_DOWNLOAD]] * 2
-    assert all(row_button(page, row).isEnabled() for row in range(2))
+    # The selection survives the sort, so the bar still describes the same
+    # model — the installed one, whatever row it has moved to.
+    assert page.selected_uid() == "z"
+    assert page.download_button.text() == ACTION_LABELS[STATE_INSTALLED]
+    assert page.remove_button.isEnabled()
+    assert primary_for(page, 0).text() == ACTION_LABELS[STATE_DOWNLOAD]
 
 
 def test_the_description_is_the_rows_tooltip_on_every_column(window, api) -> None:
@@ -1197,7 +1219,7 @@ def test_a_failed_download_reports_instead_of_raising(page, window, api, config)
     page.download_selected()
 
     assert drain_until(window, lambda: window.notify.titles == ["Download failed"])
-    assert row_button(page, 0).isEnabled(), "the page stayed busy after a failure"
+    assert page.download_button.isEnabled(), "the page stayed busy after a failure"
 
 
 # ----- sign-in dialog ----------------------------------------------------------

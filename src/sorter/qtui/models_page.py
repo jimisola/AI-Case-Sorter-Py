@@ -7,16 +7,11 @@ calls and the same ``mode/changed`` post, so the two UIs agree on what a model
 is and who owns it.
 
 Layout is Qt-idiomatic rather than a transcription: one sortable table of
-models whose row-scoped actions ride in the row itself — **activation is the
-Active column's radio**, edit and delete are fixed-size icon buttons in the
-Actions column (the Community catalogue's idiom) — with the selection-scoped
-actions (images, headstamps, evaluate, export) on the bar below and the
-library-scoped ones (new cartridge, new model, import) up on the filter bar.
-The columns carry the same facts Tk's cards did.
-
-Activation says itself once, in the column named for it (JL): a row of green
-✓ buttons read as "everything is active", and the "● ACTIVE" text said a
-third time what the column and the disabled button already said.
+models with an action bar that follows the selection, instead of Tk's per-row
+card buttons. The columns carry the same facts the cards did, and the Active
+column marks the active row. (Row-scoped controls — a radio in the Active
+column, ✎/× icon buttons in an Actions column — were tried and dropped: JL
+lived with them and chose the bar.)
 
 Three things worth knowing:
 
@@ -53,7 +48,6 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QLineEdit,
     QMessageBox,
     QPushButton,
-    QRadioButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -83,44 +77,10 @@ AI_CONFIG_SENTINEL_ID = -1
 AI_CONFIG_NAME = "Use AI Config"
 AI_CONFIG_HINT = "Route classification through the AI Config page (HTTP server)."
 
-COLUMNS = ("Model", "Active", "Cartridge", "Type", "Mode", "Images", "Trained", "Last trained", "Actions")
-# Both widget columns. Neither autosizes off its cell text — the Active
-# column's cell holds a radio and the Actions column holds buttons, and
-# ResizeToContents measures text only.
-ACTIVE_COLUMN = COLUMNS.index("Active")
-ACTIONS_COLUMN = len(COLUMNS) - 1
+COLUMNS = ("Model", "Active", "Cartridge", "Type", "Mode", "Images", "Trained", "Last trained")
 # Breathing room over resizeColumnToContents — see _autosize_columns.
 COLUMN_PADDING = 12
-# Wide enough for the radio indicator plus its cell margins, whatever the
-# header text measures to.
-ACTIVE_COLUMN_MIN_WIDTH = 56
-
-# Icon-only and fixed in BOTH dimensions, for community_page.py's reason: a
-# text button stretches to its label. The glyph carries the action, the
-# tooltip carries the words.
-ACTION_EDIT = "✎"
-ACTION_DELETE = "×"
-ACTION_BUTTON_WIDTH = 36
-ACTION_BUTTON_HEIGHT = 22
-ACTION_ROW_SPACING = 4
-ACTION_ROW_MARGIN = 4
-# ResizeToContents measures cell text, never item widgets, so the column's
-# width is computed from the buttons rather than asked of the view.
-ACTIONS_COLUMN_WIDTH = 2 * ACTION_BUTTON_WIDTH + ACTION_ROW_SPACING + 2 * ACTION_ROW_MARGIN
-
-TOOLTIP_ACTIVATE = "Activate this model"
-TOOLTIP_ACTIVATE_AI = "Switch to AI Config mode"
-TOOLTIP_ACTIVE = "Active model"
-TOOLTIP_ACTIVE_AI = "AI Config is the active mode"
-TOOLTIP_EDIT = "Edit model…"
-TOOLTIP_DELETE = "Delete model…"
-# ModelRepo.delete refuses the active model outright — `_delete` passes no
-# replacement — so the button says so rather than opening a doomed confirm.
-TOOLTIP_DELETE_ACTIVE = "The active model cannot be deleted"
-# The Active cell shows a radio, so its column has no text to sort on. It
-# still sorts on the fact behind the radio: ascending puts the active row first.
-ACTIVE_SORT_FIRST = 0
-ACTIVE_SORT_REST = 1
+ACTIVE_MARK = "● ACTIVE"
 EMPTY_VALUE = "—"
 # GNOME's file-chooser portal strips the parenthesized "(*.zip)" from the
 # label it shows, leaving just "Model archives" with no visible pattern (JL
@@ -140,10 +100,7 @@ FOREIGN_NOTICE = (
     "Downloaded from the community and managed by its publisher, so it can't be "
     "trained here. To build on it, export it and import the archive back as your own."
 )
-SELECT_HINT = (
-    "Select a model to manage its headstamps, evaluate or export it — the Active column activates one, "
-    "and each row's own buttons edit or delete it."
-)
+SELECT_HINT = "Select a model to activate, edit, export or delete it."
 
 
 def describe_type(model: Model) -> str:
@@ -174,12 +131,14 @@ def image_counts() -> dict[int, int]:
         if not entry.is_dir() or not entry.name.isdigit():
             continue
         images_dir = entry / "images"
-        if not images_dir.exists():
+        try:
+            counts[int(entry.name)] = sum(
+                1 for f in images_dir.iterdir() if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg", ".png")
+            )
+        except OSError:
+            # `_delete` refreshes while its rmtree worker is still running, so
+            # a directory can vanish between the listing and the walk.
             counts[int(entry.name)] = 0
-            continue
-        counts[int(entry.name)] = sum(
-            1 for f in images_dir.iterdir() if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg", ".png")
-        )
     return counts
 
 
@@ -204,65 +163,6 @@ class _SortableItem(QTreeWidgetItem):
             return bool(self.sort_values[column] < other.sort_values[column])
         except (AttributeError, IndexError, TypeError):
             return super().__lt__(other)
-
-
-class _ActiveCell(QWidget):
-    """One row's Active-column control: the radio that activates it.
-
-    The radio is **not** exclusive. Qt's own exclusivity would let a click
-    uncheck the previous row before the DB agreed, and a button group cannot
-    survive a sort anyway (``_pin_ai_row`` destroys and rebuilds item
-    widgets). The DB is the only authority: ``_refresh_row_controls`` sets
-    every radio from ``settings.get_active_model_id()``, with signals
-    blocked, after anything that could have changed it.
-    """
-
-    def __init__(self, page: ModelsPage, model_id: int) -> None:
-        super().__init__()
-        self.model_id = model_id
-        row = QHBoxLayout(self)
-        row.setContentsMargins(0, 0, 0, 0)
-        self.radio = QRadioButton(self)
-        self.radio.setAutoExclusive(False)
-        self.radio.clicked.connect(lambda _checked=False: page.toggle_active_row(model_id))
-        row.addWidget(self.radio, 0, Qt.AlignmentFlag.AlignCenter)
-
-
-class _RowActions(QWidget):
-    """The icon buttons in one row's Actions cell.
-
-    Each button binds its own row's id at construction, so a click acts on the
-    row it sits in whatever is selected and wherever a sort has since moved it.
-    The synthetic AI Config row gets none of them — there is no model behind
-    it to edit or delete.
-    """
-
-    def __init__(self, page: ModelsPage, model_id: int) -> None:
-        super().__init__()
-        self.model_id = model_id
-        row = QHBoxLayout(self)
-        row.setContentsMargins(ACTION_ROW_MARGIN, 0, ACTION_ROW_MARGIN, 0)
-        row.setSpacing(ACTION_ROW_SPACING)
-        self.edit_button: QPushButton | None = None
-        self.delete_button: QPushButton | None = None
-        if model_id != AI_CONFIG_SENTINEL_ID:
-            self.edit_button = self._button(ACTION_EDIT, "")
-            self.edit_button.clicked.connect(lambda _checked=False: page.edit_row(model_id))
-            row.addWidget(self.edit_button)
-            self.delete_button = self._button(ACTION_DELETE, "danger")
-            self.delete_button.clicked.connect(lambda _checked=False: page.delete_row(model_id))
-            row.addWidget(self.delete_button)
-        row.addStretch(1)
-
-    def _button(self, glyph: str, object_name: str) -> QPushButton:
-        button = QPushButton(glyph, self)
-        if object_name:
-            button.setObjectName(object_name)
-        button.setFixedSize(ACTION_BUTTON_WIDTH, ACTION_BUTTON_HEIGHT)
-        return button
-
-    def buttons(self) -> list[QPushButton]:
-        return [b for b in (self.edit_button, self.delete_button) if b is not None]
 
 
 class ModelsPage(QWidget):
@@ -347,9 +247,6 @@ class ModelsPage(QWidget):
     def _build_table(self) -> QTreeWidget:
         self.tree = QTreeWidget(self)
         self.tree.setObjectName("modelTable")
-        # Every row the same height, whatever a row widget's font fallback
-        # does — belt to the fixed-size braces on the action buttons.
-        self.tree.setUniformRowHeights(True)
         self.tree.setColumnCount(len(COLUMNS))
         self.tree.setHeaderLabels(list(COLUMNS))
         self.tree.setRootIsDecorated(False)
@@ -360,10 +257,7 @@ class ModelsPage(QWidget):
         # the user's widths stick. A Stretch section can't be dragged.
         header = self.tree.header()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        # The last section holds the row's buttons and nothing else, so it
-        # neither stretches nor resizes — it is exactly as wide as they are.
-        header.setStretchLastSection(False)
-        self._fix_actions_column()
+        header.setStretchLastSection(True)
         # Sorting is driven by hand (`_on_header_clicked`), not
         # `setSortingEnabled(True)`: that flag re-sorts on every insert using
         # whatever column/order the header defaults to (column 0 descending),
@@ -376,14 +270,7 @@ class ModelsPage(QWidget):
         self.tree.currentItemChanged.connect(lambda _cur, _prev: self._update_actions())
         return self.tree
 
-    def _fix_actions_column(self) -> None:
-        """Pin the Actions column to its buttons' width, drag- and sort-proof."""
-        self.tree.header().setSectionResizeMode(ACTIONS_COLUMN, QHeaderView.ResizeMode.Fixed)
-        self.tree.setColumnWidth(ACTIONS_COLUMN, ACTIONS_COLUMN_WIDTH)
-
     def _on_header_clicked(self, column: int) -> None:
-        if column == ACTIONS_COLUMN:
-            return  # the buttons are not data — clicking their header sorts nothing
         if self._sort_column == column:
             self._sort_order = (
                 Qt.SortOrder.DescendingOrder
@@ -408,10 +295,6 @@ class ModelsPage(QWidget):
         if self._sort_column is not None:
             self.tree.sortItems(self._sort_column, self._sort_order)
         self._pin_ai_row()
-        # `_pin_ai_row` takes that row out of the tree and puts it back, which
-        # destroys its item widgets — so the radio and the buttons are
-        # (re-)installed after every sort, never before one.
-        self._sync_row_controls()
 
     def _pin_ai_row(self) -> None:
         """Keep the synthetic "Use AI Config" row first, regardless of sort.
@@ -457,9 +340,6 @@ class ModelsPage(QWidget):
         # kills header-click sorting. Re-assert them whatever the blob said.
         header.setSectionsClickable(True)
         header.setSortIndicatorShown(True)
-        # A blob also carries widths and resize modes; the Actions column's are
-        # not the user's to change, so they are re-asserted whatever it said.
-        self._fix_actions_column()
         return ok
 
     def _autosize_columns(self) -> None:
@@ -467,160 +347,37 @@ class ModelsPage(QWidget):
             return  # only before the user has had a chance to drag them
         self._columns_sized = True
         for i in range(len(COLUMNS)):
-            if i == ACTIONS_COLUMN:
-                continue  # sized to its buttons, not to its (empty) cells
             # resizeColumnToContents lands on the exact text width, which the
             # view then elides anyway ("8/8/26 7:06 P…"). The pad is what makes
             # a typical value fit; the header stays Interactive, so a drag wins.
             self.tree.resizeColumnToContents(i)
             self.tree.setColumnWidth(i, self.tree.columnWidth(i) + COLUMN_PADDING)
         self.tree.setColumnWidth(0, max(self.tree.columnWidth(0), 260))
-        # Its cells are empty — the radio is an item widget, which
-        # resizeColumnToContents never measures. Stays Interactive, though:
-        # unlike Actions, this is the user's to drag.
-        self.tree.setColumnWidth(ACTIVE_COLUMN, max(self.tree.columnWidth(ACTIVE_COLUMN), ACTIVE_COLUMN_MIN_WIDTH))
-        self._fix_actions_column()
 
     def _build_action_row(self) -> QHBoxLayout:
-        # What's left here is selection-scoped only: activate, edit and delete
-        # belong to a row and moved into it. Nothing here carries the action or
-        # danger role anymore, so a plain left-aligned row is enough.
+        # Destructive alone on the far left, the green primary on the far
+        # right (JL) — the two can't end up neighbours.
         row = QHBoxLayout()
         self.buttons: dict[str, QPushButton] = {}
-        for text, handler in (
-            ("Images…", self.images_selected),
-            ("Headstamps…", self.headstamps_selected),
-            ("Evaluate…", self.evaluate_selected),
-            ("Export…", self.export_selected),
+        for text, object_name, handler in (
+            ("Delete", "danger", self.delete_selected),
+            ("Edit…", "", self.edit_selected),
+            ("Images…", "", self.images_selected),
+            ("Headstamps…", "", self.headstamps_selected),
+            ("Evaluate…", "", self.evaluate_selected),
+            ("Export…", "", self.export_selected),
+            ("Activate", "action", self.activate_selected),
         ):
             button = QPushButton(text, self)
+            if object_name:
+                button.setObjectName(object_name)
             button.clicked.connect(handler)
             row.addWidget(button)
             self.buttons[text] = button
+            if text == "Delete":
+                row.addStretch(1)
         self.buttons["Images…"].setVisible(False)
-        row.addStretch(1)
         return row
-
-    # ----- per-row actions ----------------------------------------------------
-
-    def _row_item(self, model_id: int) -> QTreeWidgetItem | None:
-        for i in range(self.tree.topLevelItemCount()):
-            item = self.tree.topLevelItem(i)
-            if item is not None and int(item.data(0, Qt.ItemDataRole.UserRole)) == model_id:
-                return item
-        return None
-
-    def row_actions(self, model_id: int) -> _RowActions | None:
-        """The live buttons for a row, looked up fresh.
-
-        Never hold one: a sort or a refresh destroys an item's widget, and the
-        replacement ``_sync_row_controls`` installs is a different object.
-        """
-        item = self._row_item(model_id)
-        widget = self.tree.itemWidget(item, ACTIONS_COLUMN) if item is not None else None
-        return widget if isinstance(widget, _RowActions) else None
-
-    def active_radio(self, model_id: int) -> QRadioButton | None:
-        """A row's Active-column radio, looked up fresh — same rule as above."""
-        item = self._row_item(model_id)
-        widget = self.tree.itemWidget(item, ACTIVE_COLUMN) if item is not None else None
-        return widget.radio if isinstance(widget, _ActiveCell) else None
-
-    def _sync_row_controls(self) -> None:
-        """(Re-)install every row's radio and buttons and re-derive their state."""
-        active_id = self.settings.get_active_model_id()
-        for i in range(self.tree.topLevelItemCount()):
-            item = self.tree.topLevelItem(i)
-            if item is None:
-                continue
-            model_id = int(item.data(0, Qt.ItemDataRole.UserRole))
-            cell = self.tree.itemWidget(item, ACTIVE_COLUMN)
-            if not isinstance(cell, _ActiveCell) or cell.model_id != model_id:
-                cell = _ActiveCell(self, model_id)
-                self.tree.setItemWidget(item, ACTIVE_COLUMN, cell)
-            widget = self.tree.itemWidget(item, ACTIONS_COLUMN)
-            if not isinstance(widget, _RowActions) or widget.model_id != model_id:
-                widget = _RowActions(self, model_id)
-                self.tree.setItemWidget(item, ACTIONS_COLUMN, widget)
-            self._refresh_row_controls(cell, widget, active_id)
-
-    def _refresh_row_controls(self, cell: _ActiveCell, widget: _RowActions, active_id: int | None) -> None:
-        is_ai_row = cell.model_id == AI_CONFIG_SENTINEL_ID
-        already_active = (active_id is None) if is_ai_row else cell.model_id == active_id
-        # Blocked, because this is us telling the widget what the DB says —
-        # never the widget telling us. The radio stays enabled on the active
-        # row: clicking it is a no-op that re-asserts, not a disabled control.
-        blocked = cell.radio.blockSignals(True)
-        cell.radio.setChecked(already_active)
-        cell.radio.blockSignals(blocked)
-        cell.radio.setEnabled(not self._busy)
-        if is_ai_row:
-            cell.radio.setToolTip(TOOLTIP_ACTIVE_AI if already_active else TOOLTIP_ACTIVATE_AI)
-            return
-        cell.radio.setToolTip(TOOLTIP_ACTIVE if already_active else TOOLTIP_ACTIVATE)
-        if widget.edit_button is not None:
-            widget.edit_button.setEnabled(not self._busy)
-            widget.edit_button.setToolTip(TOOLTIP_EDIT)
-        if widget.delete_button is not None:
-            # Mirrors ModelRepo.delete's own refusal (see TOOLTIP_DELETE_ACTIVE).
-            widget.delete_button.setEnabled(not already_active and not self._busy)
-            widget.delete_button.setToolTip(TOOLTIP_DELETE_ACTIVE if already_active else TOOLTIP_DELETE)
-
-    def is_active_row(self, model_id: int) -> bool:
-        active_id = self.settings.get_active_model_id()
-        return (active_id is None) if model_id == AI_CONFIG_SENTINEL_ID else model_id == active_id
-
-    def toggle_active_row(self, model_id: int) -> None:
-        """What the Active column's radio does when clicked.
-
-        Clicking the checked one must change nothing — but a non-exclusive
-        QRadioButton has already toggled itself off by the time the click
-        reaches here, so "no-op" means re-asserting the DB's answer.
-        """
-        if self.is_active_row(model_id):
-            self._sync_row_controls()
-            return
-        self.activate_row(model_id)
-
-    def activate_row(self, model_id: int) -> None:
-        """A row's own activation, independent of what is selected."""
-        if model_id == AI_CONFIG_SENTINEL_ID:
-            self._select(model_id)
-            self._activate(None)
-            return
-        model = self._row_model(model_id)
-        if model is not None:
-            self._activate(model)
-
-    def edit_row(self, model_id: int) -> None:
-        model = self._row_model(model_id)
-        if model is not None:
-            self._edit(model)
-
-    def delete_row(self, model_id: int) -> None:
-        model = self._row_model(model_id)
-        if model is not None:
-            self._delete(model)
-
-    def _row_model(self, model_id: int) -> Model | None:
-        """A row's model, re-read from the DB, with the row selected to match.
-
-        Read fresh rather than taken from ``_rows``: a button can outlive the
-        row it was built for (another window, the Tk UI, a community import).
-        """
-        model = self.models.get(model_id)
-        if model is None:
-            self.refresh()  # the row is stale — redraw rather than act on it
-            return None
-        self._select(model_id)
-        return model
-
-    def _select(self, model_id: int) -> None:
-        for i in range(self.tree.topLevelItemCount()):
-            item = self.tree.topLevelItem(i)
-            if item is not None and int(item.data(0, Qt.ItemDataRole.UserRole)) == model_id:
-                self.tree.setCurrentItem(item)
-                return
 
     def set_images_hook(self, open_images: Callable[[Model], None] | None) -> None:
         """Attach the training-image browser (increment 8).
@@ -728,19 +485,18 @@ class ModelsPage(QWidget):
 
     def _add_ai_row(self, active: bool) -> None:
         item = self._add_row(
-            [AI_CONFIG_NAME, "", EMPTY_VALUE, "AI Config", "HTTP", "", "", "", ""],
+            [AI_CONFIG_NAME, ACTIVE_MARK if active else "", EMPTY_VALUE, "AI Config", "HTTP", "", "", ""],
             # Typed to match each column's real-row sort values (str.casefold
             # or int) — irrelevant to where this row ends up, since `_pin_ai_row`
             # always pulls it back to index 0 after any sort, but a mismatched
             # type would otherwise trip `_SortableItem.__lt__`'s comparison.
             [
                 AI_CONFIG_NAME.casefold(),
-                ACTIVE_SORT_FIRST if active else ACTIVE_SORT_REST,
+                ACTIVE_MARK if active else "",
                 EMPTY_VALUE.casefold(),
                 "ai config",
                 "http",
                 0,
-                "",
                 "",
                 "",
             ],
@@ -766,18 +522,17 @@ class ModelsPage(QWidget):
         self._add_row(
             [
                 model.name,
-                "",
+                ACTIVE_MARK if active else "",
                 cartridge_name,
                 describe_type(model),
                 model.model_mode,
                 str(image_count),
                 trained,
                 formatting.format_datetime(model.last_training_date),
-                "",
             ],
             [
                 model.name.casefold(),
-                ACTIVE_SORT_FIRST if active else ACTIVE_SORT_REST,
+                ACTIVE_MARK if active else "",
                 cartridge_name.casefold(),
                 describe_type(model).casefold(),
                 model.model_mode.casefold(),
@@ -787,7 +542,6 @@ class ModelsPage(QWidget):
                 # display text above — a locale format doesn't sort
                 # chronologically in general (e.g. US "9/1/26" vs "12/1/25").
                 model.last_training_date or "",
-                "",
             ],
             model.id,
             model,
@@ -820,13 +574,16 @@ class ModelsPage(QWidget):
         return self.models.get(model_id)
 
     def _update_actions(self) -> None:
-        """The bar follows the selection; the row buttons follow their row."""
         model_id = self.selected_id()
         is_ai_row = model_id == AI_CONFIG_SENTINEL_ID
         model = next((m for row_id, m in self._rows if row_id == model_id), None)
+        active_id = self.settings.get_active_model_id()
+        already_active = (active_id is None) if is_ai_row else (model is not None and model.id == active_id)
         real = model is not None and not self._busy
 
-        self.buttons["Export…"].setEnabled(real)
+        self.buttons["Activate"].setEnabled((real or (is_ai_row and not self._busy)) and not already_active)
+        for name in ("Edit…", "Export…", "Delete"):
+            self.buttons[name].setEnabled(real)
         # A community model's training images are the publisher's: it can't be
         # trained here, so there is no training set to curate. (Tk leaves the
         # browser open for these; the Train tab then refuses.)
@@ -837,7 +594,6 @@ class ModelsPage(QWidget):
         self.buttons["Headstamps…"].setEnabled(real)
         self.buttons["Evaluate…"].setEnabled(real and bool(model and model.model_path))
         self.hint_label.setText(self._hint_for(model, is_ai_row))
-        self._sync_row_controls()
 
     def _hint_for(self, model: Model | None, is_ai_row: bool) -> str:
         # The AI row explains itself in its own tooltip (see _add_ai_row); the
@@ -854,10 +610,19 @@ class ModelsPage(QWidget):
     # ----- activation ---------------------------------------------------------
 
     def activate_selected(self) -> None:
-        """Activate whatever is selected — the row radio's selection-scoped twin."""
         model_id = self.selected_id()
-        if model_id is not None:
-            self.activate_row(model_id)
+        if model_id is None:
+            return
+        if model_id == AI_CONFIG_SENTINEL_ID:
+            self._activate(None)
+            return
+        # Read fresh: the row can be stale (another window, the Tk UI, a
+        # community import), in which case redraw rather than act on it.
+        model = self.models.get(model_id)
+        if model is None:
+            self.refresh()
+            return
+        self._activate(model)
 
     def _activate(self, model: Model | None) -> None:
         """Make ``model`` the active one; ``None`` is AI Config mode."""

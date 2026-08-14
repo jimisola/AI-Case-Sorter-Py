@@ -342,13 +342,14 @@ changed since increment 3, by surface:
   while training" with Training settings… / Start training. Behind a stack:
   when the active model isn't trainable here, the page is a guidance panel
   saying which case it is and jumping to Models.
-- **Models and Community share one idiom.** Row-scoped actions ride in the
-  row: on Models, activation *is* the Active column's radio, with ✎ edit and
-  × delete as fixed-size icon buttons beside it (the AI Config row has the
-  radio alone). Sortable columns above, selection-scoped
-  Images…/Headstamps…/Evaluate…/Export… on the bar below. Community's row
-  button carries the whole lifecycle — install → update → remove — and a
-  second click queues behind a running download.
+- **Models and Community share one idiom.** Sortable columns above, one
+  selection-scoped action bar below — destructive far left, the primary far
+  right. Models: Delete … Activate, with the Active column left as a
+  "● ACTIVE" marker. Community: Remove plus one state-driven primary
+  (Download / Update / "Already installed"), which carries the whole
+  lifecycle — install → update → remove — and queues a second download
+  behind a running one. Row-embedded controls were tried on both and
+  reverted (see the decision rows).
 - **Sidebar.** Sort / Train / Models / Community with Settings pinned below,
   now inked from hand-authored SVGs by the live palette (the emoji wishlist
   item, done), plus an **AI Config** activity that appears beside a muted
@@ -570,12 +571,13 @@ revisitable; "Open" = needs a decision.
 | Training-console close mid-run asks and cancels (Tk closes silently, stranding the subprocess) | Changed — fixes a Tk hazard | #6 |
 | Crop + prediction are the Sort page's primary panel; the live camera is an off-by-default toggle (Tk shows the feed) | Changed — Seth, the Windows app's layout; no frame fetched/painted while off | `app.py` |
 | Image-processing settings are per active model, mirrored into the global `config.image_proc` (both UIs previously tuned the global only) | Changed — Seth; a pristine model row inherits the global, so nothing is lost | `settings_imageproc.py` |
-| Community row button removes the local copy when installed and current (Tk: download only) | Changed — closes the install→update→remove loop | `community_page.py` |
+| Community's bar removes the local copy when installed and current (Tk: download only) | Changed — closes the install→update→remove loop. *Was a per-row icon button; the behavior stayed when the trigger moved to the bar* | `community_page.py` |
 | A second download click queues rather than being ignored | Changed — JL; queue position shown as "(2 of N)" | `community_page.py` |
 | AI Config is a sidebar activity that navigates to Settings → AI Config (it has no page of its own) | Changed — Seth; mirrors Train's slot in the other mode | `app.py` |
 | The sidebar is two groups: Sort/Models/Community, a hairline, then the Train / AI Config pair (Settings still pinned) | Changed — JL; the pair is one choice, and the line says so | `app.py`, `theme.py` |
 | Train and AI Config are both always in the sidebar, muted (not disabled) when not the live mode; the muted one explains itself (Tk hides both) | Changed — JL never discovered Train existed while it was hidden; the mirror is symmetric | `app.py`, `train_page.py`, `settings_ai.py` |
-| Models activation is the Active column's radio, not a per-row ✓ button plus "● ACTIVE" text (Tk: a card's Activate button) | Changed — JL: all-green rows read as "everything is active", and active was said three ways | `models_page.py` |
+| ~~Models activation is the Active column's radio, not a per-row ✓ button plus "● ACTIVE" text~~ | **Reverted 2026-08-14** — JL lived with the row controls and chose the bar; activation is Activate on the selection-scoped bar again (Tk's own idiom), with "● ACTIVE" back as the column's marker | `models_page.py` |
+| ~~Both tables carry row-scoped controls (Models ✎/×, Community ↓/↻/×)~~ | **Reverted 2026-08-14** — JL, after living with them: one bar per table, scoped to the selection. Everything the experiment brought that isn't the trigger surface stayed (download queue, `installed_state` sync on `models/changed`, the Includes column, full sorting) | `models_page.py`, `community_page.py` |
 | Themes are also a panel, applying on click, alongside Settings → Theme | Changed — trying a theme and configuring one are different activities | `app.py` |
 | Panels are QtAds, with "Re-dock panels" as a guaranteed escape hatch | Changed — stock `QDockWidget` drag-docking was unusable on JL's box | `app.py` |
 
@@ -744,8 +746,9 @@ candidate work item; per-item agent tasks in a future increment.
 | 2026-08-13 | **Support package** (Seth): Help → Export support package… — the configuration as a pasteable report plus a ZIP with a machine-readable `config.json`. Redaction happens at collection time (API key as set/not set, paths relative to the data root, auth cache never read). |
 | 2026-08-13 | Casing convention: **sentence case for controls, Title Case for window/panel titles** (JL). Zoom sliders (50–200%, persisted per panel) on the classification history and serial monitor. |
 | 2026-08-14 | **Docks moved from `QDockWidget` to Qt Advanced Docking System** (`pyside6-qtads`, LGPL-2.1+, ~600 KB wheel that pins the same `PySide6-Essentials==6.11.1`). Two rounds of stock-Qt fixes still left drag-docking unusable on JL's Linux box; QtAds brings VS Code-style drop-indicator overlays and lays out in its own splitters. Net *removal*: the whole QMainWindowLayout workaround stack (transition repaint, collapsed-dock floor, 1px resize nudge) is gone — those failure modes don't exist here. API differences that leak: `isClosed()` not `isHidden()`, `setFloating()` takes no argument (re-dock is `addDockWidget`), and `addDockWidget` re-opens a closed panel. Theming is `ads--*` QSS with QtAds's own sheet off (`DisableStylesheet`), which also means re-declaring its button-icon rules. No new system deps (`ldd`: libGL/libxkbcommon/libxcb, all already installed by the qtui CI job). |
-| 2026-08-14 | **Row actions on the Models table** (JL), matching Community's: ✓/✎/× as fixed-size icon buttons in the row, the AI Config row getting ✓ alone; the bottom bar keeps only the selection-scoped Images…/Headstamps…/Evaluate…/Export…. Community's button carries the full install → update → remove lifecycle, and a second click queues behind the running download. |
+| 2026-08-14 | **Row actions on the Models table** (JL), matching Community's: ✓/✎/× as fixed-size icon buttons in the row, the AI Config row getting ✓ alone; the bottom bar keeps only the selection-scoped Images…/Headstamps…/Evaluate…/Export…. Community's button carries the full install → update → remove lifecycle, and a second click queues behind the running download. **Superseded the same day — see the revert below.** |
 | 2026-08-14 | **Foot strips, green primary far right** (JL) on both Sort and Train, with the run counters and the template picker moved onto the slot grid's own header row. Train's capture reads as one column under the image; its counts sit behind a 50/50 splitter and reflow into columns. |
 | 2026-08-14 | **Themes panel + AI Config activity** (Seth via JL): a panel listing every theme, applying on click and synced with Settings → Theme; an AI Config sidebar entry that takes Train's place in AI Config mode and navigates to its Settings section (it has no page of its own — a second mount would double-parent the widget). |
 | 2026-08-14 | **In-app guide is one file** (`docs/guide/GUIDE.md`), rendered by GitHub and by the guide panel alike, opened at the topic for wherever the user is. `topic_for` covers every activity and Settings section, and a test pins each answer to a real heading so the two can't drift. |
 | 2026-08-14 | **Sidebar in two groups** (JL): Sort/Models/Community, a palette-driven hairline, then Train and AI Config — both always visible, exactly one live (trainable local model → Train; no active model → AI Config; a community model → neither), tooltips saying which. The muted AI Config now mirrors Train's explainer page instead of dumping the user in Settings: its notice names the active model and jumps to Models, with the form still visible below it. |
+| 2026-08-14 | **Row actions reverted; both tables act from a selection-scoped bar** (JL, after living with the experiment above). Models is Delete … Activate with "● ACTIVE" back as the Active column's marker; Community is Remove plus one state-driven primary whose label and role follow the selected row's `installed_state` and the download queue. Only the trigger surface moved: the queue, the `models/changed` state sync, the Includes column and full column sorting all stayed. Net simplification — no item widgets in either table, so nothing has to be rebuilt after a sort or `_pin_ai_row`. |

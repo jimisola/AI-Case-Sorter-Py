@@ -55,6 +55,7 @@ from sorter.qtui.dialog_headstamps import HeadstampManagerDialog
 from sorter.qtui.dialog_model_editor import ModelEditorDialog
 from sorter.qtui.dialog_slot_assign import SlotAssignDialog
 from sorter.qtui.dialog_template import NewTemplateDialog
+from sorter.qtui.models_page import ACTIVE_MARK, COLUMNS
 from sorter.qtui.slot_grid import EMPTY_HINT
 
 from .conftest import drain_until, seed_model
@@ -352,11 +353,10 @@ def test_demo_c_model_lifecycle(config, window, monkeypatch, tmp_path) -> None:
     created = next(m for m in ModelRepo(config.db).list() if m.name == "Demo model")
     assert created.model_mode == "convnext_small"
 
-    # 2. Activate it: the Train activity un-mutes, the library checks the row.
-    select_model(page, created.id)
+    # 2. Activate it: the Train activity un-mutes, the library marks the row.
     activate_row(page, created.id)
     assert drain_until(window, lambda: not window.sidebar_buttons["Train"].property("unavailable"))
-    assert page.active_radio(created.id).isChecked()
+    assert page.tree.currentItem().text(COLUMNS.index("Active")) == ACTIVE_MARK
     assert SettingsRepo(config.db).get_active_model_id() == created.id
 
     # 3. Headstamps, through the manager the Models page opens.
@@ -403,7 +403,6 @@ def test_demo_c_model_lifecycle(config, window, monkeypatch, tmp_path) -> None:
 
     # 6. Activate the copy: the dashboard follows the active model, so the
     #    slot the original had routed is empty again.
-    select_model(page, imported.id)
     activate_row(page, imported.id)
     assert drain_until(window, lambda: SettingsRepo(config.db).get_active_model_id() == imported.id)
     assert window.slot_grid.cards[1].names_label.text() == EMPTY_HINT
@@ -414,8 +413,7 @@ def test_demo_c_model_lifecycle(config, window, monkeypatch, tmp_path) -> None:
     # 7. Back to AI Config mode: the pair swaps which one is live. Neither is
     #    ever hidden (JL: hidden activities are undiscoverable) — the muted one
     #    explains itself when clicked.
-    select_model(page, -1)  # the synthetic "Use AI Config" row
-    activate_row(page, -1)
+    activate_row(page, -1)  # the synthetic "Use AI Config" row
     assert drain_until(window, lambda: window.sidebar_buttons["Train"].property("unavailable"))
     assert not window.sidebar_buttons["Train"].isHidden()
     assert not window.sidebar_buttons["AI Config"].property("unavailable")
@@ -427,7 +425,6 @@ def test_demo_c_model_lifecycle(config, window, monkeypatch, tmp_path) -> None:
 
     # And the muted AI Config, back on the imported model, lands on guidance
     # that names it rather than dumping the user in Settings unexplained.
-    select_model(page, imported.id)
     activate_row(page, imported.id)
     assert drain_until(window, lambda: window.sidebar_buttons["AI Config"].property("unavailable") is True)
     window.sidebar_buttons["AI Config"].click()
@@ -444,10 +441,10 @@ def select_model(page: Any, model_id: int) -> None:
 
 
 def activate_row(page: Any, model_id: int) -> None:
-    """Activate a model the way the library does it: that row's Active radio."""
-    radio = page.active_radio(model_id)
-    assert radio is not None, f"no active radio on row {model_id}"
-    radio.click()
+    """Activate a model the way the library does it: select it, then Activate."""
+    select_model(page, model_id)
+    assert page.buttons["Activate"].isEnabled(), f"Activate is dead for row {model_id}"
+    page.buttons["Activate"].click()
 
 
 # ----- (c2) sorting templates carry a whole layout ----------------------------

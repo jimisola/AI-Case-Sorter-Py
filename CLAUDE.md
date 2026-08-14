@@ -753,13 +753,19 @@ settings row is what the two actually share.
   first-run panel and Train's unavailable panel are both a `QStackedWidget`
   over the page's own content, swapped by a re-evaluate on `mode/changed` (or
   an indicator paint), never a modal and never a disabled sidebar entry.
-  `models_page`'s Active column is the same instinct: activation is stated
-  once, by the radio in the column named for it — not by a green ✓ per row,
-  a disabled button *and* an "● ACTIVE" cell. The radios are
-  `autoExclusive(False)` and driven from the DB with signals blocked
-  (`_refresh_row_controls`): Qt owning the exclusivity would let a click
-  uncheck a row before the DB agreed, and no button group survives
-  `_pin_ai_row` rebuilding the item widgets anyway.
+- **Both tables act from a selection-scoped bar, not from the rows.** Models
+  and Community each put every row-changing action on the bar under the
+  table, following `currentItem`: Models is Delete (danger, far left) …
+  Activate (action, far right), Community is Remove (danger, far left) and
+  one state-driven primary (far right) whose label/role come from
+  `installed_state` — Download / Update / "Already installed" — plus the
+  queue, so a row already downloading or waiting says so instead of offering
+  the click again. The Active column is a **marker** (`ACTIVE_MARK`), not a
+  control. Row-embedded controls (a radio in Active, ✎/× icon buttons in an
+  Actions column, the catalogue's ↓/↻/× button) were built, shipped behind
+  `--qt` and then reverted: JL lived with them and chose the bar. Don't
+  reintroduce item widgets in these tables — `_pin_ai_row` and every sort
+  destroy them, which is machinery the bar simply doesn't need.
 - **The notify/confirm seam.** Anything that would open a native modal —
   `win.notify`, a page's `confirm` / `ask_text` / `ask_open_path` /
   `ask_save_path` / `ask_import_choice` — is an **instance attribute**, not a

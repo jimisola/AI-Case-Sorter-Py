@@ -2,15 +2,17 @@
 
 Behavior reference: ``ui/tab_community.py``. Same catalogue, same filters, the
 same download → ``import_model(community_download=True)`` path, and the same
-post-install messaging; the layout is the table-with-per-row-actions idiom the
+post-install messaging; the layout is the table-plus-action-bar idiom the
 Models activity uses rather than Tk's stack of wide cards, so the two libraries
 read alike.
 
-Each row's button carries the **whole local lifecycle** rather than Download
-alone: ↓ install, ↻ update in place, × remove the local copy, decided per row
-by ``installed_state`` against the library and re-derived on ``models/changed``
-so a delete anywhere is reflected here. A second click while a transfer runs
-queues behind it (``_enqueue_download``) instead of being dropped.
+The bar carries the **whole local lifecycle** rather than Download alone: one
+state-driven primary (download / update in place / nothing to do) plus Remove
+for the installed copy, both scoped to the selected row and decided by
+``installed_state`` against the library — re-derived on ``models/changed``, so
+a delete anywhere is reflected here. A second click while a transfer runs
+queues behind it (``_enqueue_download``) instead of being dropped. (Per-row
+icon buttons were tried and dropped: JL lived with them and chose the bar.)
 
 Four things worth knowing:
 
@@ -67,9 +69,6 @@ from ..data.repository import ModelRepo
 from . import formatting
 
 COLUMNS = ("Model", "Cartridge", "Version", "Includes", "Headstamps", "Images", "Size", "Published", "Author", "State")
-# The row's action button rides in one extra, unlabelled column past the data
-# ones. It carries no value, so it never sorts.
-ACTIONS_COLUMN = len(COLUMNS)
 # What the search box narrows the loaded rows against, in-place.
 LIVE_FILTER_COLUMNS = (COLUMNS.index("Model"), COLUMNS.index("Cartridge"), COLUMNS.index("Author"))
 
@@ -90,28 +89,22 @@ STATE_LABELS = {
     STATE_UPDATE: "Update available",
     STATE_INSTALLED: "Installed",
 }
-# Icon-only buttons (JL live-testing): a text label was clipped by the
-# narrow trailing column, so the glyph carries the action and the tooltip
-# carries the words. Unicode, not icon assets — themes recolor text for free.
-# Plain arrows only: exotic glyphs (⭳) render from a fallback font with
-# different metrics, so a state flip resized the button and the row (JL).
-# The full loop is install → update → remove (JL): an installed, current row
-# offers deletion of the local copy rather than a dead checkmark.
+# The primary button says what the selected row's state makes possible; an
+# installed, current row leaves it dead and hands the action to Remove, which
+# is what closes the install → update → remove loop (JL).
 ACTION_LABELS = {
-    STATE_DOWNLOAD: "↓",
-    STATE_UPDATE: "↻",
-    STATE_INSTALLED: "×",
+    STATE_DOWNLOAD: "Download model",
+    STATE_UPDATE: "Update model",
+    STATE_INSTALLED: "Already installed",
 }
 ACTION_TOOLTIPS = {
-    STATE_DOWNLOAD: "Download this model",
+    STATE_DOWNLOAD: "Download and install this model",
     STATE_UPDATE: "Update the installed copy to this version",
-    STATE_INSTALLED: "Remove the installed copy from this machine",
+    STATE_INSTALLED: "This version is already installed",
 }
-# Fixed in BOTH dimensions: sized for any glyph plus QSS padding, so neither
-# the trailing column (ResizeToContents ignores item widgets) nor a state
-# flip's glyph swap can change the button — or the row height under it.
-ACTION_BUTTON_WIDTH = 36
-ACTION_BUTTON_HEIGHT = 22
+DOWNLOADING_LABEL = "Downloading…"
+REMOVE_LABEL = "Remove"
+REMOVE_TOOLTIP = "Remove the installed copy from this machine"
 # What the archive carries (the type filter's counterpart in the table), as
 # humans read it; the raw WinForms enum name survives for anything unmapped.
 INCLUDES_LABELS = {
@@ -125,7 +118,7 @@ INCLUDES_LABELS = {
 _STATE_SORT_RANK = {STATE_DOWNLOAD: 0, STATE_UPDATE: 1, STATE_INSTALLED: 2}
 
 EMPTY_VALUE = "—"
-SELECT_HINT = "Select a model to see its description; each row's button installs it."
+SELECT_HINT = "Select a model to see its description and install it."
 SIGNED_OUT_TEXT = (
     "Sign in to browse and download community models.\n\n"
     "Everything else in the app works signed out — the community is the only part that needs an account."
@@ -371,21 +364,15 @@ class CommunityPage(QWidget):
         self.tree = QTreeWidget(page)
         # Shares the models table's palette role — one table look in the app.
         self.tree.setObjectName("modelTable")
-        # Every row the same height, whatever a row widget's font fallback
-        # does — belt to the fixed-size braces on the action buttons.
-        self.tree.setUniformRowHeights(True)
-        self.tree.setColumnCount(len(COLUMNS) + 1)
-        self.tree.setHeaderLabels([*COLUMNS, ""])
+        self.tree.setColumnCount(len(COLUMNS))
+        self.tree.setHeaderLabels(list(COLUMNS))
         self.tree.setRootIsDecorated(False)
         self.tree.setAlternatingRowColors(False)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         header = self.tree.header()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        # The last section is the action button, which has to hold exactly its
-        # own width — so nothing stretches, same as the Models table.
-        header.setStretchLastSection(False)
-        header.setSectionResizeMode(ACTIONS_COLUMN, QHeaderView.ResizeMode.ResizeToContents)
+        header.setStretchLastSection(True)
         # Sorting is driven by hand, not `setSortingEnabled(True)`: that flag
         # re-sorts on every insert using whatever column/order the header
         # defaults to (column 0 descending), which would sort the table
@@ -398,8 +385,6 @@ class CommunityPage(QWidget):
         return self.tree
 
     def _on_header_clicked(self, column: int) -> None:
-        if column >= len(COLUMNS):
-            return  # the action button is not data — clicking it sorts nothing
         if self._sort_column == column:
             self._sort_order = (
                 Qt.SortOrder.DescendingOrder
@@ -415,71 +400,6 @@ class CommunityPage(QWidget):
     def _apply_sort(self) -> None:
         if self._sort_column is not None:
             self.tree.sortItems(self._sort_column, self._sort_order)
-        self._sync_row_actions()
-
-    # ----- per-row actions ----------------------------------------------------
-
-    def _build_row_action(self, uid: str) -> QPushButton:
-        button = QPushButton("")
-        button.setFixedSize(ACTION_BUTTON_WIDTH, ACTION_BUTTON_HEIGHT)
-        button.clicked.connect(lambda _checked=False, u=uid: self.download_row(u))
-        return button
-
-    def row_button(self, uid: str) -> QPushButton | None:
-        """The live action button for a row, looked up fresh.
-
-        Never hold one: a sort can destroy an item's widget, and the
-        replacement ``_sync_row_actions`` installs is a different object.
-        """
-        for i in range(self.tree.topLevelItemCount()):
-            item = self.tree.topLevelItem(i)
-            if item is not None and item.data(0, Qt.ItemDataRole.UserRole) == uid:
-                button = self.tree.itemWidget(item, ACTIONS_COLUMN)
-                return button if isinstance(button, QPushButton) else None
-        return None
-
-    def _sync_row_actions(self) -> None:
-        """Re-install any button that went missing, and relabel every row.
-
-        Label, palette role and enabled state all come from ``installed_state``
-        — the same computation the page has always used, now per row.
-        """
-        for i in range(self.tree.topLevelItemCount()):
-            item = self.tree.topLevelItem(i)
-            if item is None:
-                continue
-            uid = str(item.data(0, Qt.ItemDataRole.UserRole) or "")
-            button = self.tree.itemWidget(item, ACTIONS_COLUMN)
-            if not isinstance(button, QPushButton):
-                button = self._build_row_action(uid)
-                self.tree.setItemWidget(item, ACTIONS_COLUMN, button)
-            info = next((m for m in self._models if m.model_uid == uid), None)
-            state = self.installed_state(info) if info is not None else STATE_DOWNLOAD
-            queued = {q[0].model_uid for q in self._download_queue}
-            if uid == self._active_download_uid:
-                # The row being downloaded right now (JL: it must show).
-                button.setText("…")
-                button.setToolTip("Downloading…")
-                button.setEnabled(False)
-                self._set_role(button, "update")
-            elif uid in queued:
-                position = next(i for i, q in enumerate(self._download_queue) if q[0].model_uid == uid) + 1
-                button.setText(ACTION_LABELS[state])
-                button.setToolTip(f"Queued (#{position}) — starts after the current download")
-                button.setEnabled(False)
-                self._set_role(button, "update" if state == STATE_UPDATE else "action")
-            else:
-                button.setText(ACTION_LABELS[state])
-                button.setToolTip(ACTION_TOOLTIPS[state])
-                # Download/update stays clickable during a transfer — that is
-                # what queues (JL). Only removal waits for the imports to end.
-                removable = state == STATE_INSTALLED
-                button.setEnabled(info is not None and not (self._busy and removable))
-                # Blue for an update, green for a download, red for removing
-                # the installed copy — the theme's rule for "replace something
-                # installed" / "primary, go" / "destructive" (ui/theme.py).
-                role = {STATE_UPDATE: "update", STATE_INSTALLED: "danger"}.get(state, "action")
-                self._set_role(button, role)
 
     def _set_role(self, button: QPushButton, object_name: str) -> None:
         """Swap a button's palette role. QSS matches on the objectName, and
@@ -492,7 +412,14 @@ class CommunityPage(QWidget):
         style.polish(button)
 
     def _build_action_row(self, page: QWidget) -> QHBoxLayout:
+        # Destructive alone on the far left, the state-driven primary on the
+        # far right (JL, the Models bar's rule) — the two can't be neighbours.
         row = QHBoxLayout()
+        self.remove_button = QPushButton(REMOVE_LABEL, page)
+        self.remove_button.setObjectName("danger")
+        self.remove_button.setToolTip(REMOVE_TOOLTIP)
+        self.remove_button.clicked.connect(self.remove_selected)
+        row.addWidget(self.remove_button)
         row.addStretch(1)
         # Sharing needs the Contribute role on the community server; the
         # button stays hidden until the role check answers, so a
@@ -503,6 +430,10 @@ class CommunityPage(QWidget):
         self.share_button.clicked.connect(lambda: self.open_share())
         self.share_button.setVisible(False)
         row.addWidget(self.share_button)
+        self.download_button = QPushButton(ACTION_LABELS[STATE_DOWNLOAD], page)
+        self.download_button.setObjectName("action")
+        self.download_button.clicked.connect(self.download_selected)
+        row.addWidget(self.download_button)
         return row
 
     # ----- auth ---------------------------------------------------------------
@@ -719,7 +650,6 @@ class CommunityPage(QWidget):
                 info.model_uid,
             )
             self.tree.addTopLevelItem(item)
-            self.tree.setItemWidget(item, ACTIONS_COLUMN, self._build_row_action(info.model_uid))
             # The description is prose — too long for a column of its own (JL),
             # so it rides as the row's tooltip, on every cell rather than just
             # the name, and stays on the detail line under the table.
@@ -749,12 +679,12 @@ class CommunityPage(QWidget):
         self.tree.setCurrentItem(target)
 
     def refresh_local_states(self) -> None:
-        """Re-derive every row's State cell and action button from the local
+        """Re-derive every row's State cell, and the bar, from the local
         library — no network, the catalogue listing itself is unchanged.
 
         What changes out from under the table is what's *installed*: a delete,
         import or update on the Models page (JL's lifecycle finding — a model
-        deleted there kept showing the remove icon here). Subscribed to
+        deleted there kept offering removal here). Subscribed to
         ``models/changed``, which the Models page posts on every refresh.
         """
         state_column = COLUMNS.index("State")
@@ -801,9 +731,38 @@ class CommunityPage(QWidget):
         return next((m for m in self._models if m.model_uid == uid), None) if uid else None
 
     def _update_actions(self) -> None:
-        """The detail line follows the selection; the buttons follow their row."""
-        self.hint_label.setText(self._hint_for(self.selected_info()))
-        self._sync_row_actions()
+        """The bar and the detail line follow the selected row's state.
+
+        Label, palette role and enabled state all come from
+        ``installed_state`` — plus the queue, which is why a row already
+        downloading or waiting says so instead of offering the click again.
+        Download/update stays live during someone *else's* transfer: that is
+        what queues (JL). Only removal waits for the imports to end.
+        """
+        info = self.selected_info()
+        state = self.installed_state(info) if info is not None else STATE_DOWNLOAD
+        uid = info.model_uid if info is not None else ""
+        queue = [q[0].model_uid for q in self._download_queue]
+
+        if info is not None and uid == self._active_download_uid:
+            self.download_button.setText(DOWNLOADING_LABEL)
+            self.download_button.setToolTip(DOWNLOADING_LABEL)
+            self.download_button.setEnabled(False)
+            self._set_role(self.download_button, "update")
+        else:
+            self.download_button.setText(ACTION_LABELS[state])
+            if uid in queue:
+                position = queue.index(uid) + 1
+                self.download_button.setToolTip(f"Queued (#{position}) — starts after the current download")
+            else:
+                self.download_button.setToolTip(ACTION_TOOLTIPS[state])
+            self.download_button.setEnabled(info is not None and state != STATE_INSTALLED and uid not in queue)
+            # Blue for an update, green for a download — the theme's rule for
+            # "replace something installed" vs "primary, go" (ui/theme.py).
+            self._set_role(self.download_button, "update" if state == STATE_UPDATE else "action")
+
+        self.remove_button.setEnabled(info is not None and state == STATE_INSTALLED and not self._busy)
+        self.hint_label.setText(self._hint_for(info))
 
     def _hint_for(self, info: ModelInfo | None) -> str:
         if info is None:
@@ -823,24 +782,20 @@ class CommunityPage(QWidget):
     # ----- download -----------------------------------------------------------
 
     def download_selected(self) -> None:
+        """The bar's primary. No busy guard: a click during someone else's
+        transfer is what queues (``_enqueue_download``), and ``download``
+        itself refuses a row that is already installed and current."""
         info = self.selected_info()
-        if info is None or self._busy:
-            return
-        self.download(info)
-
-    def download_row(self, uid: str) -> None:
-        """A row's own button: select the row, then dispatch on its state —
-        download or update through the one download path (which queues behind
-        a running transfer), remove when the installed copy is current."""
-        info = next((m for m in self._models if m.model_uid == uid), None)
-        if info is None:
-            return
-        self._select(uid)
-        if self.installed_state(info) == STATE_INSTALLED:
-            if not self._busy:  # no deletes while an import is in flight
-                self.remove_installed(info)
-        else:
+        if info is not None:
             self.download(info)
+
+    def remove_selected(self) -> None:
+        """The bar's Remove, live only for an installed, current selection."""
+        info = self.selected_info()
+        if info is None or self._busy:  # no deletes while an import is in flight
+            return
+        if self.installed_state(info) == STATE_INSTALLED:
+            self.remove_installed(info)
 
     def remove_installed(self, info: ModelInfo) -> None:
         """Delete the locally installed copy of a community model.
@@ -877,13 +832,6 @@ class CommunityPage(QWidget):
         else:
             self.refresh_local_states()
         self._post_progress(f"Removed installed copy of {name}.")
-
-    def _select(self, uid: str) -> None:
-        for i in range(self.tree.topLevelItemCount()):
-            item = self.tree.topLevelItem(i)
-            if item is not None and item.data(0, Qt.ItemDataRole.UserRole) == uid:
-                self.tree.setCurrentItem(item)
-                return
 
     def download(self, info: ModelInfo) -> None:
         name = info.model_name or info.model_uid or "model"
@@ -922,7 +870,7 @@ class CommunityPage(QWidget):
         if self._busy:
             self._download_queue.append((info, name, update_existing, is_update))
             self._post_progress(f"Queued {name} ({len(self._download_queue)} waiting).")
-            self._sync_row_actions()
+            self._update_actions()
             return
         self._start_download(info, name, update_existing, is_update)
 

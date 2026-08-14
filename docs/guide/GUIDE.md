@@ -388,38 +388,29 @@ The table lists each model's name, whether it is active, its cartridge, type
 training images it has, whether it has been trained, and when. Click a
 column heading to sort by it.
 
-The **Active** column is the control, not just a marker: each row carries a
-radio button, and the filled one is the model the app classifies with.
-Clicking another row's radio activates that model — that is the whole
-activation step. Clicking the one that is already filled does nothing.
+The **Active** column marks the model the app currently classifies with:
+exactly one row reads **● ACTIVE**, and every other row's Active cell is
+blank. To change it, select a row and press **Activate** at the bottom right.
 
 Above the table: filters by **cartridge** and **type**, a search box, and
 **New cartridge**, **New model** and **Import…**.
 
 The **"Use AI Config"** row sits at the top of the list, whenever the filters
-and the search box leave it there. It has an Active radio like any other row;
-picking it puts the app in AI Config mode — classification goes to the HTTP
-server configured in [Settings → AI Config](#ai-config) instead of a local
-model.
-
-### Row actions
-
-The two small buttons at the right of every row act on *that* row, whatever
-is selected:
-
-| Button | Action |
-|--------|--------|
-| **✎** | Edit the model — name, cartridge, model size, primer settings, and the community feedback opt-in where it applies. |
-| **×** | Delete the model and its folder. Greyed out on the active model: activate something else first. |
-
-Activating is not among them — that is the Active column's radio, above.
-The "Use AI Config" row has neither button: there is no model behind it to
-edit or delete.
+and the search box leave it there. Activating it puts the app in AI Config
+mode — classification goes to the HTTP server configured in [Settings → AI
+Config](#ai-config) instead of a local model. It is not a model, so Edit,
+Delete, Export and the rest stay greyed out while it is selected.
 
 ### Managing a model
 
-The buttons under the table act on the **selected** row:
+Everything on the bar under the table acts on the **selected** row.
+**Delete** sits alone on the far left and **Activate** on the far right, so
+the destructive one and the primary one can never be neighbours:
 
+- **Delete** — delete the model and its folder, after a confirmation. The
+  active model refuses: activate something else first.
+- **Edit…** — name, cartridge, model size, primer settings, and the
+  community feedback opt-in where it applies.
 - **Images…** — browse the model's training images as thumbnails, and
   reclassify or delete them. A single image opens full size with prev/next
   navigation. Models you own only.
@@ -432,6 +423,8 @@ The buttons under the table act on the **selected** row:
   yourself, from image folders you trust.
 - **Export…** — write the model out as a ZIP (checkpoint, headstamps and
   images), the format the Windows app uses.
+- **Activate** — make this the model the app classifies with. Greyed out on
+  the row that is already active.
 
 ### Importing and exporting
 
@@ -456,16 +449,20 @@ includes (model, images, or both), headstamp and image counts, size, publish
 date, author, and its **State** against your library: Available, Update
 available, or Installed.
 
-Each row's own button does the obvious thing for that state:
+Select a row and the two buttons under the table follow its state. The
+right-hand one is the primary, and it says what the state makes possible:
 
 | Button | Action |
 |--------|--------|
-| **↓** | Download and install this model, after a notice that a model file can execute code — download only from authors you trust. |
-| **↻** | Update your installed copy in place, or take this version as a separate copy; it asks which. |
-| **×** | Remove your local copy. The catalogue entry stays — the row goes back to ↓. |
+| **Download model** | Download and install it, after a notice that a model file can execute code — download only from authors you trust. |
+| **Update model** | Update your installed copy in place, or take this version as a separate copy; it asks which. |
+| **Already installed** | Nothing to do — this version is the one you have. |
+| **Remove** | On the far left, and live only for an installed, current model: delete your local copy. The catalogue entry stays, and the primary goes back to **Download model**. |
 
-Click a second row's button while a download is running and it queues behind
-the first, with the status showing "(2 of 3)" as it works through them.
+Select a second model and press Download while one is still running and it
+queues behind the first, with the status showing "(2 of 3)" as it works
+through them. Selecting a queued model shows where it sits in the queue, and
+the one being fetched reads **Downloading…**.
 
 A model you install this way is **managed by its publisher**: it can't be
 trained here, and updates from them install over it cleanly. The Sort screen
