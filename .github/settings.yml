@@ -58,6 +58,36 @@ repository:
   allow_auto_merge: true
   allow_update_branch: true
 
+# GitHub Pages: NOT MANAGEABLE FROM THIS FILE, and there is no key to add.
+#
+# repository-settings/app has one plugin per section -- repository, teams,
+# collaborators, branches, environments, labels, milestones -- and none of them
+# touches Pages (checked against docs/configuration.md and
+# docs/plugins/repository.md in that repo). safe-settings has no equivalent
+# either. So unlike everything else here, this cannot become settings-as-code
+# by installing an app; it is a one-time manual step, recorded here because
+# .github/workflows/docs.yml is useless without it.
+#
+# The wanted state is: build from the `gh-pages` branch, root folder. mike
+# creates and pushes that branch (it also writes the `.nojekyll` that keeps
+# Pages from running Jekyll over the built site), but it cannot switch the
+# source on -- until somebody does, the branch exists and nothing serves it.
+#
+#   Settings -> Pages -> Build and deployment -> Source: "Deploy from a branch",
+#   Branch: `gh-pages`, folder: `/ (root)`.
+#
+# Or, equivalently, once the branch exists:
+#
+#   gh api -X POST repos/{owner}/{repo}/pages \
+#     -f 'source[branch]=gh-pages' -f 'source[path]=/'
+#
+# Do it after the first successful Docs run, not before: the API call 404s
+# while the branch it names does not exist yet.
+#
+# NOT "GitHub Actions" as the source. That mode expects a workflow uploading a
+# Pages artifact for the whole site; mike's entire model is a git branch it
+# rewrites one version directory at a time, and the two cannot both own it.
+
 # Referenced by .github/labeler.yml, which auto-applies them by changed path.
 # actions/labeler does NOT create labels -- it errors on any that don't exist,
 # so these have to be created before that workflow can work.

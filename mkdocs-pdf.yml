@@ -1,0 +1,27 @@
+# The deploy-time config: mkdocs.yml plus the PDF export. A separate file,
+# not an env-gated plugin in mkdocs.yml, because the plugin's "dormant" notice
+# is a WARNING and `mkdocs build --strict` fails on it -- this way a laptop's
+# strict build stays clean with zero PDF machinery, and CI opts in with
+# `-F mkdocs-pdf.yml` (docs.yml passes it to mike, which forwards it to the
+# underlying build).
+#
+# INHERIT merges at top-level-key granularity, so `plugins` below REPLACES the
+# parent's list and must restate it. Keep the mike block byte-identical to
+# mkdocs.yml's -- the comments there (alias_type, canonical_version) are the
+# authority.
+INHERIT: mkdocs.yml
+
+plugins:
+  - search
+  - mike:
+      alias_type: copy
+      canonical_version: latest
+  # One PDF of the whole site, written into the deployed version's directory
+  # (so /1.2.0/pdf/... and /latest/pdf/... each hold the PDF that matches
+  # their pages). WeasyPrint renders it and needs system pango -- docs.yml
+  # installs it; that is why this config is CI's, not the default.
+  - with-pdf:
+      output_path: pdf/ai-case-sorter-docs.pdf
+      cover_title: AI Case Sorter
+      cover_subtitle: Operator documentation
+      toc_level: 2

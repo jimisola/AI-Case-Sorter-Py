@@ -39,7 +39,7 @@ from typing import Any
 import numpy as np
 
 from .. import paths
-from ..data.models import Model
+from ..data.models import Model, is_foreign_model
 from ..data.repository import ModelRepo
 from ..training.dataset import parse_feedback_filename, save_feedback_image
 
@@ -75,6 +75,21 @@ def is_feedback_model(model: Model | None) -> bool:
     return bool(model is not None and model.feedback_loop_enabled and model.community_model_uid)
 
 
+def is_community_model(model: Model | None) -> bool:
+    """True when ``model`` is registered with the community backend.
+
+    Wider than ``is_feedback_model`` on purpose: the model-settings fetch also
+    carries the published version and moderator notes, which apply to a
+    community-managed model whether or not its owner opted into the feedback
+    loop. Every ``is_feedback_model`` model satisfies this too, so the settings
+    fetch and the Start-time wish-list fetch can never disagree about which
+    models are the community's.
+    """
+    if model is None or not model.community_model_uid:
+        return False
+    return is_foreign_model(model) or is_feedback_model(model)
+
+
 class FeedbackService:
     def __init__(self, db: Any) -> None:
         self.db = db
@@ -87,6 +102,13 @@ class FeedbackService:
         self._wish_model_id: int | None = None
         self._wish_list: set[str] = set()
         self._wish_counts: dict[str, int] = {}
+        # Server-side policy from the last FetchModelSettings (see
+        # `apply_server_settings`). Transient: never written to the model row,
+        # and dropped whenever the fetch fails or the active model changes.
+        self._server_lock = threading.Lock()
+        self._server_model_id: int | None = None
+        self._server_floor: int = 0
+        self._server_capture_allowed = True
 
     # ----- wish list ----------------------------------------------------------
 
@@ -167,10 +189,52 @@ class FeedbackService:
             self._wish_counts[key] = used + 1
         return True
 
+    # ----- server-side policy -------------------------------------------------
+
+    def apply_server_settings(
+        self,
+        model_id: int | None,
+        *,
+        confidence_floor: int = 0,
+        feedback_enabled: bool = True,
+        blocked: bool = False,
+    ) -> None:
+        """Install the server's policy for ``model_id`` for this session.
+
+        Bound to the model id, like the wish list, so it can never apply to
+        another model. ``confidence_floor`` ≤ 0 means "the server named none",
+        leaving the publisher's stored floor in charge. The two flags can only
+        ever turn capture *off*: a user who opted out stays opted out (that is
+        ``is_feedback_model``'s job, checked first in ``should_capture``).
+
+        Transient by design — nothing here is written to the model row.
+        """
+        with self._server_lock:
+            self._server_model_id = model_id
+            self._server_floor = max(0, int(confidence_floor))
+            self._server_capture_allowed = bool(feedback_enabled) and not bool(blocked)
+        debug_log(
+            f"server settings for model {model_id}: floor={confidence_floor} "
+            f"enabled={feedback_enabled} blocked={blocked}"
+        )
+
+    def clear_server_settings(self) -> None:
+        """Forget the server's policy — offline behaviour is the local one."""
+        self.apply_server_settings(None)
+
+    def _server_policy(self, model: Model) -> tuple[int, bool]:
+        """``(floor, capture_allowed)`` for ``model``; ``(0, True)`` if none applies."""
+        with self._server_lock:
+            if model.id != self._server_model_id:
+                return 0, True
+            return self._server_floor, self._server_capture_allowed
+
     # ----- policy -------------------------------------------------------------
 
     def effective_floor(self, model: Model) -> int:
-        return max(MIN_EFFECTIVE_FLOOR, int(model.feedback_loop_confidence_floor))
+        """The floor a capture decision uses: the server's when it named one."""
+        floor, _allowed = self._server_policy(model)
+        return max(MIN_EFFECTIVE_FLOOR, int(floor or model.feedback_loop_confidence_floor))
 
     def should_capture(
         self,
@@ -194,6 +258,10 @@ class FeedbackService:
 
         Checking confidence first means a below-floor prediction of a wished
         headstamp is captured as it always was, without spending wish quota.
+
+        Both rules are subordinate to the user's own opt-in *and* to the
+        server's shutoff/block flags (``apply_server_settings``) — either side
+        can say no, neither can say yes for the other.
         """
         # `model is None` is folded into the guard so the type checker can
         # narrow `model` to `Model` for the rest of this method.
@@ -203,6 +271,9 @@ class FeedbackService:
                 f"(enabled={getattr(model, 'feedback_loop_enabled', None)}, "
                 f"community_uid={getattr(model, 'community_model_uid', None)!r})"
             )
+            return False
+        if not self._server_policy(model)[1]:
+            debug_log("should_capture=False: the server has feedback disabled or blocked for this model")
             return False
         floor = self.effective_floor(model)
         if confidence is None or confidence < 0:

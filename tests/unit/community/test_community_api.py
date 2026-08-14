@@ -18,6 +18,8 @@ from sorter.community.community_api import (
     CommunityApi,
     CommunityApiError,
     FeedbackUploadTicket,
+    ModelSettings,
+    ModeratorNote,
     UserMetaData,
 )
 
@@ -579,4 +581,147 @@ def test_fetch_wish_list_signed_out_returns_empty() -> None:
     s = _FakeSession()
     api = CommunityApi(auth=_NoAuth(), session=cast(requests.Session, s))
     assert api.fetch_wish_list("uid-1") == []
+    assert s.get_calls == []
+
+
+# ----- FetchModelSettings ------------------------------------------------------
+
+
+def _settings_url(uid: str = "uid-1") -> str:
+    return f"{API_BASE}/Models/FetchModelSettings?communityModelId={uid}"
+
+
+def _settings_payload(**overrides: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "wishlist": ["FC", "R-P"],
+        "confidencefloor": 80,
+        "feedbackenabled": True,
+        "blocked": False,
+        "uploadmode": 2,
+        "version": 4,
+        "notes": [{"id": 7, "note": "Center the case.", "created": "2026-08-01T09:30:00"}],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_fetch_model_settings_parses_the_lowercase_contract() -> None:
+    s = _FakeSession()
+    s.next_responses[_settings_url()] = _FakeResp(json_data=_settings_payload())
+
+    settings = _api(s).fetch_model_settings("uid-1")
+
+    assert settings == ModelSettings(
+        wish_list=["FC", "R-P"],
+        confidence_floor=80,
+        feedback_enabled=True,
+        blocked=False,
+        version=4,
+        notes=[ModeratorNote(id=7, note="Center the case.", created="2026-08-01T09:30:00")],
+    )
+    assert s.get_calls[0][1].get("Authorization") == "Bearer TOKEN"
+    # uploadmode is deliberately not carried: the local preference wins.
+    assert not hasattr(settings, "upload_mode")
+
+
+def test_fetch_model_settings_url_encodes_the_uid() -> None:
+    s = _FakeSession()
+    url = f"{API_BASE}/Models/FetchModelSettings?communityModelId=a+b"
+    s.next_responses[url] = _FakeResp(json_data=_settings_payload())
+    _api(s).fetch_model_settings("a b")
+    assert s.get_calls[0][0] == url
+
+
+def test_fetch_model_settings_defaults_are_the_offline_behaviour() -> None:
+    """A response naming nothing must not change how the client behaves."""
+    s = _FakeSession()
+    s.next_responses[_settings_url()] = _FakeResp(json_data={})
+
+    settings = _api(s).fetch_model_settings("uid-1")
+
+    assert settings == ModelSettings()
+    assert settings is not None
+    assert settings.feedback_enabled is True and settings.blocked is False
+    assert settings.confidence_floor == 0 and settings.version == 0
+
+
+def test_fetch_model_settings_drops_unusable_notes_and_wish_entries() -> None:
+    s = _FakeSession()
+    s.next_responses[_settings_url()] = _FakeResp(
+        json_data=_settings_payload(
+            wishlist=["  FC  ", "", None, 7],
+            notes=[
+                {"id": 1, "note": " keep me ", "created": "2026-08-01"},
+                {"id": None, "note": "no id"},
+                {"id": 2, "note": "   "},
+                {"id": "3", "note": "string id survives"},
+                "not a dict",
+            ],
+        )
+    )
+
+    settings = _api(s).fetch_model_settings("uid-1")
+
+    assert settings is not None
+    assert settings.wish_list == ["FC"]
+    assert [(n.id, n.note) for n in settings.notes] == [(1, "keep me"), (3, "string id survives")]
+
+
+def test_fetch_model_settings_tolerates_a_pascal_case_serializer() -> None:
+    s = _FakeSession()
+    s.next_responses[_settings_url()] = _FakeResp(
+        json_data={"Version": 9, "FeedbackEnabled": False, "Blocked": True, "ConfidenceFloor": "77"}
+    )
+
+    settings = _api(s).fetch_model_settings("uid-1")
+
+    assert settings is not None
+    assert (settings.version, settings.feedback_enabled, settings.blocked, settings.confidence_floor) == (
+        9,
+        False,
+        True,
+        77,
+    )
+
+
+def test_fetch_model_settings_fails_open_to_none() -> None:
+    """Every failure mode answers None — the caller then behaves as offline."""
+
+    class _RaisingResp(_FakeResp):
+        def json(self) -> Any:
+            raise ValueError("not json")
+
+    class _BoomSession(_FakeSession):
+        def get(self, url, headers=None, timeout=None, **kw):
+            raise requests.exceptions.ConnectionError("offline")
+
+    assert _api(_FakeSession()).fetch_model_settings("") is None  # no UID
+    assert _api(_BoomSession()).fetch_model_settings("uid-1") is None  # network error
+
+    s = _FakeSession()
+    s.next_responses[_settings_url()] = _FakeResp(status_code=500, text="boom")
+    assert _api(s).fetch_model_settings("uid-1") is None  # non-200
+
+    s = _FakeSession()
+    s.next_responses[_settings_url()] = _RaisingResp(text="<html>")
+    assert _api(s).fetch_model_settings("uid-1") is None  # non-JSON body
+
+    s = _FakeSession()
+    s.next_responses[_settings_url()] = _FakeResp(json_data=["nope"])
+    assert _api(s).fetch_model_settings("uid-1") is None  # wrong shape
+
+    s = _FakeSession()
+    s.next_responses[_settings_url()] = _FakeResp(json_data=_settings_payload(confidencefloor="high", version=None))
+    settings = _api(s).fetch_model_settings("uid-1")  # garbage fields fall back
+    assert settings is not None and settings.confidence_floor == 0 and settings.version == 0
+
+
+def test_fetch_model_settings_signed_out_returns_none() -> None:
+    class _NoAuth(_FakeAuth):
+        def acquire_token_silent(self, scopes=None):
+            return None
+
+    s = _FakeSession()
+    api = CommunityApi(auth=_NoAuth(), session=cast(requests.Session, s))
+    assert api.fetch_model_settings("uid-1") is None
     assert s.get_calls == []

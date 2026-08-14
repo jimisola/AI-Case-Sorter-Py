@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 from sorter import paths
-from sorter.community.feedback import FeedbackService, is_feedback_model
+from sorter.community.feedback import FeedbackService, is_community_model, is_feedback_model
 from sorter.data.db import Database
 from sorter.data.models import Model
 from sorter.data.repository import CartridgeRepo, ModelRepo
@@ -347,3 +347,79 @@ def test_refresh_wish_list_fails_open_on_error(db, wish_api) -> None:
     wish_api.boom = True
     assert svc.refresh_wish_list(m, auth=_OkAuth()) == []
     assert svc.wish_list() == []  # the stale list is dropped too
+
+
+# ----- server-side settings (FetchModelSettings) ------------------------------
+
+
+def test_is_community_model_is_wider_than_is_feedback_model() -> None:
+    """Whatever the wish-list fetch covers, the settings fetch covers too."""
+    downloaded = Model(community_model_uid="u", model_type="CommunityManaged")
+    assert is_community_model(downloaded)  # opted out of the loop, still community
+    assert not is_feedback_model(downloaded)
+    # A shared model of the user's own: Standard, but opted in — both fire.
+    own_shared = Model(community_model_uid="u", feedback_loop_enabled=True)
+    assert is_community_model(own_shared) and is_feedback_model(own_shared)
+    assert not is_community_model(Model(community_model_uid=None, model_type="CommunityManaged"))
+    assert not is_community_model(Model(community_model_uid="u"))  # local, never shared back
+    assert not is_community_model(None)
+
+
+def test_server_floor_overrides_the_publishers_and_reverts_when_cleared(db) -> None:
+    svc = FeedbackService(db)
+    m = _model(db, floor=95)
+
+    svc.apply_server_settings(m.id, confidence_floor=70)
+    assert svc.effective_floor(m) == 70
+    assert svc.should_capture(m, 80) is False  # above the server's floor
+    assert svc.should_capture(m, 65) is True
+
+    svc.clear_server_settings()
+    assert svc.effective_floor(m) == 95  # offline → the model's own
+
+
+def test_server_floor_is_still_clamped_and_optional(db) -> None:
+    svc = FeedbackService(db)
+    m = _model(db, floor=95)
+    svc.apply_server_settings(m.id, confidence_floor=30)
+    assert svc.effective_floor(m) == 50  # MIN_EFFECTIVE_FLOOR still wins
+    svc.apply_server_settings(m.id, confidence_floor=0)
+    assert svc.effective_floor(m) == 95  # "no floor named" leaves the local one
+
+
+def test_server_settings_are_bound_to_their_model(db) -> None:
+    svc = FeedbackService(db)
+    mine = _model(db, floor=95)
+    other = _model(db, floor=95, community="uid-2")
+    svc.apply_server_settings(mine.id, confidence_floor=60, blocked=True)
+
+    assert svc.effective_floor(other) == 95
+    assert svc.should_capture(other, 10) is True  # another model's block never applies
+
+
+@pytest.mark.parametrize("opted_in", [True, False])
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize("blocked", [True, False])
+def test_capture_gate_truth_table(db, opted_in: bool, enabled: bool, blocked: bool) -> None:
+    """Local opt-in AND server-enabled AND not blocked. Nothing else says yes."""
+    svc = FeedbackService(db)
+    m = _model(db, enabled=opted_in, floor=95)
+    svc.apply_server_settings(m.id, feedback_enabled=enabled, blocked=blocked)
+
+    # A below-floor prediction — the one that would be captured if allowed.
+    assert svc.should_capture(m, 10.0) is (opted_in and enabled and not blocked)
+
+
+def test_the_server_can_never_switch_capture_on(db) -> None:
+    svc = FeedbackService(db)
+    m = _model(db, enabled=False)
+    svc.apply_server_settings(m.id, feedback_enabled=True, blocked=False, confidence_floor=99)
+    assert svc.should_capture(m, 1) is False
+
+
+def test_a_block_also_stops_wish_list_capture(db) -> None:
+    svc = FeedbackService(db)
+    m = _model(db, floor=95)
+    svc.set_wish_list(m.id, ["FC"])
+    svc.apply_server_settings(m.id, blocked=True)
+    assert svc.should_capture(m, 99, "FC", wish_list=True) is False

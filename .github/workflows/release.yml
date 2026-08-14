@@ -482,6 +482,24 @@ jobs:
             echo "Cut the real release by running this workflow again with \`prerelease: none\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # The documentation site, versioned per release. Called here rather than
+  # triggered on release:published for the same reason verify-installer is:
+  # that event fires while this is still a prerelease, so the docs would move
+  # their `latest` alias for a release candidate that never becomes latest.
+  # docs.yml reads the version and decides -- an rc is published under its own
+  # number and nothing else moves.
+  #
+  # Runs after promote and independently of the PyPI jobs: a docs failure must
+  # not hold up (or be held up by) publishing.
+  docs:
+    name: publish the documentation site
+    needs: [prepare, promote]
+    uses: ./.github/workflows/docs.yml
+    permissions:
+      contents: write
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+
   # Gated behind a repo variable, unset = off, so this changes nothing until a
   # maintainer deliberately opts in (Settings -> Actions -> Variables ->
   # PYPI_PUBLISH_ENABLED = true).

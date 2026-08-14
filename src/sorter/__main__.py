@@ -1,4 +1,4 @@
-"""Entry point — initialize SQLite, load config, launch the Tk main window.
+"""Entry point — initialize SQLite, load config, launch the main window.
 
 Reached through the root ``main.py``, which puts ``src/`` on ``sys.path``
 first; this module does no path setup of its own.
@@ -12,6 +12,7 @@ launching the old way.
 
 from __future__ import annotations
 
+import os
 import sys
 
 
@@ -25,11 +26,13 @@ def main(argv: list[str] | None = None) -> int:
 
         return apply_main()
 
+    # PySide6 spike UI (see docs/ui-modernization.md); the Tk UI is the default.
+    use_qt = "--qt" in args or os.environ.get("CASESORTER_QT") == "1"
+
     from sorter import paths
     from sorter.community import appenv
     from sorter.data.config import Config
     from sorter.data.db import Database
-    from sorter.ui.app import MainWindow
 
     # One-time move of a pre-0.2 `<app>/data` folder to the per-user location.
     # No-op for portable installs, an explicit CASESORTER_DATA_DIR, or once
@@ -51,7 +54,28 @@ def main(argv: list[str] | None = None) -> int:
     db.ensure_initialized(legacy_config_json=legacy_json if legacy_json.exists() else None)
 
     config = Config(db).load()
-    MainWindow(config).run()
+    if use_qt:
+        # Imported at the launch site so only the chosen toolkit's UI loads.
+        from sorter.qtui.app import run_app
+
+        # opencv-python bundles its own Qt and registers its plugin dir on
+        # import (already done, transitively, by the line above). Loading
+        # cv2's plugins against PySide6's Qt libraries mixes two Qt builds —
+        # a known source of startup failures and rendering artifacts. Scrub
+        # cv2's entries so QApplication only ever sees PySide6's own plugins.
+        plugin_path = os.environ.get("QT_QPA_PLATFORM_PLUGIN_PATH", "")
+        if plugin_path:
+            kept = [p for p in plugin_path.split(os.pathsep) if p and "cv2" not in p]
+            if kept:
+                os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = os.pathsep.join(kept)
+            else:
+                os.environ.pop("QT_QPA_PLATFORM_PLUGIN_PATH", None)
+
+        run_app(config)
+    else:
+        from sorter.ui.app import MainWindow
+
+        MainWindow(config).run()
     db.close()
     return 0
 

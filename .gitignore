@@ -22,3 +22,8 @@ dist/
 /data/
 # Marker that pins the data root to <app>/data — a local choice, never committed.
 portable.txt
+.coverage
+
+# `mkdocs build`'s output. The published site is built in CI and pushed to the
+# gh-pages branch by mike; a local build is a preview.
+/site/

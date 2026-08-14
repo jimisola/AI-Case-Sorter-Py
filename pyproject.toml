@@ -27,7 +27,7 @@ classifiers = [
 # against, so exact pins cost nothing in dependency conflicts.
 dependencies = [
     "pyserial==3.5",
-    "opencv-python==5.0.0.93",
+    "opencv-python-headless==5.0.0.93",
     "numpy==2.5.2",
     "Pillow==12.3.0",
     "requests==2.34.2",
@@ -53,6 +53,12 @@ Issues = "https://github.com/sjseth/AI-Case-Sorter-Py/issues"
 # Must match _TARGETS in sorter/ui/dialog_install_torch.py, which is how
 # PyTorch actually gets installed at runtime. Bump both together.
 ml = ["torch==2.9.1", "torchvision==0.24.1"]
+# PySide6 spike UI (`python -m sorter --qt`); see docs/ui-modernization.md.
+# Essentials, not the PySide6 meta-package: the meta adds pyside6-addons
+# (~175 MB of WebEngine/3D/Charts/Multimedia) that nothing uses.
+# QtAds (LGPL-2.1+) is the dock system; it pins the same Essentials build, so
+# the two versions move together.
+qt = ["PySide6-Essentials==6.11.1", "pyside6-qtads==5.0.0.2"]
 
 [build-system]
 requires = ["hatchling==1.31.0", "hatch-vcs==0.5.0"]
@@ -156,7 +162,9 @@ known-first-party = ["sorter"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra --cov=sorter --cov-report=term"
+# Generous: the slowest legitimate tests spawn real training subprocesses.
+timeout = 120
 markers = [
     "integration: exercises a real external tool (uv build, git-cliff) instead of a synthetic fixture",
 ]
@@ -168,9 +176,34 @@ markers = [
 [dependency-groups]
 dev = [
     "pytest==9.1.1",
+    # Hangs become failures with tracebacks: the suite is full of worker
+    # round-trips and real subprocesses whose failure mode is silence.
+    "pytest-timeout==2.4.0",
+    "pytest-cov==7.0.0",
     "ruff==0.16.2",
     "ty==0.0.69",
 ]
+# The published documentation site (mkdocs.yml, docs/). Its own group, not
+# `dev`: nothing in the test loop needs it, and mkdocs-material pulls a dozen
+# packages a contributor running pytest has no use for.
+docs = [
+    "mkdocs-material==9.7.7",
+    # Versioned deploys to gh-pages, and the dropdown the Material theme renders
+    # from mike's own versions.json (extra.version.provider in mkdocs.yml).
+    "mike==2.2.0",
+    # One PDF of the whole site per deployed version, linked from the landing
+    # page. Env-gated (ENABLE_PDF_EXPORT=1): WeasyPrint needs system pango,
+    # which CI installs and a laptop running `mkdocs serve` shouldn't need.
+    "mkdocs-with-pdf==0.9.3",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["sorter"]
+
+[tool.coverage.report]
+# Optional-dependency guards and Windows-only branches never run on one box.
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]
 
 # ty (type checker) configuration.
 #
@@ -190,4 +223,25 @@ dev = [
 include = ["src/sorter/__init__.py"]
 
 [tool.ty.overrides.rules]
+unused-ignore-comment = "ignore"
+
+# Same two-states problem for the PySide6 spike: CI syncs without the `qt`
+# extra, so its imports need `# ty: ignore[unresolved-import]` -- which is an
+# *unused* ignore for a dev who installed the extra.
+[[tool.ty.overrides]]
+include = ["src/sorter/qtui/*"]
+
+[tool.ty.overrides.rules]
+unused-ignore-comment = "ignore"
+
+# The qt tests have the same two states, but per-line ignores proved fragile
+# there: in a PySide6-present environment they read as unused and get cleaned
+# away, breaking the no-PySide6 lint CI (which is exactly what happened).
+# The whole directory guards with importorskip("PySide6") at runtime, so a
+# genuinely broken import still fails pytest collection loudly.
+[[tool.ty.overrides]]
+include = ["tests/unit/qtui/*"]
+
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"
 unused-ignore-comment = "ignore"

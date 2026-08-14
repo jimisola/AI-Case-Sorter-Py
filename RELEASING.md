@@ -44,7 +44,10 @@
    to carry that exact version.
 9. Only then is the prerelease promoted to the latest release -- one flag flip, assets already
    in place. **A release candidate stops here instead**, staying a prerelease.
-10. Finally TestPyPI, then PyPI. Both are gated on the repo variable `PYPI_PUBLISH_ENABLED`,
+10. The documentation site is published for that tag -- see
+    [The documentation site](#the-documentation-site). A release candidate is published too,
+    under its own version; it just doesn't become `latest`.
+11. Finally TestPyPI, then PyPI. Both are gated on the repo variable `PYPI_PUBLISH_ENABLED`,
     unset by default, and each waits on its environment's reviewer. A release candidate reaches
     TestPyPI but not PyPI.
 
@@ -98,6 +101,69 @@ version…"** → tick **"Show prereleases"** → pick the rc. For a fresh Windo
 
 **Shipping the real release afterwards** is just the workflow again with `prerelease: none`. The
 candidates' tags stay where they are; nothing needs deleting.
+
+## The documentation site
+
+<https://sjseth.github.io/AI-Case-Sorter-Py/> -- MkDocs Material over the repo's own `docs/`
+folder, published one directory per release by [mike](https://github.com/jimporter/mike) onto
+the `gh-pages` branch. The header dropdown is mike's `versions.json`, so an old release's docs
+stay reachable forever at their own URL.
+
+- **It publishes itself.** `docs.yml` is called by `release.yml` right after the promote step,
+  building from the release's *tag* -- not from the branch the release was dispatched from, so
+  the docs at version N are the docs that shipped in N.
+- **A release candidate does not move `latest`.** Candidates share one rolling
+  **prerelease** entry in the dropdown (URL `/prerelease/`, title showing the actual tag) --
+  always the newest candidate's docs, never an accumulating rc1/rc2/... list -- and the slot is
+  retired when the stable that ends the cycle publishes. `latest/` and the site root keep
+  pointing at the newest stable release throughout, same rule `/releases/latest` follows.
+- **Every deployed version carries its own PDF** at `<version>/pdf/ai-case-sorter-docs.pdf`,
+  and the same PDF is attached to the GitHub release as
+  `ai-case-sorter-docs-<version>.pdf` (the manual next to the sdist). It is
+  linked from the landing page, rendered by mkdocs-with-pdf/WeasyPrint during the deploy. The
+  PDF machinery lives in `mkdocs-pdf.yml` (used with `-F` by the workflow), NOT in
+  `mkdocs.yml`: the plugin's dormant-notice and its WeasyPrint CSS complaints would fail
+  `--strict`, and a laptop's `mkdocs serve` needs none of it (WeasyPrint wants system pango).
+- **`docs/guide/GUIDE.md` is also the in-app F1 guide** (`sorter/qtui/help_viewer.py` loads
+  that exact file into a `QTextBrowser`). It must stay at that path and stay plain Markdown --
+  Material-only syntax would render as source text at the user. Its heading anchors are
+  GitHub's, and MkDocs slugs them identically, so a deep link into the published site and one
+  into the in-app guide resolve to the same section.
+
+Editing the docs, and checking them before pushing:
+
+```bash
+uv run --group docs mkdocs serve                # live preview on localhost:8000
+uv run --group docs mkdocs build --strict       # what CI would fail on
+```
+
+`--strict` is the real gate: `mkdocs.yml` turns unrecognised links *and* unresolved intra-page
+anchors into warnings, and `--strict` turns warnings into errors. The guide's table of contents
+is 22 same-page links; a broken one there breaks the in-app navigation identically.
+
+Note that either command syncs the venv to *exactly* the default groups plus `docs` -- so it
+uninstalls the `qt` extra if you had it, and `tests/unit/qtui/` then skips instead of failing.
+`uv sync --extra qt` puts it back.
+
+**Re-publishing by hand** is Actions -> Docs -> Run workflow, with the tag as `version`. Doing
+it from a laptop is the same thing the workflow runs, and needs push rights to `gh-pages`:
+
+```bash
+uv run --group docs mike deploy -F mkdocs-pdf.yml --push --update-aliases 1.2.0 latest  # a release
+uv run --group docs mike deploy -F mkdocs-pdf.yml --push --title "1.2.0rc1 (pre-release)" prerelease  # a candidate
+uv run --group docs mike set-default --push latest                     # the site-root redirect
+uv run --group docs mike list                                          # what is published now
+```
+
+(`-F mkdocs-pdf.yml` builds the per-version PDF too; dropping it publishes without one.)
+
+**One-time setup is automated:** GitHub Pages is not something
+[`.github/settings.yml`](.github/settings.yml) can manage -- see the block in that file -- but
+the Docs workflow enables it itself: after the first deploy pushes `gh-pages` into existence,
+an idempotent API call switches Pages on in branch mode (`gh-pages`, `/ (root)`). mike also
+creates the branch itself on that first push, so a fresh repo (this fork or upstream) needs no
+pre-created branch and no clicking. Only if a policy denies the workflow token does it fall
+back to printing the manual step as a warning.
 
 ## Versioning
 
