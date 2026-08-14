@@ -500,13 +500,16 @@ def test_the_sort_toggle_sits_with_the_training_settings(shown) -> None:
     assert check.right() <= settings.left()  # toggle reads first, then the dialog
 
 
-def test_feed_sits_below_the_preview(shown) -> None:
-    # JL: the eye lands on the case, then the button that fetches the next.
+def test_feed_sits_between_the_preview_and_save(shown) -> None:
+    # JL: Feed directly above Save image — the two buttons the loop
+    # alternates between stack on one edge, under the case picture.
     feed = shown.feed_button.geometry()
     crop = shown.crop_label.geometry()
+    save = shown.save_button.geometry()
 
-    assert feed.top() >= crop.bottom()  # Feed sits under the preview
-    assert crop.left() <= feed.left() < crop.right()  # in the preview's column
+    assert feed.top() >= crop.bottom()  # under the preview
+    assert save.top() >= feed.bottom()  # and above Save image
+    assert feed.right() > save.left()  # stacked: their x-ranges overlap
 
 
 def test_the_training_buttons_cluster_at_the_foot_of_the_page(shown) -> None:
