@@ -311,3 +311,22 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
   for controls, Title Case for window/dock titles — app-wide sweep in
   flight. QtAds noted as the IDE-grade docking upgrade path if Seth
   wants it: LGPL-2.1+, GPL-3-compatible, PyPI `PySide6-QtAds`.
+- 2026-08-14 — QtAds landed (`2719a1e`): pyside6-qtads 5.0.0.2 in [qt]
+  (600KB abi3, pins our exact PySide6; LGPL-2.1+), CDockManager owns the
+  window, ~120 lines of QMainWindowLayout workarounds deleted. API
+  honesty: isClosed() not isHidden() (old asserts were vacuous),
+  addDockWidget re-docks AND re-opens (Re-dock skips closed panels),
+  reveal_dock() for show+raise; DisableStylesheet + re-declared button
+  icons in theme.py. JL: "QtAds was great!". Follow-up batch
+  (`879f01c`): Sort strip right-aligned + template into the slot-grid
+  header; Themes dock (live picker, both pickers one set_theme, editor
+  hook refreshes both); AI Config as a sidebar activity in AI-Config
+  mode (navigates to the Settings section - one AiSection instance, no
+  re-mount; Settings ends up checked, deliberately honest); Help >
+  Export support package… (Seth's discord-support story; name still
+  open for discussion with Seth). Also same day: image-proc follows the
+  active model (`788d199` - the per-model columns existed since the
+  WinForms port and NOTHING read them, either UI; Qt now reads/writes
+  them, Tk untouched), Train one-column capture (`5f8f9a1`), support
+  bundle module (`4a21086`), Qt crash classes captured in CLAUDE.md +
+  .claude/skills/qt-ui-debugging (`5d81f91`).
