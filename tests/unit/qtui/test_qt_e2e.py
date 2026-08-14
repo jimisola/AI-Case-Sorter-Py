@@ -354,7 +354,7 @@ def test_demo_c_model_lifecycle(config, window, monkeypatch, tmp_path) -> None:
 
     # 2. Activate it: the Train activity appears, the library marks the row.
     select_model(page, created.id)
-    page.buttons["Activate"].click()
+    activate_row(page, created.id)
     assert drain_until(window, lambda: not window.sidebar_buttons["Train"].isHidden())
     assert SettingsRepo(config.db).get_active_model_id() == created.id
 
@@ -403,14 +403,14 @@ def test_demo_c_model_lifecycle(config, window, monkeypatch, tmp_path) -> None:
     # 6. Activate the copy: the dashboard follows the active model, so the
     #    slot the original had routed is empty again.
     select_model(page, imported.id)
-    page.buttons["Activate"].click()
+    activate_row(page, imported.id)
     assert drain_until(window, lambda: SettingsRepo(config.db).get_active_model_id() == imported.id)
     assert window.slot_grid.cards[1].names_label.text() == EMPTY_HINT
     assert not window.sidebar_buttons["Train"].isHidden()
 
     # 7. Back to AI Config mode: Train goes away again.
     select_model(page, -1)  # the synthetic "Use AI Config" row
-    page.buttons["Activate"].click()
+    activate_row(page, -1)
     assert drain_until(window, lambda: window.sidebar_buttons["Train"].isHidden())
     assert SettingsRepo(config.db).get_active_model_id() is None
 
@@ -421,6 +421,13 @@ def select_model(page: Any, model_id: int) -> None:
     item = page.tree.topLevelItem(index)
     assert item is not None
     page.tree.setCurrentItem(item)
+
+
+def activate_row(page: Any, model_id: int) -> None:
+    """Activate a model the way the library does it: that row's own button."""
+    widget = page.row_actions(model_id)
+    assert widget is not None, f"no action buttons on row {model_id}"
+    widget.activate_button.click()
 
 
 # ----- (c2) sorting templates carry a whole layout ----------------------------

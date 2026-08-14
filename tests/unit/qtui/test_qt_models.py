@@ -30,6 +30,9 @@ from sorter.data.models import Model
 from sorter.data.repository import CartridgeRepo, HeadstampRepo, ModelRepo, SettingsRepo
 from sorter.qtui.dialog_model_editor import ModelEditorDialog
 from sorter.qtui.models_page import (
+    ACTION_BUTTON_HEIGHT,
+    ACTION_BUTTON_WIDTH,
+    ACTIONS_COLUMN,
     ACTIVE_MARK,
     AI_CONFIG_HINT,
     AI_CONFIG_NAME,
@@ -38,10 +41,20 @@ from sorter.qtui.models_page import (
     FILTER_TYPE_COMMUNITY,
     FOREIGN_NOTICE,
     SELECT_HINT,
+    TOOLTIP_ACTIVATE,
+    TOOLTIP_ACTIVATE_AI,
+    TOOLTIP_ACTIVE,
+    TOOLTIP_ACTIVE_AI,
+    TOOLTIP_DELETE,
+    TOOLTIP_DELETE_ACTIVE,
+    TOOLTIP_EDIT,
     ZIP_FILTER,
 )
 
 from .conftest import drain_until, seed_model
+
+# Every column but the one holding the row's buttons, which carries no value.
+DATA_COLUMNS = COLUMNS[:ACTIONS_COLUMN]
 
 
 @pytest.fixture(autouse=True)
@@ -113,6 +126,13 @@ def select(page: Any, model_id: int) -> None:
 
 def select_name(page: Any, name: str) -> None:
     select_row(page, names(page).index(name))
+
+
+def row_actions(page: Any, model_id: int) -> Any:
+    """A row's live action buttons — looked up fresh, never held across a sort."""
+    widget = page.row_actions(model_id)
+    assert widget is not None, f"no action buttons on row {model_id}"
+    return widget
 
 
 def make_model(config: Any, name: str, **fields: Any) -> Model:
@@ -331,7 +351,7 @@ def test_the_ai_row_stays_pinned_first_under_every_sort(page, window, config) ->
     make_model(config, "Alpha model")
     page.refresh()
 
-    for column_name in COLUMNS:
+    for column_name in DATA_COLUMNS:
         click_header(page, column_name, window)
         assert names(page)[0] == AI_CONFIG_NAME, f"AI row wasn't first after sorting by {column_name!r}"
         # Click again to flip to descending, same assertion.
@@ -440,8 +460,29 @@ def test_column_resizing_stays_interactive_after_sorting_is_wired(page, window) 
     header = page.tree.header()
     click_header(page, "Model", window)
 
-    for column in range(len(COLUMNS)):
+    for column in range(len(DATA_COLUMNS)):
         assert header.sectionResizeMode(column) == QHeaderView.ResizeMode.Interactive
+    # The buttons' column is the one exception: it holds exactly their width.
+    assert header.sectionResizeMode(ACTIONS_COLUMN) == QHeaderView.ResizeMode.Fixed
+
+
+def test_clicking_the_actions_header_sorts_nothing(page, window, config) -> None:
+    make_model(config, "Zed model")
+    make_model(config, "Alpha model")
+    page.refresh()
+    before = names(page)
+
+    header = page.tree.header()
+    x = header.sectionViewportPosition(ACTIONS_COLUMN) + header.sectionSize(ACTIONS_COLUMN) // 2
+    QTest.mouseClick(
+        header.viewport(),
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+        QPoint(x, header.height() // 2),
+    )
+
+    assert page._sort_column is None
+    assert names(page) == before
 
 
 # ----- activation ------------------------------------------------------------
@@ -482,23 +523,195 @@ def test_activate_is_disabled_for_the_row_that_is_already_active(page, config) -
     select(page, model.id)
     page.activate_selected()
 
-    assert not page.buttons["Activate"].isEnabled()
-
-    select(page, AI_CONFIG_SENTINEL_ID)
-    assert page.buttons["Activate"].isEnabled()
+    active = row_actions(page, model.id)
+    assert not active.activate_button.isEnabled()
+    assert active.activate_button.toolTip() == TOOLTIP_ACTIVE
+    # The row that isn't active still offers it — the AI row included.
+    ai = row_actions(page, AI_CONFIG_SENTINEL_ID)
+    assert ai.activate_button.isEnabled()
+    assert ai.activate_button.toolTip() == TOOLTIP_ACTIVATE_AI
 
 
 def test_the_ai_row_has_no_model_actions(page) -> None:
     select(page, AI_CONFIG_SENTINEL_ID)
 
-    assert not any(page.buttons[name].isEnabled() for name in ("Edit…", "Export…", "Delete"))
+    assert not page.buttons["Export…"].isEnabled()
+
+
+# ----- the row's own action buttons -------------------------------------------
+
+
+def test_every_model_row_carries_three_fixed_size_buttons(page, config) -> None:
+    model = make_model(config, "Range brass")
+    page.refresh()
+
+    widget = row_actions(page, model.id)
+    assert [b.text() for b in widget.buttons()] == ["✓", "✎", "×"]
+    # Fixed in BOTH dimensions: a glyph or state change must not resize a
+    # button, its column, or the row under it (community_page.py's finding).
+    for button in widget.buttons():
+        assert button.size().toTuple() == (ACTION_BUTTON_WIDTH, ACTION_BUTTON_HEIGHT)
+        assert button.minimumSize() == button.maximumSize()
+    assert [b.toolTip() for b in widget.buttons()] == [TOOLTIP_ACTIVATE, TOOLTIP_EDIT, TOOLTIP_DELETE]
+    assert widget.delete_button.objectName() == "danger"
+
+
+def test_the_ai_row_offers_only_activation(page) -> None:
+    widget = row_actions(page, AI_CONFIG_SENTINEL_ID)
+
+    assert [b.text() for b in widget.buttons()] == ["✓"]
+    assert widget.edit_button is None and widget.delete_button is None
+    # It is the active mode on a fresh DB, so its one button says so.
+    assert not widget.activate_button.isEnabled()
+    assert widget.activate_button.toolTip() == TOOLTIP_ACTIVE_AI
+
+
+def test_a_row_button_activates_its_own_row_not_the_selected_one(page, window, config) -> None:
+    target = make_model(config, "Range brass")
+    other = make_model(config, "Match prep")
+    page.refresh()
+    select(page, other.id)
+
+    row_actions(page, target.id).activate_button.click()
+
+    assert fresh_active_id(config) == target.id
+    assert active_names(page) == ["Range brass"]
+    assert drain_until(window, lambda: not window.sidebar_buttons["Train"].isHidden())
+
+
+def test_the_ai_rows_button_returns_to_ai_config_mode(page, window, config) -> None:
+    seed_model(config, {"9mm FC": 1}, name="Local")
+    page.refresh()
+
+    row_actions(page, AI_CONFIG_SENTINEL_ID).activate_button.click()
+
+    assert fresh_active_id(config) is None
+    assert active_names(page) == [AI_CONFIG_NAME]
+    assert drain_until(window, lambda: window.sidebar_buttons["Train"].isHidden())
+
+
+def test_the_active_rows_delete_button_is_disabled(page, config, window) -> None:
+    """Mirrors ``ModelRepo.delete``'s own refusal, which ``_delete`` never
+    overrides (it passes no replacement) — so the button can't open a confirm
+    that is bound to fail. ``test_delete_refuses_the_active_model`` is the
+    other half: the repo really does refuse."""
+    model_id = seed_model(config, {"9mm FC": 1}, name="Active one")
+    other = make_model(config, "Spare")
+    page.refresh()
+
+    active = row_actions(page, model_id)
+    assert not active.delete_button.isEnabled()
+    assert active.delete_button.toolTip() == TOOLTIP_DELETE_ACTIVE
+    # Editing the active model is fine, and every other row deletes normally.
+    assert active.edit_button.isEnabled()
+    assert row_actions(page, other.id).delete_button.isEnabled()
+    assert row_actions(page, other.id).delete_button.toolTip() == TOOLTIP_DELETE
+    assert window.notify.calls == []
+
+
+def test_a_row_delete_goes_through_the_same_confirm_seam(page, window, config) -> None:
+    model = make_model(config, "Doomed")
+    page.refresh()
+    asked: list[tuple[str, str]] = []
+
+    def refuse(title: str, text: str) -> bool:
+        asked.append((title, text))
+        return False
+
+    page.confirm = refuse
+    row_actions(page, model.id).delete_button.click()
+
+    assert [title for title, _text in asked] == ["Confirm delete"]
+    assert "Doomed" in asked[0][1]
+    assert ModelRepo(config.db).get(model.id) is not None
+
+    page.confirm = lambda _title, _text: True
+    row_actions(page, model.id).delete_button.click()
+
+    assert ModelRepo(config.db).get(model.id) is None
+    assert "Doomed" not in names(page)
+    assert drain_until(window, lambda: not paths.model_dir(model.id).exists())
+
+
+def test_a_row_edit_button_opens_the_editor_for_its_own_row(page, config, monkeypatch) -> None:
+    from sorter.qtui import models_page as module
+
+    opened: list[Model | None] = []
+
+    class StubDialog:
+        def __init__(self, _db: Any, existing: Model | None = None, parent: Any = None) -> None:
+            opened.append(existing)
+
+        def exec(self) -> int:
+            return 0
+
+    monkeypatch.setattr(module, "ModelEditorDialog", StubDialog)
+    target = make_model(config, "Range brass")
+    other = make_model(config, "Match prep")
+    page.refresh()
+    select(page, other.id)
+
+    row_actions(page, target.id).edit_button.click()
+
+    assert [m.id for m in opened if m is not None] == [target.id]
+    # The clicked row becomes the selection, so the bar below follows it too.
+    assert page.selected_id() == target.id
+
+
+def test_a_row_button_still_targets_its_own_model_after_a_sort(page, window, config) -> None:
+    """``_pin_ai_row`` takes a row out of the tree and puts it back, which
+    destroys its item widget — the buttons must be re-installed, and still
+    bound to the row they sit in, after any header click."""
+    zed = make_model(config, "Zed model")
+    make_model(config, "Alpha model")
+    page.refresh()
+
+    click_header(page, "Model", window)  # ascending: Alpha, seeded, Zed
+    click_header(page, "Model", window)  # descending: Zed, seeded, Alpha
+    assert names(page)[0] == AI_CONFIG_NAME  # still pinned
+    assert names(page)[1] == "Zed model"
+
+    row_actions(page, zed.id).activate_button.click()
+
+    assert fresh_active_id(config) == zed.id
+    assert active_names(page) == ["Zed model"]
+
+
+def test_the_row_buttons_stand_down_while_an_archive_is_in_flight(page, config) -> None:
+    model = make_model(config, "Range brass")
+    page.refresh()
+
+    page._set_busy(True)
+    assert not any(b.isEnabled() for b in row_actions(page, model.id).buttons())
+
+    page._set_busy(False)
+    assert all(b.isEnabled() for b in row_actions(page, model.id).buttons())
+
+
+def test_the_bottom_bar_is_only_the_selection_scoped_actions(page) -> None:
+    # Activate/Edit/Delete belong to a row and moved into it; what's left is
+    # scoped to the selection. No danger or action role remains down here.
+    assert list(page.buttons) == ["Images…", "Headstamps…", "Evaluate…", "Export…"]
+    assert [b.objectName() for b in page.buttons.values()] == ["", "", "", ""]
+
+
+def test_the_actions_column_holds_exactly_its_buttons(page, config) -> None:
+    model = make_model(config, "Range brass")
+    page._columns_sized = False
+    page.refresh()
+
+    widget = row_actions(page, model.id)
+    # resizeColumnToContents measures cell text, never item widgets, so the
+    # autosize pass must not be what decides this column's width.
+    assert page.tree.header().sectionSize(ACTIONS_COLUMN) >= widget.sizeHint().width()
+    assert page.tree.header().sectionSize(ACTIONS_COLUMN) >= 3 * ACTION_BUTTON_WIDTH
 
 
 # ----- ownership -------------------------------------------------------------
 
 
 def test_a_community_download_is_read_only_and_not_trainable(page, config) -> None:
-    make_model(config, "Someone else's", model_type="CommunityManaged", community_model_uid="uid-9")
+    model = make_model(config, "Someone else's", model_type="CommunityManaged", community_model_uid="uid-9")
     page.refresh()
     select_name(page, "Someone else's")
 
@@ -506,7 +719,8 @@ def test_a_community_download_is_read_only_and_not_trainable(page, config) -> No
     assert page.hint_label.text() == FOREIGN_NOTICE
     assert not page.buttons["Images…"].isEnabled()
     # Everything that isn't about training the model stays available.
-    assert all(page.buttons[name].isEnabled() for name in ("Edit…", "Export…", "Delete"))
+    assert page.buttons["Export…"].isEnabled()
+    assert all(b.isEnabled() for b in row_actions(page, model.id).buttons())
 
 
 def test_a_model_you_shared_yourself_stays_yours(page, config) -> None:
