@@ -9,6 +9,16 @@ change to ``Config`` when "Save" (or "Capture Image", which calls save() first)
 is clicked. This page persists each control on change instead — no separate
 Save step — and reprocesses the last-captured frame against it. Line-scan
 strategy stays dormant here too, same as Tk (``crop_headstamp`` always picks Hough).
+
+Second deviation, and the reason this page listens on the bus: crop and primer
+settings belong to the model (case diameter and primer size are cartridge
+properties), and the model row has carried them since the WinForms port —
+``Model.use_primer_mask``/``hide_primer``/``primer_mask_size`` and
+``Model.image_processing``. Nothing read them: both UIs tuned the single global
+``config.image_proc`` and switching models left it untouched. This page reads
+and writes the active model's values, mirroring them into ``config.image_proc``,
+which stays the live copy ``run_controller`` reads. See the ``ImageProcSection``
+class docstring for how a pristine model row inherits the global.
 """
 
 from __future__ import annotations
@@ -34,6 +44,8 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QWidget,
 )
 
+from ..data.models import ImageProcessingConfig, Model
+from ..data.repository import ModelRepo
 from ..hardware.image_proc import (
     HoughParams,
     apply_primer_mask,
@@ -50,9 +62,43 @@ PRIMER_MODES: tuple[tuple[str, str], ...] = (
 LED_DEBOUNCE_MS = 500
 LED_RECAPTURE_DELAY_MS = 200
 
+# A model row still holding these has never had the page's settings written to
+# it, so it inherits whatever the global currently holds instead of resetting it.
+_NEW_MODEL = Model()
+_UNSET_PRIMER = (_NEW_MODEL.use_primer_mask, _NEW_MODEL.hide_primer, _NEW_MODEL.primer_mask_size)
+_UNSET_HOUGH = dict(ImageProcessingConfig().hough)
+
+
+def primer_mode_of(model: Model) -> str:
+    """The page's tri-state primer mode from the model's two legacy booleans."""
+    if model.use_primer_mask:
+        return "use"
+    return "hide" if model.hide_primer else "none"
+
+
+def _write_primer_to(model: Model, mode: str, radius: int) -> None:
+    model.use_primer_mask = mode == "use"
+    model.hide_primer = mode == "hide"
+    model.primer_mask_size = radius
+    # The legacy booleans above are what the model editor and the WinForms
+    # manifest read; image_processing is the same values in the newer shape.
+    model.image_processing.primer_mode = mode
+    model.image_processing.primer_radius = radius
+
 
 class ImageProcSection(QWidget):
-    """Hough + primer + LED controls, and a before/after preview. State on ``self``."""
+    """Hough + primer + LED controls, and a before/after preview. State on ``self``.
+
+    Crop and primer settings follow the active model. ``sync_from_active_model``
+    is the one direction of travel: model row → ``config.image_proc`` → widgets,
+    run on ``mode/changed``, on show (the model editor edits the same primer
+    fields and posts nothing) and at construction. A model still holding the
+    dataclass defaults inherits the global rather than resetting it, so an
+    install that tuned the global before this page existed keeps its tuning.
+
+    LED brightness is genuinely global — it is a board setting
+    (``serial.init_settings.cameraledlevel``), not a model one.
+    """
 
     def __init__(self, win: Any) -> None:
         super().__init__()
@@ -60,6 +106,9 @@ class ImageProcSection(QWidget):
         self._raw_frame: np.ndarray | None = None
         self._led_pending_value: int | None = None
         self._led_last_sent: int | None = None
+        # Set while widgets are being loaded from config, so the change handlers
+        # don't write what they just read back out again.
+        self._syncing = False
 
         column = QVBoxLayout(self)
         column.setContentsMargins(0, 0, 0, 0)
@@ -74,6 +123,69 @@ class ImageProcSection(QWidget):
         self._led_timer = QTimer(self)
         self._led_timer.setSingleShot(True)
         self._led_timer.timeout.connect(self._apply_led)
+
+        win.bus.subscribe("mode/changed", lambda _payload: self.sync_from_active_model())
+        self.sync_from_active_model()
+
+    # ----- model scope -------------------------------------------------------
+
+    def _active_model(self) -> Model | None:
+        """The active model, re-read every time — never a snapshot to write back."""
+        model_id = self._win.config.settings.get_active_model_id()
+        if model_id is None:  # AI Config mode: the global settings are the scope
+            return None
+        return ModelRepo(self._win.config.db).get(model_id)
+
+    def sync_from_active_model(self) -> None:
+        """Load the active model's settings into the live config, then the widgets."""
+        model = self._active_model()
+        if model is not None:
+            cfg = self._win.config.image_proc
+            before = (cfg.get("primer_mode"), cfg.get("primer_radius"), dict(cfg.get("hough") or {}))
+            if (model.use_primer_mask, model.hide_primer, model.primer_mask_size) != _UNSET_PRIMER:
+                cfg["primer_mode"] = primer_mode_of(model)
+                cfg["primer_radius"] = int(model.primer_mask_size)
+            if model.image_processing.hough != _UNSET_HOUGH:
+                cfg["hough"] = {**(cfg.get("hough") or {}), **model.image_processing.hough}
+            after = (cfg.get("primer_mode"), cfg.get("primer_radius"), dict(cfg.get("hough") or {}))
+            if after != before:
+                self._win.config.save()
+        self.refresh_from_config()
+
+    def refresh_from_config(self) -> None:
+        """Re-read every control from ``config.image_proc`` without writing back."""
+        cfg = self._win.config.image_proc
+        hough = cfg.get("hough") or {}
+        self._syncing = True
+        try:
+            self.dp_spin.setValue(float(hough.get("dp", 2.0)))
+            self.min_dist_spin.setValue(int(hough.get("min_dist", 500)))
+            self.param1_spin.setValue(int(hough.get("param1", 100)))
+            self.param2_spin.setValue(int(hough.get("param2", 60)))
+            self.min_radius_spin.setValue(int(hough.get("min_radius", 150)))
+            self.max_radius_spin.setValue(int(hough.get("max_radius", 250)))
+            index = self.primer_mode_combo.findData(cfg.get("primer_mode", "hide"))
+            self.primer_mode_combo.setCurrentIndex(index if index >= 0 else 2)
+            self.primer_radius_spin.setValue(int(cfg.get("primer_radius", 135)))
+        finally:
+            self._syncing = False
+        self._reprocess()
+
+    def _store_on_active_model(self) -> None:
+        """Mirror what the page just wrote to the config onto the active model."""
+        model = self._active_model()
+        if model is None:
+            return
+        cfg = self._win.config.image_proc
+        _write_primer_to(model, str(cfg.get("primer_mode", "hide")), int(cfg.get("primer_radius", 135)))
+        model.image_processing.strategy = str(cfg.get("strategy", "hough"))
+        model.image_processing.hough = dict(cfg.get("hough") or {})
+        with self._win.config.db.transaction():
+            ModelRepo(self._win.config.db).update(model)
+
+    def showEvent(self, event: Any) -> None:
+        super().showEvent(event)
+        self.sync_from_active_model()
 
     # ----- Hough group -----------------------------------------------------
 
@@ -122,6 +234,8 @@ class ImageProcSection(QWidget):
         return box
 
     def _on_hough_changed(self, _value: Any = None) -> None:
+        if self._syncing:
+            return
         cfg = self._win.config.image_proc
         cfg["strategy"] = "hough"
         cfg["hough"] = {
@@ -133,6 +247,7 @@ class ImageProcSection(QWidget):
             "max_radius": int(self.max_radius_spin.value()),
         }
         self._win.config.save()
+        self._store_on_active_model()
         self._reprocess()
 
     # ----- Primer group ------------------------------------------------------
@@ -162,10 +277,13 @@ class ImageProcSection(QWidget):
         return box
 
     def _on_primer_changed(self, _value: Any = None) -> None:
+        if self._syncing:
+            return
         cfg = self._win.config.image_proc
         cfg["primer_mode"] = self.primer_mode_combo.currentData()
         cfg["primer_radius"] = int(self.primer_radius_spin.value())
         self._win.config.save()
+        self._store_on_active_model()
         self._reprocess()
 
     # ----- LED group -----------------------------------------------------------

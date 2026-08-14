@@ -376,6 +376,134 @@ def test_led_debounce_skips_a_repeat_of_the_same_value(window) -> None:
     assert window.broker.sent == ["cameraledlevel:200"]
 
 
+# ----- Image Proc page: model-scoped crop + primer settings ---------------------
+
+
+def _make_model(config, name, **fields):
+    """A second model on the seeded cartridge, with image-processing overrides."""
+    from sorter.data.models import Model
+    from sorter.data.repository import CartridgeRepo, ModelRepo
+
+    cartridge = CartridgeRepo(config.db).list()[0]
+    return ModelRepo(config.db).create(Model(name=name, cartridge_id=cartridge.id, **fields))
+
+
+def _activate(window, model_id):
+    from sorter.data.repository import SettingsRepo
+
+    SettingsRepo(window.config.db).set_active_model_id(model_id)
+    window.bus.post("mode/changed", {"active_model_id": model_id})
+    window.bus.drain()
+
+
+def test_switching_models_reloads_the_page(window, config) -> None:
+    from sorter.data.models import ImageProcessingConfig
+
+    section = settings_imageproc.build_imageproc_section(window)
+    model_a = _make_model(
+        config,
+        "A",
+        use_primer_mask=True,
+        hide_primer=False,
+        primer_mask_size=90,
+        image_processing=ImageProcessingConfig(hough={**ImageProcessingConfig().hough, "min_radius": 111}),
+    )
+    model_b = _make_model(
+        config,
+        "B",
+        use_primer_mask=False,
+        hide_primer=False,
+        primer_mask_size=210,
+        image_processing=ImageProcessingConfig(hough={**ImageProcessingConfig().hough, "min_radius": 222}),
+    )
+
+    _activate(window, model_a.id)
+    assert (section.primer_mode_combo.currentData(), section.primer_radius_spin.value()) == ("use", 90)
+    assert section.min_radius_spin.value() == 111
+
+    _activate(window, model_b.id)
+    assert (section.primer_mode_combo.currentData(), section.primer_radius_spin.value()) == ("none", 210)
+    assert section.min_radius_spin.value() == 222
+    # The live config is what run_controller crops with, so it moved too.
+    assert window.config.image_proc["primer_radius"] == 210
+    assert window.config.image_proc["hough"]["min_radius"] == 222
+
+
+def test_edits_land_on_the_active_model_not_on_the_next_one(window, config) -> None:
+    from sorter.data.repository import ModelRepo
+
+    section = settings_imageproc.build_imageproc_section(window)
+    model_a = _make_model(config, "A")
+    model_b = _make_model(config, "B", use_primer_mask=False, hide_primer=False, primer_mask_size=210)
+
+    _activate(window, model_a.id)
+    section.primer_radius_spin.setValue(160)
+    section.min_radius_spin.setValue(180)
+
+    stored_a = ModelRepo(config.db).get(model_a.id)
+    assert (stored_a.primer_mask_size, stored_a.hide_primer, stored_a.use_primer_mask) == (160, True, False)
+    assert stored_a.image_processing.hough["min_radius"] == 180
+    assert stored_a.image_processing.primer_radius == 160
+
+    # B never inherits A's edit — Seth's report, from the write side.
+    assert ModelRepo(config.db).get(model_b.id).primer_mask_size == 210
+    _activate(window, model_b.id)
+    assert section.primer_radius_spin.value() == 210
+    _activate(window, model_a.id)
+    assert section.primer_radius_spin.value() == 160
+
+
+def test_a_model_that_was_never_tuned_here_inherits_the_global(window, config) -> None:
+    # Existing installs tuned the global before this page was model-aware;
+    # activating a model must not reset that to the dataclass defaults.
+    window.config.image_proc["primer_radius"] = 175
+    window.config.image_proc["primer_mode"] = "none"
+    window.config.image_proc["hough"]["min_radius"] = 199
+    window.config.save()
+    section = settings_imageproc.build_imageproc_section(window)
+
+    _activate(window, _make_model(config, "Untuned").id)
+
+    assert section.primer_radius_spin.value() == 175
+    assert section.primer_mode_combo.currentData() == "none"
+    assert section.min_radius_spin.value() == 199
+    assert window.config.image_proc["primer_radius"] == 175
+
+
+def test_ai_config_mode_keeps_the_settings_global(window, config) -> None:
+    from sorter.data.repository import ModelRepo, SettingsRepo
+
+    section = settings_imageproc.build_imageproc_section(window)
+    model = _make_model(config, "Parked")
+    SettingsRepo(config.db).clear_active_model()
+    window.bus.post("mode/changed", {"active_model_id": None})
+    window.bus.drain()
+
+    section.primer_radius_spin.setValue(144)
+
+    assert Config(config.db).load().image_proc["primer_radius"] == 144
+    assert ModelRepo(config.db).get(model.id).primer_mask_size == 135
+
+
+def test_reopening_the_page_picks_up_a_model_editor_change(window, config) -> None:
+    # The model editor writes the same primer fields and posts nothing, so the
+    # page re-reads on show rather than trusting what it loaded last.
+    from sorter.data.repository import ModelRepo
+
+    section = settings_imageproc.build_imageproc_section(window)
+    model = _make_model(config, "Edited", use_primer_mask=False, hide_primer=True, primer_mask_size=120)
+    _activate(window, model.id)
+    assert section.primer_radius_spin.value() == 120
+
+    model.primer_mask_size = 175
+    with config.db.transaction():
+        ModelRepo(config.db).update(model)
+    section.show()
+
+    assert section.primer_radius_spin.value() == 175
+    section.close()
+
+
 def test_the_device_list_names_devices_and_the_status_line_carries_the_index(window, monkeypatch) -> None:
     # The "(N)" prefix was the list position while the line below read the real
     # device index — two different numbers for the same camera (JL).
