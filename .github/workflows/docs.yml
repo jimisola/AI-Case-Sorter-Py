@@ -14,6 +14,16 @@ name: Docs
 # It always builds from the release's own tag, never from the branch that
 # dispatched it -- the docs at version N have to be the docs that shipped in N.
 on:
+  # The unreleased docs, in one rolling `dev` slot (JL). Path-filtered: only a
+  # change that reaches the site is worth a deploy.
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "mkdocs-pdf.yml"
+      - ".github/workflows/docs.yml"
+
   workflow_call:
     inputs:
       version:
@@ -63,7 +73,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 # zizmor: ignore[artipacked] mike's own `git push` to gh-pages is this job's entire purpose
         with:
           fetch-depth: 0
-          ref: ${{ inputs.version }}
+          # A push has no version input: the dev slot documents the commit
+          # that triggered it, which is what `github.sha` already resolves to.
+          ref: ${{ inputs.version || github.sha }}
 
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
 
@@ -96,18 +108,32 @@ jobs:
       - name: Build the site strictly
         run: uv run --no-sync mkdocs build --strict
 
-      # Same expression release.yml resolves `prerelease` from, so the two
-      # cannot disagree about what a version string means.
-      - name: Classify the version
+      # Three kinds, one output. The prerelease arm is the same expression
+      # release.yml resolves `prerelease` from, so the two cannot disagree
+      # about what a version string means; `dev` is decided by the event,
+      # since a push carries no version at all.
+      - name: Classify the deploy
         id: kind
         env:
           VERSION: ${{ inputs.version }}
+          EVENT: ${{ github.event_name }}
         run: |
-          if echo "$VERSION" | grep -qE '(a|b|rc)[0-9]+$'; then
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT" = "push" ]; then
+            echo "kind=dev" >> "$GITHUB_OUTPUT"
+          elif echo "$VERSION" | grep -qE '(a|b|rc)[0-9]+$'; then
+            echo "kind=prerelease" >> "$GITHUB_OUTPUT"
           else
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "kind=stable" >> "$GITHUB_OUTPUT"
           fi
+
+      # Every push to main overwrites ONE rolling `dev` entry (JL) — the same
+      # single-slot shape as `prerelease` below, so the dropdown carries one
+      # unreleased entry rather than a directory per commit. It never takes
+      # `latest` and never becomes the root, so an operator still lands on the
+      # released docs.
+      - name: Deploy the latest build into the rolling dev slot
+        if: ${{ steps.kind.outputs.kind == 'dev' }}
+        run: uv run --no-sync mike deploy -F mkdocs-pdf.yml --push --title "dev (unreleased)" dev
 
       # Release candidates share ONE rolling "prerelease" slot (JL): the
       # dropdown shows a single pre-release entry holding the newest
@@ -115,7 +141,7 @@ jobs:
       # entry's title carries the actual tag; the URL is /prerelease/. It
       # never takes `latest`, so the docs root never lands on a candidate.
       - name: Deploy the release candidate into the rolling prerelease slot
-        if: ${{ steps.kind.outputs.prerelease == 'true' }}
+        if: ${{ steps.kind.outputs.kind == 'prerelease' }}
         env:
           VERSION: ${{ inputs.version }}
         run: uv run --no-sync mike deploy -F mkdocs-pdf.yml --push --title "$VERSION (pre-release)" prerelease
@@ -123,7 +149,7 @@ jobs:
       # --update-aliases is what moves `latest` off the previous release;
       # without it mike refuses to reassign an alias that already exists.
       - name: Deploy the release and move `latest`
-        if: ${{ steps.kind.outputs.prerelease != 'true' }}
+        if: ${{ steps.kind.outputs.kind == 'stable' }}
         env:
           VERSION: ${{ inputs.version }}
         run: uv run --no-sync mike deploy -F mkdocs-pdf.yml --push --update-aliases "$VERSION" latest
@@ -132,7 +158,7 @@ jobs:
       # already-correct gh-pages is a no-op commit at worst -- so it is simpler
       # to run it on every stable deploy than to detect the first one.
       - name: Point the site root at `latest`
-        if: ${{ steps.kind.outputs.prerelease != 'true' }}
+        if: ${{ steps.kind.outputs.kind == 'stable' }}
         run: uv run --no-sync mike set-default -F mkdocs-pdf.yml --push latest
 
       # The same PDF the site serves, attached to the GitHub release (JL):
@@ -155,7 +181,7 @@ jobs:
       # the rolling slot is retired with it. `|| true`: most stables were
       # never preceded by a candidate and have nothing to delete.
       - name: Retire the prerelease slot
-        if: ${{ steps.kind.outputs.prerelease != 'true' }}
+        if: ${{ steps.kind.outputs.kind == 'stable' }}
         run: uv run --no-sync mike delete -F mkdocs-pdf.yml --push prerelease || true
 
       # One-time enablement, automated: the Pages API 404s until gh-pages
@@ -184,7 +210,7 @@ jobs:
         if: always()
         env:
           VERSION: ${{ inputs.version }}
-          PRERELEASE: ${{ steps.kind.outputs.prerelease }}
+          KIND: ${{ steps.kind.outputs.kind }}
           REPO: ${{ github.repository }}
         run: |
           OWNER="${REPO%%/*}"
@@ -193,10 +219,17 @@ jobs:
           {
             echo "### Documentation"
             echo ""
-            echo "- Version: [\`$VERSION\`](${SITE}/${VERSION}/)"
-            if [ "$PRERELEASE" = "true" ]; then
-              echo "- \`latest\` is unchanged -- a release candidate is reachable only from the version dropdown."
-            else
-              echo "- [\`latest\`](${SITE}/latest/) now points at \`$VERSION\`, and so does the site root."
-            fi
+            case "$KIND" in
+              dev)
+                echo "- [\`dev\`](${SITE}/dev/) now holds the unreleased docs. \`latest\` and the site root are unchanged."
+                ;;
+              prerelease)
+                echo "- Version: [\`$VERSION\`](${SITE}/prerelease/)"
+                echo "- \`latest\` is unchanged -- a release candidate is reachable only from the version dropdown."
+                ;;
+              *)
+                echo "- Version: [\`$VERSION\`](${SITE}/${VERSION}/)"
+                echo "- [\`latest\`](${SITE}/latest/) now points at \`$VERSION\`, and so does the site root."
+                ;;
+            esac
           } >> "$GITHUB_STEP_SUMMARY"
