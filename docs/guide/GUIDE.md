@@ -130,7 +130,7 @@ mechanism.
 Picks which camera the Sort dashboard's preview and the classifier both
 read from.
 
-- **Detect / Refresh** probes attached cameras (opens each one briefly to
+- **Detect / refresh** probes attached cameras (opens each one briefly to
   read its supported resolutions) and fills the **Camera** and
   **Resolution** dropdowns.
 - **Apply** swaps the live camera to the selected device and resolution —

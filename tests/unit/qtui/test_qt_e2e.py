@@ -518,12 +518,12 @@ def test_demo_d_help_follows_the_page_you_are_on(window) -> None:
 
 def test_demo_d_the_guide_dock_toggles_from_the_view_menu(window) -> None:
     toggles = {action.text(): action for action in window.menus["View"].actions() if action.text()}
-    assert set(toggles) == {"Serial Monitor", "Classification History", "User Guide Panel", "Re-dock panels"}
+    assert set(toggles) == {"Serial Monitor", "Classification History", "User Guide panel", "Re-dock panels"}
 
-    toggles["User Guide Panel"].trigger()
+    toggles["User Guide panel"].trigger()
     assert not window.help_dock.isHidden()
 
-    toggles["User Guide Panel"].trigger()
+    toggles["User Guide panel"].trigger()
     assert window.help_dock.isHidden()
 
 

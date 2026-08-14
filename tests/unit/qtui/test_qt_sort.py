@@ -719,11 +719,11 @@ def test_store_images_control_persists_and_warns_once_per_session(window, config
     notices = []
     window.notify = lambda title, text: notices.append(title)
 
-    window.store_images_combo.setCurrentText("Above Confidence Floor")
+    window.store_images_combo.setCurrentText("Above confidence floor")
     assert config.run_store_images == "above"
     assert notices == ["Store images enabled"]
 
-    window.store_images_combo.setCurrentText("All Images")
+    window.store_images_combo.setCurrentText("All images")
     assert config.run_store_images == "all"
     assert notices == ["Store images enabled"]  # not a second time
 

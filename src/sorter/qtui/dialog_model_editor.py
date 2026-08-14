@@ -4,7 +4,7 @@ Same field set and the same persistence path (``ModelRepo.create``/``update``):
 name, cartridge, model type (the ConvNeXt variant), and the two primer-mask
 settings. Training hyperparameters live in their own dialog (increment 6).
 
-The **Community Feedback Loop** box follows the Tk rule exactly: it is built
+The **Community feedback loop** box follows the Tk rule exactly: it is built
 only for a model that is community-linked — a UID stamped on it, or an install
 marked ``CommunityManaged`` — which by construction means an *existing* model.
 The confidence floor is the publisher's and is shown read-only; the user owns
@@ -48,7 +48,7 @@ from ..data.repository import CartridgeRepo, ModelRepo
 # Persisted value <-> label shown in the combo box.
 FEEDBACK_MODE_LABELS = {
     "Instant": "Instant",
-    "OnRunComplete": "On Run Complete",
+    "OnRunComplete": "On run complete",
     "Manual": "Manual",
 }
 _FEEDBACK_MODE_BY_LABEL = {label: value for value, label in FEEDBACK_MODE_LABELS.items()}
@@ -137,7 +137,7 @@ class ModelEditorDialog(QDialog):
     # ----- feedback loop ------------------------------------------------------
 
     def _build_feedback_group(self, model: Model) -> QGroupBox:
-        box = QGroupBox("Community Feedback Loop", self)
+        box = QGroupBox("Community feedback loop", self)
         column = QVBoxLayout(box)
 
         self.fb_enabled_check = QCheckBox("Participate in feedback loop", box)

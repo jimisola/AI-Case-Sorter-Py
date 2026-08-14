@@ -620,7 +620,7 @@ def test_the_feedback_opt_in_saves_but_the_floor_is_the_publishers(page, config)
     )
     dialog, notified = editor(page, model)
     dialog.fb_enabled_check.setChecked(True)
-    dialog.fb_mode_combo.setCurrentText("On Run Complete")
+    dialog.fb_mode_combo.setCurrentText("On run complete")
 
     dialog.save()
 

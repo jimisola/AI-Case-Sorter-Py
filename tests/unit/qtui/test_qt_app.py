@@ -68,7 +68,7 @@ def test_menus(window) -> None:
     assert [a.text() for a in window.menus["View"].actions() if a.text()] == [
         "Serial Monitor",
         "Classification History",
-        "User Guide Panel",
+        "User Guide panel",
         "Re-dock panels",
     ]
     assert window.serial_dock.toggleViewAction() in window.menus["View"].actions()

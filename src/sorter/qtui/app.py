@@ -202,9 +202,9 @@ CAMERA_FAILED_STATUS = "Camera failed to start — pick a device in Settings →
 # same semantics — just grouped into one popover instead of three rows.
 STORE_IMAGES_LABELS = {
     "none": "None",
-    "above": "Above Confidence Floor",
-    "below": "Below Confidence Floor",
-    "all": "All Images",
+    "above": "Above confidence floor",
+    "below": "Below confidence floor",
+    "all": "All images",
 }
 STORE_IMAGES_BY_LABEL = {label: mode for mode, label in STORE_IMAGES_LABELS.items()}
 STORE_IMAGES_WARNING_TITLE = "Store images enabled"
@@ -1358,7 +1358,7 @@ class QtMainWindow(QMainWindow):
         # menus have to be kept alive here or shiboken deletes them.
         self.menus: dict[str, Any] = {}
         file_menu = self.menus["File"] = self.menuBar().addMenu("&File")
-        open_data = file_menu.addAction("Open Data Folder")
+        open_data = file_menu.addAction("Open data folder")
         open_data.triggered.connect(self._open_data_folder)
         file_menu.addSeparator()
         quit_action = file_menu.addAction("Quit")
@@ -1373,7 +1373,7 @@ class QtMainWindow(QMainWindow):
         history_toggle.setText("Classification History")
         self.menus["View"].addAction(history_toggle)
         help_toggle = self.help_dock.toggleViewAction()
-        help_toggle.setText("User Guide Panel")
+        help_toggle.setText("User Guide panel")
         self.menus["View"].addAction(help_toggle)
         self.menus["View"].addSeparator()
         # The always-works escape hatch (Seth: floated the history panel and

@@ -1077,10 +1077,10 @@ class CommunityPage(QWidget):
         if model is not None and model.feedback_loop_enabled and model.community_model_uid:
             self._win.notify(
                 "Feedback loop enabled",
-                "Feedback Loop has been enabled for this model, which may include automatic upload of images "
+                "The feedback loop has been enabled for this model, which may include automatic upload of images "
                 f"below the {model.feedback_loop_confidence_floor}% confidence threshold for the model owner "
                 "to review.\n\nTo change the upload mode or opt out, open the model on the Models page, click "
-                "Edit, and adjust the Community Feedback Loop settings.",
+                "Edit, and adjust the Community feedback loop settings.",
             )
             return
         self._win.notify("Download complete", "Model imported.")

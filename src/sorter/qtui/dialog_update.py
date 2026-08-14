@@ -3,13 +3,13 @@
 States, in order:
 
     checking    → an explicit check is in flight (Help → "Check for updates…")
-    available   → version summary + release notes, "Download & Install"
+    available   → version summary + release notes, "Download & install"
     downloading → progress bar, cancellable
     ready       → "Restart to update"
 
 The dialog never writes to the app folder. Downloading only *stages* the update
 under the data root; the launcher applies it on the next start (CLAUDE.md §7).
-"Restart Now" re-execs the launcher and closes the app, which is what makes a
+"Restart now" re-execs the launcher and closes the app, which is what makes a
 staged update take effect. Opening with an update already staged jumps straight
 to ``ready``, so a user who picked "Later" can come back and restart.
 
@@ -84,10 +84,10 @@ PICKER_LOADING = "Loading releases…"
 PRERELEASE_LABEL = "Show prereleases"
 AUTO_CHECK_LABEL = "Check for updates on startup"
 
-PRIMARY_DOWNLOAD = "Download & Install"
+PRIMARY_DOWNLOAD = "Download & install"
 PRIMARY_DOWNLOADING = "Downloading…"
-PRIMARY_RESTART = "Restart Now"
-PRIMARY_RETRY = "Try Again"
+PRIMARY_RESTART = "Restart now"
+PRIMARY_RETRY = "Try again"
 SECONDARY_LATER = "Later"
 SECONDARY_CLOSE = "Close"
 SECONDARY_CANCEL = "Cancel"
@@ -216,7 +216,7 @@ class UpdateDialog(QDialog):
         self.resize(640, 580)
 
         self._info = info
-        # What "Download & Install" actually targets. Defaults to whatever check
+        # What "Download & install" actually targets. Defaults to whatever check
         # the caller already made; picking in the picker replaces it, including
         # with something older — that is the point of letting the user choose.
         self._selected = info

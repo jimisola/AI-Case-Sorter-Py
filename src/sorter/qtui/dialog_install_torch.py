@@ -63,7 +63,7 @@ BODY_TEXT = (
 )
 NO_GPU_TEXT = (
     "No supported NVIDIA GPU detected — the CPU build will be installed. "
-    "(For Nvidia GPUs requires Ampere or newer; compute capability ≥ 8.0.)"
+    "(For NVIDIA GPUs requires Ampere or newer; compute capability ≥ 8.0.)"
 )
 PROBING_TEXT = "Checking for a supported GPU…"
 NO_INSTALLER_TEXT = (

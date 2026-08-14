@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
 from ..hardware.camera import Camera, camera_names, list_cameras_with_metadata
 
 PREVIEW_INITIAL_TEXT = "No frame"
-NO_FEED_TEXT = "No camera feed — press Detect / Refresh or check the device."
+NO_FEED_TEXT = "No camera feed — press Detect / refresh or check the device."
 
 
 def _format_camera_choice(cam: dict[str, Any]) -> str:
@@ -66,7 +66,7 @@ class CameraSection(QWidget):
         column.addLayout(form)
 
         buttons = QHBoxLayout()
-        self.detect_button = QPushButton("Detect / Refresh", self)
+        self.detect_button = QPushButton("Detect / refresh", self)
         self.detect_button.clicked.connect(self.detect_devices)
         self.apply_button = QPushButton("Apply", self)
         self.apply_button.setObjectName("action")
@@ -134,7 +134,7 @@ class CameraSection(QWidget):
             entries = [{"index": idx, "name": f"Camera {idx}", "resolutions": []}]
         self._detected = entries
         self._fill_device_combo(select_index=int(cam_cfg.get("device_index", 0)))
-        self.status_label.setText("Click Detect / Refresh to probe supported resolutions.")
+        self.status_label.setText("Click Detect / refresh to probe supported resolutions.")
 
     def _fill_device_combo(self, *, select_index: int) -> None:
         self.device_combo.blockSignals(True)
