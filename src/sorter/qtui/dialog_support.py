@@ -1,4 +1,4 @@
-"""Help -> Get support: preview, copy, or save the support package.
+"""Help -> Export support package…: preview, copy, or save the support package.
 
 Seth's ask: make it easy to share the current configuration (run options,
 training options, serial and camera settings) on Discord to get help. The

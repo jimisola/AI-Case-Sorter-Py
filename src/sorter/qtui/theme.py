@@ -54,7 +54,7 @@ _FALLBACK = {
 
 
 def build_stylesheet(palette: dict[str, str]) -> str:
-    """QSS for one palette: window, header, sidebar, menus, dock, buttons, fields, status bar."""
+    """QSS for one palette: window, sidebar, menus, QtAds panels, buttons, fields, status bar."""
     c = {**_FALLBACK, **{k: v for k, v in palette.items() if isinstance(v, str)}}
     return f"""
 QMainWindow, QWidget {{

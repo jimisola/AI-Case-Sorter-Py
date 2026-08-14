@@ -52,10 +52,16 @@ from ..paths import app_root
 DEFAULT_TOPIC = ""
 
 # page name -> topic, for pages whose topic doesn't depend on anything else.
-# "Settings" isn't here: its topic also depends on settings_section. A page
-# with no entry (or no guide content yet) falls back to DEFAULT_TOPIC — F1
-# should always open *something* useful, even if it's just the guide's top.
-_PAGE_TOPICS = {"Sort": "sort-dashboard"}
+# "Settings" isn't here: its topic also depends on settings_section (its
+# sections' names are the guide's headings, so they slugify straight to the
+# anchor). A page with no entry — or an anchor the guide doesn't have yet —
+# falls back to DEFAULT_TOPIC: F1 always opens *something* useful.
+_PAGE_TOPICS = {
+    "Sort": "sort-dashboard",
+    "Train": "train",
+    "Models": "models",
+    "Community": "community",
+}
 
 _SLUG_STRIP_RE = re.compile(r"[^\w\s-]")
 _SLUG_SPACE_RE = re.compile(r"\s+")
@@ -80,7 +86,7 @@ def topic_for(page_name: str, settings_section: str | None = None) -> str:
 
 
 class HelpWindow(QWidget):
-    """Non-modal Markdown viewer over ``docs/guide/GUIDE.md``. Caller owns the single instance."""
+    """Markdown viewer over ``docs/guide/GUIDE.md`` — the User Guide panel's content."""
 
     def __init__(self, parent: QWidget | None = None, *, docs_root: Path | None = None) -> None:
         super().__init__(parent)
@@ -188,5 +194,5 @@ class HelpWindow(QWidget):
 
 
 def build_help_window(win: Any, *, docs_root: Path | None = None) -> HelpWindow:
-    """The app shell's single entry point — one instance, caller manages it."""
+    """The app shell's single entry point — one instance, hosted by the guide panel."""
     return HelpWindow(win, docs_root=docs_root)

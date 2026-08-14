@@ -51,10 +51,12 @@ def _block_text(window: HelpWindow) -> str:
         ("Settings", "Serial", "serial"),
         ("Settings", "Camera", "camera"),
         ("Settings", "Image Processing", "image-processing"),
+        ("Settings", "AI Config", "ai-config"),
+        ("Settings", "Theme", "theme"),
         ("Settings", None, "settings"),
-        ("Train", None, ""),
-        ("Models", None, ""),
-        ("Community", None, ""),
+        ("Train", None, "train"),
+        ("Models", None, "models"),
+        ("Community", None, "community"),
         ("", None, ""),
         ("Sort", "Serial", "sort-dashboard"),  # non-Settings pages ignore the section arg
     ],
@@ -295,6 +297,25 @@ def test_every_intra_page_anchor_link_resolves() -> None:
         assert anchor in headings, (
             f"GUIDE.md: link {link!r}'s anchor {anchor!r} matches no heading (have {sorted(headings)})"
         )
+
+
+def test_every_topic_the_shell_can_ask_for_has_a_heading() -> None:
+    """``topic_for``'s answers and the guide's headings must not drift apart.
+
+    Every page and every Settings section resolves to an anchor here; a
+    renamed heading (or a new section with no guide content) silently
+    degrades to the top of the guide, which this catches instead.
+    """
+    from sorter.qtui.app import ACTIVITIES, AI_CONFIG_ACTIVITY, SETTINGS_SECTIONS
+
+    headings = _headings(GUIDE_MD.read_text())
+    # AI Config is the one activity with no page of its own: it navigates to
+    # the Settings section of that name, and is covered by the loop below.
+    topics = {topic_for(name) for _icon, name in ACTIVITIES if name != AI_CONFIG_ACTIVITY}
+    topics |= {topic_for("Settings", section) for section in SETTINGS_SECTIONS}
+    topics.add(topic_for("Settings"))
+    for topic in topics:
+        assert topic in headings, f"GUIDE.md has no heading for topic {topic!r}"
 
 
 def test_no_duplicate_heading_slugs() -> None:

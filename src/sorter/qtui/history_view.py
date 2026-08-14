@@ -13,8 +13,10 @@ CLAUDE.md's "Hue is meaning" note in ``ui/theme.py``'s section.
 
 Subscribes ``run/history`` on ``win.bus`` at construction; payload shape is
 ``{"image": <BGR ndarray>, "label", "parent", "confidence", "slot"}``, the same
-one ``RunController`` posts and ``qtui.app._on_run_history`` already reads for
-the one-line feed strip.
+one ``RunController`` posts and ``qtui.app._on_run_history`` reads for the Sort
+page's current-case panel. The running case number (WinForms parity, Seth) is
+stamped here, on the live path only — a zoom rebuild replays the stored
+records, so each keeps the number it was given.
 
 Thumbnails are decoded to ``QPixmap`` on arrival, on the main thread: a
 classification lands here at most once per case, not in bulk, so there is no
@@ -580,7 +582,7 @@ class HistoryView(QWidget):
 def build_history_view(win: Any) -> HistoryView:
     """Build the classification history widget for ``win`` (a ``QtMainWindow``).
 
-    The caller decides how to host it — a dock beside the serial monitor or an
-    expandable feed on the Sort page; both just need one widget instance.
+    The caller decides how to host it; today that is the Classification
+    History panel, which needs nothing but the one widget instance.
     """
     return HistoryView(win)

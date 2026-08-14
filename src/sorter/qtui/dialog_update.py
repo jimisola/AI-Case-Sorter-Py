@@ -5,7 +5,7 @@ States, in order:
     checking    → an explicit check is in flight (Help → "Check for updates…")
     available   → version summary + release notes, "Download & install"
     downloading → progress bar, cancellable
-    ready       → "Restart to update"
+    ready       → "Restart now"
 
 The dialog never writes to the app folder. Downloading only *stages* the update
 under the data root; the launcher applies it on the next start (CLAUDE.md §7).

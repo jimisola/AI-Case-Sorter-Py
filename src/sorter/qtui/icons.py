@@ -8,7 +8,13 @@ edited palette themes the sidebar with nothing to redraw.
 
 The motifs are Seth's concept art (2026-08-13): Sort and Train carry the
 machine's own identity (a cartridge case, a headstamp seen base-on) rather
-than generic glyphs; Models and Community use familiar metaphors.
+than generic glyphs; AI Config, Models, Community and Settings use familiar
+metaphors.
+
+``APP`` is the exception to "colored by the theme": it is the window and
+taskbar mark, drawn heavier and detail-free so it survives 16 px, and inked
+in one fixed neutral because a taskbar owns its own background
+(``app_icon``).
 """
 
 from __future__ import annotations

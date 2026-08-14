@@ -1,14 +1,24 @@
-"""PySide6 spike shell, co-existing with the Tk UI in ``sorter/ui/``.
+"""The PySide6 shell: activity sidebar, stacked pages, docked panels, status bar.
 
 Launched with ``python -m sorter --qt`` (or ``CASESORTER_QT=1``); the default
-launch is unchanged. Nothing under ``sorter/ui/`` is touched or imported at
+launch is still Tk. Nothing under ``sorter/ui/`` is touched or imported at
 all: the palettes come from ``qtui/palettes.py``, a drift-pinned copy of
-``ui/theme.py``'s palette half, which this renders as QSS — so both UIs share
-one set of colors without the Qt UI needing tkinter installed.
+``ui/theme.py``'s palette half, which ``qtui/theme.py`` renders as QSS — so
+both UIs share one set of colors without the Qt UI needing tkinter installed.
+
+This module owns the shell and the Sort dashboard itself; every other surface
+is its own module with a ``build_*(win)`` factory that this only wires up.
+
+The panels are Qt Advanced Docking System dock widgets (see ``_build_dock``
+and ``DOCK_HOMES``): serial monitor at the bottom, classification history,
+user guide and themes on the right, the last three closed until asked for.
+The sidebar+pages are the manager's *central* widget, which is what makes
+them a fixed anchor the panels arrange around rather than a panel themselves.
 
 The non-UI layers are reused as-is: ``EventBus`` (drained by a 50 ms
 ``QTimer`` instead of ``root.after``, same threading contract — workers post,
-the main thread dispatches), ``Camera``, and ``SerialBroker``.
+the main thread dispatches), ``Camera``, ``SerialBroker`` and
+``RunController``.
 
 Scope and rationale: docs/ui-modernization.md.
 """
@@ -914,7 +924,7 @@ class QtMainWindow(QMainWindow):
             container.raise_()
 
     def open_serial_monitor(self) -> None:
-        """The status bar's serial indicator and the Serial settings button."""
+        """Settings → Serial's "Open serial monitor" button; View toggles it directly."""
         self.reveal_dock(self.serial_dock)
 
     def _open_model_images(self, model: Any) -> None:
@@ -1775,7 +1785,8 @@ class QtMainWindow(QMainWindow):
         return image.copy()
 
     def _refresh_preview(self) -> None:
-        # Hidden is the default, and a hidden panel earns no camera read.
+        # Hidden is the default; while hidden no frame is fetched or painted
+        # (the camera's grab thread runs regardless).
         if not self.show_camera_check.isChecked():
             return
         frame = self.camera.latest_frame()
@@ -1795,8 +1806,9 @@ class QtMainWindow(QMainWindow):
     def _auto_connect_serial(self) -> None:
         """Try the saved port first, then walk the rest until one handshakes.
 
-        Trimmed copy of ``ui.app.MainWindow._auto_connect_serial`` — no run
-        controller and no init-settings push in the spike.
+        Ports are probed on a worker (``try_open`` waits out the handshake);
+        ``_after_connect`` is the shared tail with the Settings page's own
+        Connect, so both build the run controller and push the init settings.
         """
         saved_port = (self.config.serial.get("port") or "").strip()
         if saved_port == EMULATED_PORT:

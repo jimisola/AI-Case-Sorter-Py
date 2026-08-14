@@ -8,10 +8,11 @@ whole connect/disconnect/refresh flow itself rather than reusing
 ``QtMainWindow.connect_serial``/``refresh_ports``, since those read from the
 widgets that block builds and won't exist afterward.
 
-Traffic log and "Open monitor" are NOT ported here: the Qt serial dock
-(``qtui/app.py``'s ``_build_serial_dock``) already renders ``serial/rx``/
-``serial/tx``/``serial/note`` — a second log on this page would just be a
-second, out-of-sync copy of the dock's ring buffer.
+The traffic log itself is NOT ported here — the serial panel
+(``qtui/serial_monitor.py``) already renders ``serial/rx``/``serial/tx``/
+``serial/note``, and a second log on this page would be an out-of-sync copy
+of its ring buffer. Only Tk's "Open monitor ↗" button survives, revealing
+that panel; the baud picker is kept in step with the panel's own.
 
 Deviation from the Tk tab, deliberate and consistent with the other settings
 pages (``settings_camera.py``, ``settings_imageproc.py``): every field

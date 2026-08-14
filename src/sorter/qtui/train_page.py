@@ -23,9 +23,15 @@ Three rules carried over verbatim, each easy to get wrong:
   label found there that isn't a registered headstamp is back-filled into the
   model, so the field, the Sort grid and the Headstamps editor converge.
 
-Layout is Qt-idiomatic: the counts are a list rather than a column of cards,
-and clicking a row still saves-and-feeds. Everything the worker needs is
-snapshotted on the main thread — it never reads a widget or the Config.
+Layout is Qt-idiomatic, and split by workflow: a Capture column that reads
+top-to-bottom as the loop itself (image → Feed → label+Save → readouts), the
+image counts beside it behind a 50/50 splitter — they reflow into columns as
+that splitter widens, which is what makes a 150-class model readable — and
+the training launcher on its own strip at the foot. Clicking a counts row
+still saves-and-feeds, as Tk's cards do.
+
+Everything the worker needs is snapshotted on the main thread — it never
+reads a widget or the Config.
 """
 
 from __future__ import annotations
@@ -377,8 +383,9 @@ class TrainPage(QWidget):
         the prediction. Asked once per session, and a cancel re-enters the feed
         with the flag already set — that is what makes "no thanks" stick.
 
-        The gate itself is increment 7's (``win.ensure_torch``). Until it is
-        wired, the feed simply proceeds and says why nothing was predicted.
+        The dialog comes from the window's gate (``win.ensure_torch``); a host
+        without one — a test double — simply feeds and says why nothing was
+        predicted.
         """
         if self._torch_prompt_shown:
             return True

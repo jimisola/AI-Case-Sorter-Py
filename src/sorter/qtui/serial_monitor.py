@@ -1,4 +1,4 @@
-"""Serial monitor: the dock content behind the status bar's serial indicator.
+"""Serial monitor: the content of the bottom panel (View → Serial Monitor).
 
 Behavior reference: ``sorter/ui/serial_monitor.py`` (the Tk port of upstream
 PRs #78/#86) — read that file's module docstring for the feature rationale;

@@ -1,8 +1,10 @@
 # UI modernization — research & decisions
 
 Working document tracking the investigation into replacing or refreshing the
-Tkinter UI. Audience: Seth + contributors. Status: **research — no decision
-made yet.**
+Tkinter UI. Audience: Seth + contributors. Status: **research plus a built,
+opt-in Qt UI** — the branch carries a full-parity `sorter/qtui/` behind
+`--qt` (see "Current state" below); whether it *replaces* `sorter/ui/` is
+still Seth's call, and nothing here retires the Tk UI.
 
 ## Problem
 
@@ -135,10 +137,14 @@ Status: implemented on this branch. Design goals: prove the risky parts
 - Both UIs reuse the non-UI layers unchanged: `EventBus` (Qt drains it with a
   50 ms `QTimer` instead of `root.after` — same threading contract), `Camera`,
   `SerialBroker`/`EmulatorBroker`, `Config`/`SettingsRepo`.
-- **One source of truth for colors:** the Qt shell imports the palettes from
-  `sorter.ui.theme.THEMES` (custom themes included) and renders them as QSS
-  (`qtui/theme.py::build_stylesheet`). A theme added or edited on either side
-  shows up in both.
+- **One source of truth for colors:** the palettes and the custom-theme
+  registry live in `qtui/palettes.py` — a copy of `ui/theme.py`'s palette
+  half, byte-compared by `test_qt_drift_pins.py` — rendered as QSS by
+  `qtui/theme.py::build_stylesheet`. (It *imported* `sorter.ui.theme` until
+  2026-08-13; `ui/theme.py` imports tkinter at module level, so a
+  PySide6-only install couldn't launch. Both UIs still read the same
+  `ui.custom_themes` settings row, so a theme built in either shows up in the
+  other.)
 
 **Increment 1 scope** (its layout is superseded by increment 2 below;
 everything else carries over): main-window shell (gradient header, theme
@@ -185,8 +191,12 @@ passed / 0 failed; ruff and ty clean.
 - **`qtui` still imports tkinter transitively** — the palettes live in
   `sorter/ui/theme.py`. Harmless during co-existence; the palette-extraction
   refactor (see below) is the one `ui/` change the design eventually needs.
+  *(Resolved 2026-08-13, without touching `ui/`: `qtui/palettes.py` is a
+  drift-pinned copy instead.)*
 - **CI wiring is a decision, not free:** `build.yml` syncs without the extra,
-  so the qtui tests skip there until a job adds `--extra qt`.
+  so the qtui tests skip there until a job adds `--extra qt`. *(Resolved: the
+  `qtui` job, Linux + Windows, `--extra qt` + `QT_QPA_PLATFORM=offscreen`,
+  deliberately outside the matrix — see CLAUDE.md §8.)*
 
 ### Second increment: the clean-slate layout (2026-08-12)
 
@@ -303,6 +313,61 @@ demos fine with the emulator alone.
   pattern for every future qtui test involving a worker.
 - qtui tests now run against a real `Database` + `Config` on `tmp_path`
   (shared conftest), not a stub — removed defensive code from the widgets.
+
+### Current state (2026-08-14)
+
+Past the spikes: every capability of the Tk UI has a Qt surface, and the
+shape below is what live-testing rounds with JL and Seth converged on. What
+changed since increment 3, by surface:
+
+- **Panels, not docks.** Four QtAds panels — Serial Monitor (bottom, open),
+  Classification History, User Guide and Themes (right, closed) — with
+  drop-indicator overlays, tabbing onto an occupied area, `View` toggles,
+  per-tab drag hints, and **View → Re-dock panels** as the escape hatch
+  (Seth floated a panel and couldn't get it back; dragging one home takes
+  dexterity, a menu action doesn't). Layout persists as the manager's own
+  XML in `ui.window_state`.
+- **Sort is grounded.** The crop the classifier saw is the primary panel
+  with the live camera an off-by-default toggle beneath it (Seth: the
+  Windows app's layout — the operator watches the *crop* and the call made
+  on it); the current headstamp/confidence sits under it. The grid header
+  row carries "Sorted this run" + Reset + the template picker (they belong
+  with what they count), and one foot strip carries Manual feed / Run
+  options / **Start green at the far right**. Moderator notes and the
+  community model-update prompt ride the same strip and status bar.
+- **Train reads as its loop.** One capture column — image → centered Feed →
+  Label + Save → readouts — with the image counts beside it behind a 50/50
+  splitter (they reflow into columns as it widens, which is what makes a
+  150-class model readable) and a Training strip at the foot pairing "Sort
+  while training" with Training settings… / Start training.
+- **Models and Community share one idiom.** Row-scoped actions (✓ activate,
+  ✎ edit, × delete; ✓ only on the synthetic AI Config row) ride in the row
+  as fixed-size icon buttons, sortable columns above, selection-scoped
+  Images…/Headstamps…/Evaluate…/Export… on the bar below. Community's row
+  button carries the whole lifecycle — install → update → remove — and a
+  second click queues behind a running download.
+- **Sidebar.** Sort / Train / Models / Community with Settings pinned below,
+  now inked from hand-authored SVGs by the live palette (the emoji wishlist
+  item, done), plus an **AI Config** activity that appears in Train's place
+  in AI Config mode and navigates to Settings → AI Config (Seth: "it takes
+  the place of the training screen; it is analogous to training for an
+  LLM").
+- **Image processing follows the active model.** The primer-mask and crop
+  (Hough) settings have lived on the model row since the WinForms port;
+  nothing read them. The page now reads/writes the active
+  model and mirrors into `config.image_proc` (the live copy the run reads),
+  with a pristine model row inheriting the global rather than resetting it.
+- **Support package** (Help → Export support package…): the redacted
+  configuration as report text to paste on Discord, or a ZIP with a
+  machine-readable `config.json` beside it. API key reported as set/not set,
+  paths relative to the data root, auth cache never read.
+- **In-app guide.** `docs/guide/GUIDE.md`, one file rendered by GitHub and by
+  `QTextBrowser` alike, opened at the topic for wherever the user is (F1 /
+  Help → User Guide) in the guide panel. `topic_for` covers every activity
+  and every Settings section; a test pins each answer to a real heading.
+- **Conventions settled:** sentence case for controls, Title Case for
+  titles; zoom sliders (50–200%, persisted) on the two log-like panels; the
+  notify/confirm seam on every surface that could open a modal.
 
 ## Cost to complete (calibration in progress)
 
@@ -463,8 +528,9 @@ dock, menu bar) with placeholders where real tab logic would go.
 - Halftone & ink-outline themes: accept flat rendering under Qt, or invest
   in a `paintEvent`/tiled-pixmap port? (Spike showed QSS alone can't do it;
   everything else themes 1:1.)
-- CI: add a `--extra qt` job (or matrix leg) so the qtui tests actually run,
-  and decide when the ~256 MB per-job download is worth it.
+- ~~CI: add a `--extra qt` job~~ — answered: its own `qtui` job (Linux +
+  Windows, offscreen, no Xvfb), deliberately not a matrix leg, since
+  PySide6-Essentials is one abi3 wheel every leg would re-download.
 - **For Seth — Image Proc settings persistence.** The Qt page currently
   saves each parameter as it changes (no Save button); the Tk/WinForms flow
   is edit-then-explicit-Save. Options: (a) keep save-on-change — fewer
@@ -498,6 +564,13 @@ revisitable; "Open" = needs a decision.
 | Train Feed button disabled without a board (Tk allows camera-only Feed; the method still works board-less) | Changed — Feed follows the connection like Start | #6, `train_page.py` |
 | Train counts list: single click saves-and-feeds (same click-intending-selection hazard as Tk's cards) | **Kept Tk — flagged** for a rethink | #6 |
 | Training-console close mid-run asks and cancels (Tk closes silently, stranding the subprocess) | Changed — fixes a Tk hazard | #6 |
+| Crop + prediction are the Sort page's primary panel; the live camera is an off-by-default toggle (Tk shows the feed) | Changed — Seth, the Windows app's layout; no frame fetched/painted while off | `app.py` |
+| Image-processing settings are per active model, mirrored into the global `config.image_proc` (both UIs previously tuned the global only) | Changed — Seth; a pristine model row inherits the global, so nothing is lost | `settings_imageproc.py` |
+| Community row button removes the local copy when installed and current (Tk: download only) | Changed — closes the install→update→remove loop | `community_page.py` |
+| A second download click queues rather than being ignored | Changed — JL; queue position shown as "(2 of N)" | `community_page.py` |
+| AI Config is a sidebar activity that navigates to Settings → AI Config (it has no page of its own) | Changed — Seth; mirrors Train's slot in the other mode | `app.py` |
+| Themes are also a panel, applying on click, alongside Settings → Theme | Changed — trying a theme and configuring one are different activities | `app.py` |
+| Panels are QtAds, with "Re-dock panels" as a guaranteed escape hatch | Changed — stock `QDockWidget` drag-docking was unusable on JL's box | `app.py` |
 
 ## Free-hands wishlist
 
@@ -509,9 +582,10 @@ be its own proposal:
   inheritance; Qt's queued signal connections deliver cross-thread events
   with no polling, no `max_items` tuning, and type-checked payloads. Big
   refactor of the seam both UIs share — only sensible after `ui/` retires.
-- **Toolkit-neutral palette module.** Palettes out of `sorter/ui/theme.py`
-  into their own module (the known prerequisite for deleting `ui/`; today
-  qtui drags tkinter in transitively).
+- ~~**Toolkit-neutral palette module.**~~ Done 2026-08-13, but as a
+  drift-pinned *copy* (`qtui/palettes.py`) rather than a shared module, since
+  the real thing means editing `ui/`. Retiring `ui/` collapses the copy back
+  into one module.
 - **Typed run events.** `run/*` payloads are ad-hoc dicts ("counts must key
   off `ok`" is tribal knowledge pinned only by tests); dataclasses would make
   the contracts self-documenting.
@@ -519,11 +593,12 @@ be its own proposal:
   (capture → classify → sort serially); overlapping the next capture with
   the current classify could raise throughput on slow backends. Hardware
   timing risk — needs Seth.
-- **First-run wizard.** Fresh install currently lands on a dashboard with a
-  red serial dot and an empty grid; a guided connect-camera/board/pick-model
-  flow would fit the empty-states work (#14) naturally.
-- **SVG icons over emoji glyphs** in the sidebar (emoji color ignores the
-  palette; real `QIcon`s could tint with the theme).
+- **First-run wizard.** A fresh install now lands on a guided empty state
+  (connect a board / connect a camera) instead of an empty grid; a real
+  multi-step wizard through picking a model is still open.
+- ~~**SVG icons over emoji glyphs** in the sidebar~~ — done 2026-08-13
+  (`qtui/icons.py`: one stroke-only SVG per motif, inked from the live
+  palette at render time).
 - **Settings search box** (the Qt Creator pattern) once the section count
   grows past six.
 - **Live save-state indicator** on settings pages ("Saved ✓" flash) if the
@@ -655,4 +730,14 @@ candidate work item; per-item agent tasks in a future increment.
 | 2026-08-12 | Cost estimate re-baselined from spike 3's measurement: ~8–12 h session time to parity (was 15–25 h; the "dense chunks are slower" assumption measured false). |
 | 2026-08-12 | **Windows validated**: the showcase build runs on a real Windows machine from a plain `uv sync --extra qt` — sidebar, dashboard and all; only runtime noise is OpenCV's DSHOW "no camera" warning. Requirement 2 now confirmed empirically on Linux + Windows. |
 | 2026-08-12 | Spike 2 built and verified (28 offscreen tests, full unit suite green, ruff/ty clean). New gotchas: `QAction.menu()` deletes the menu it returns; dock title-bar buttons aren't themable without icons. Sidebar glyphs stay emoji until real `QIcon`s exist. |
+| 2026-08-13 | **Palettes copied, not imported** (`qtui/palettes.py`, drift-pinned by `test_qt_drift_pins.py`): `ui/theme.py` imports tkinter at module level, so importing it made a PySide6-only install unlaunchable. Custom themes register into the running UI's registry; the shared `ui.custom_themes` row is what still crosses between them. |
+| 2026-08-13 | **Sort page grounded on the crop, not the feed** (Seth, the Windows app's layout): the cropped headstamp and the call made on it are the primary panel, the live camera an off-by-default toggle (no frame is fetched or painted while off; the grab thread keeps running). History moved wholly into its panel. |
+| 2026-08-13 | **Vector icons replace the emoji glyphs** — one stroke-only SVG per motif, inked from the live palette at render time (Seth's concept art; Sort/Train carry the machine's own identity). The app/taskbar mark is the one fixed-neutral exception. |
+| 2026-08-13 | **Model-scoped image processing** (Seth): crop and primer settings follow the active model — the model row has carried them since the WinForms port and nothing read them. Mirrored into `config.image_proc`, which stays the live copy the run reads; a pristine model row inherits the global rather than resetting it. LED brightness stays global (it is a board setting). |
+| 2026-08-13 | **Support package** (Seth): Help → Export support package… — the configuration as a pasteable report plus a ZIP with a machine-readable `config.json`. Redaction happens at collection time (API key as set/not set, paths relative to the data root, auth cache never read). |
+| 2026-08-13 | Casing convention: **sentence case for controls, Title Case for window/panel titles** (JL). Zoom sliders (50–200%, persisted per panel) on the classification history and serial monitor. |
 | 2026-08-14 | **Docks moved from `QDockWidget` to Qt Advanced Docking System** (`pyside6-qtads`, LGPL-2.1+, ~600 KB wheel that pins the same `PySide6-Essentials==6.11.1`). Two rounds of stock-Qt fixes still left drag-docking unusable on JL's Linux box; QtAds brings VS Code-style drop-indicator overlays and lays out in its own splitters. Net *removal*: the whole QMainWindowLayout workaround stack (transition repaint, collapsed-dock floor, 1px resize nudge) is gone — those failure modes don't exist here. API differences that leak: `isClosed()` not `isHidden()`, `setFloating()` takes no argument (re-dock is `addDockWidget`), and `addDockWidget` re-opens a closed panel. Theming is `ads--*` QSS with QtAds's own sheet off (`DisableStylesheet`), which also means re-declaring its button-icon rules. No new system deps (`ldd`: libGL/libxkbcommon/libxcb, all already installed by the qtui CI job). |
+| 2026-08-14 | **Row actions on the Models table** (JL), matching Community's: ✓/✎/× as fixed-size icon buttons in the row, the AI Config row getting ✓ alone; the bottom bar keeps only the selection-scoped Images…/Headstamps…/Evaluate…/Export…. Community's button carries the full install → update → remove lifecycle, and a second click queues behind the running download. |
+| 2026-08-14 | **Foot strips, green primary far right** (JL) on both Sort and Train, with the run counters and the template picker moved onto the slot grid's own header row. Train's capture reads as one column under the image; its counts sit behind a 50/50 splitter and reflow into columns. |
+| 2026-08-14 | **Themes panel + AI Config activity** (Seth via JL): a panel listing every theme, applying on click and synced with Settings → Theme; an AI Config sidebar entry that takes Train's place in AI Config mode and navigates to its Settings section (it has no page of its own — a second mount would double-parent the widget). |
+| 2026-08-14 | **In-app guide is one file** (`docs/guide/GUIDE.md`), rendered by GitHub and by the guide panel alike, opened at the topic for wherever the user is. `topic_for` covers every activity and Settings section, and a test pins each answer to a real heading so the two can't drift. |

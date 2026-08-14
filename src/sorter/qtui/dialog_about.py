@@ -62,9 +62,8 @@ def firmware_line(win: Any) -> str | None:
 class AboutDialog(QDialog):
     """App identity, GPL notice, and the links JL asked for.
 
-    "Check for updates..." is NOT here — it lands with increment 11
-    (Help -> "Check for updates...", per docs/ui-modernization.md); this
-    dialog only owns identity/links/license, not the update flow.
+    Identity, links and the license only — the update flow is its own Help
+    entry ("Check for updates…", ``dialog_update.py``) and never lands here.
     """
 
     def __init__(self, win: Any, parent: Any = None) -> None:

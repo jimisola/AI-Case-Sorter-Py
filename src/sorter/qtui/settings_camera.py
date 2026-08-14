@@ -6,8 +6,8 @@ name-only listing at build time (``camera_names``, matches what the Tk tab
 calls its "quick" population) and a full ``list_cameras_with_metadata`` probe
 only when the user clicks Detect, since that call opens every device and can
 block seconds. Unlike the Tk tab this page never probes or swaps the live
-camera on its own; the user drives both via buttons — see the module's
-docstring note in the increment report for why.
+camera on its own: opening a settings page must not grab hardware out from
+under a run, so Detect and Apply are the only things that touch a device.
 """
 
 from __future__ import annotations

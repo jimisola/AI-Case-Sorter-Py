@@ -6,7 +6,13 @@ post-install messaging; the layout is the table-with-per-row-actions idiom the
 Models activity uses rather than Tk's stack of wide cards, so the two libraries
 read alike.
 
-Three things worth knowing:
+Each row's button carries the **whole local lifecycle** rather than Download
+alone: ↓ install, ↻ update in place, × remove the local copy, decided per row
+by ``installed_state`` against the library and re-derived on ``models/changed``
+so a delete anywhere is reflected here. A second click while a transfer runs
+queues behind it (``_enqueue_download``) instead of being dropped.
+
+Four things worth knowing:
 
 * **The page is only usable signed in.** Tk mounts the tab on sign-in and
   forgets it on sign-out; here the page always exists and shows a sign-in
@@ -18,6 +24,9 @@ Three things worth knowing:
 * **The auth manager is constructed lazily, behind a user action only.**
   Building the page must never touch MSAL, so ``is_signed_in`` reads whatever
   the window already has and ``auth_manager()`` is what may create one.
+* **``start_update`` is the Sort page's door into this one.** The status-bar
+  model-update prompt drives the catalogue's own ``download()``, so there is
+  one download+import path and one set of prompts, never a second copy.
 
 ``confirm`` / ``ask_download_choice`` / ``open_login`` / ``open_share`` /
 ``api_factory`` are instance attributes so a test drives every path with no

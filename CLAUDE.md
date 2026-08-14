@@ -6,6 +6,15 @@ productive without reverse-engineering the whole tree. **Keep this file current:
 when you add a tab, change the data model, or alter a subsystem boundary, update
 the relevant section here in the same change.**
 
+**Docs are part of every functionality change, visible or not.** A change that
+alters behavior ships with its documentation in the same change: this file's
+relevant section, the module docstring it invalidates, `docs/guide/GUIDE.md`
+for anything an operator can see or do (its headings are load-bearing — the F1
+help maps to them; `tests/unit/qtui/test_qt_help.py` pins the anchors), and
+`docs/ui-modernization.md` for Qt-UI design decisions. Stale docs are bugs:
+they were the direct cause of a full retroactive documentation sweep on
+2026-08-14, and the guide misdirecting an operator is a user-facing defect.
+
 ---
 
 ## 1. What this project is
@@ -690,7 +699,7 @@ settings row is what the two actually share.
   `QStackedWidget` of pages, plus four **docks** — serial monitor (bottom),
   classification history, the user guide and the theme picker (right, all
   three closed until asked for) — a status bar (camera/serial indicators,
-  update affordance, sign-in) and File/View/Help menus. It owns the
+  update affordance, identity + sign-in) and File/View/Help menus. It owns the
   `EventBus`, `Camera`, broker, `RunController` and `AuthManager`, exactly as
   Tk's `MainWindow` does. Two entries are mode-driven and mutually exclusive:
   Train for an owned local model, **AI Config for AI Config mode** — and AI
@@ -750,7 +759,21 @@ settings row is what the two actually share.
   `help_viewer.topic_for(page, section)` maps "where the user is" to an anchor
   in `docs/guide/GUIDE.md`, which `QTextBrowser` renders directly; F1 and
   Help → User Guide open the dock at that topic, falling back to the top of
-  the guide for anything the guide doesn't cover yet.
+  the guide for an anchor it can't resolve. Every activity and Settings
+  section has a topic, and `test_qt_help.py` pins each one to a real
+  heading — rename a heading and that test is what tells you.
+- **Model-scoped image processing.** `settings_imageproc.py` reads and writes
+  the **active model's** crop/primer values (`Model.image_processing`,
+  `use_primer_mask`/`hide_primer`/`primer_mask_size`) and mirrors them into
+  `config.image_proc`, which stays the live copy `run_controller` reads. A
+  model row still holding the dataclass defaults inherits the global instead
+  of resetting it. LED brightness stays global — it is a board setting.
+- **Support package.** Help → Export support package… renders
+  `support_bundle.collect_data` as pasteable text, or a ZIP with
+  `config.json` beside it. Redaction happens at collection time, not at
+  render: API key as set/not set, paths relative to the data root, the auth
+  cache never read. Add a field to `collect_data` and the redaction rule goes
+  with it.
 - **Community model settings.** Entering Sort with a community model active
   fires one `fetch_model_settings` on `run_worker` (§4). What it can raise is
   deliberately quiet: a **status-bar "Model update: vN" button** in the

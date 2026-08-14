@@ -511,15 +511,18 @@ def test_demo_d_help_follows_the_page_you_are_on(window) -> None:
     window.open_help()
     assert help_block(window) == "Camera"
 
-    # A section the guide doesn't cover yet (its topic resolves to no heading)
-    # still opens *something* useful — the top of the guide, never an error.
     open_settings(window, "Image Processing")
     window.open_help()
-    assert "Qt UI Guide" in help_block(window)
+    assert help_block(window) == "Image Processing"
 
-    # Same for a whole page with no topic of its own.
+    # Whole pages carry their own topic too, not just Settings sections.
     window.sidebar_buttons["Models"].click()
     window.open_help()
+    assert help_block(window) == "Models"
+
+    # An anchor the guide doesn't have still opens *something* useful — the
+    # top of the guide, never an error.
+    window.help_view.show_topic("a-topic-the-guide-does-not-have")
     assert "Qt UI Guide" in help_block(window)
 
 

@@ -6,11 +6,12 @@ filter, create, edit, activate, delete, import/export ZIP, the synthetic
 calls and the same ``mode/changed`` post, so the two UIs agree on what a model
 is and who owns it.
 
-Layout is Qt-idiomatic rather than a transcription: one table of models whose
-row-scoped actions (activate, edit, delete) ride in the row itself as
-fixed-size icon buttons — the Community catalogue's idiom — with the
-selection-scoped ones (headstamps, evaluate, export) left on the bar below.
-The columns carry the same facts Tk's cards did.
+Layout is Qt-idiomatic rather than a transcription: one sortable table of
+models whose row-scoped actions (activate, edit, delete) ride in the row
+itself as fixed-size icon buttons — the Community catalogue's idiom — with
+the selection-scoped ones (images, headstamps, evaluate, export) on the bar
+below and the library-scoped ones (new cartridge, new model, import) up on
+the filter bar. The columns carry the same facts Tk's cards did.
 
 Three things worth knowing:
 
