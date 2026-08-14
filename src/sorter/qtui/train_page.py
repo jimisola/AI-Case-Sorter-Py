@@ -148,43 +148,41 @@ class TrainPage(QWidget):
         return row
 
     def _build_capture_group(self) -> QGroupBox:
-        """Feed → preview → label → save, left to right."""
+        """One column reading as the training loop (JL): the case image, Feed
+        to drop the next one, the label to give it, Save — then the readouts.
+        """
         box = QGroupBox("Capture", self)
         self.capture_group = box
-        row = QHBoxLayout(box)
+        outer = QHBoxLayout(box)
+        column = QVBoxLayout()
 
-        preview = QVBoxLayout()
         self.crop_label = QLabel(NO_CROP_TEXT, box)
         self.crop_label.setObjectName("cropPanel")
         self.crop_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.crop_label.setWordWrap(True)
         self.crop_label.setFixedSize(CROP_SIZE, CROP_SIZE)
-        preview.addWidget(self.crop_label)
+        column.addWidget(self.crop_label)
 
-        # Below the image (JL): the eye lands on the case, then the button
-        # that fetches the next one.
         self.feed_row = QHBoxLayout()
         self.feed_button = QPushButton("Feed", box)
         self.feed_button.setObjectName("action")
         self.feed_button.clicked.connect(lambda: self.feed())
         self.feed_row.addWidget(self.feed_button)
         self.feed_row.addStretch(1)
-        preview.addLayout(self.feed_row)
-        preview.addStretch(1)
-        row.addLayout(preview)
+        column.addLayout(self.feed_row)
 
-        column = QVBoxLayout()
+        label_row = QHBoxLayout()
         label_caption = QLabel("Label", box)
         label_caption.setObjectName("mutedLabel")
-        column.addWidget(label_caption)
+        label_row.addWidget(label_caption)
         self.label_combo = QComboBox(box)
         self.label_combo.setEditable(True)
         self.label_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        column.addWidget(self.label_combo)
-
+        label_row.addWidget(self.label_combo, 1)
         self.save_button = QPushButton("Save image", box)
         self.save_button.clicked.connect(self.save_clicked)
-        column.addWidget(self.save_button)
+        label_row.addWidget(self.save_button)
+        column.addLayout(label_row)
 
         # Per-feed readouts, as on the Tk tab: image processing covers feed +
         # capture + crop + mask; the breakdown is local_inference's own
@@ -206,7 +204,10 @@ class TrainPage(QWidget):
         self.status_label.setWordWrap(True)
         column.addWidget(self.status_label)
         column.addStretch(1)
-        row.addLayout(column, 1)
+        # The column hugs the image's width; the group's leftover width stays
+        # empty rather than stretching the input to the horizon.
+        outer.addLayout(column)
+        outer.addStretch(1)
         return box
 
     def _build_training_group(self) -> QGroupBox:
