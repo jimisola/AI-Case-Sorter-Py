@@ -111,6 +111,8 @@ SETTINGS_ACTIVITY = (SETTINGS, "Settings")
 SIDEBAR_ICON_SIZE = 26
 SETTINGS_SECTIONS = ("Camera", "Serial", "Image Processing", "AI Config", "Theme")
 BAUD_CHOICES = (9600, 19200, 38400, 57600, 115200)
+# On every dock's title bar: dragging panels is invisible until tried (JL).
+DOCK_DRAG_HINT = "Drag the title bar to move this panel; View \u2192 Re-dock panels brings it home."
 
 # The Sort column's primary panel: the crop the classifier actually saw, plus
 # the one result it produced (Seth, 2026-08-13 — the Windows app's layout).
@@ -900,6 +902,14 @@ class QtMainWindow(QMainWindow):
         return self.serial_section
 
     def _build_serial_dock(self) -> None:
+        # Tabbing is what makes "put History next to the Serial Monitor"
+        # possible at all: without it a dock dropped on an occupied area is
+        # refused, which reads as "docking doesn't work" (JL live-testing).
+        self.setDockOptions(
+            QMainWindow.DockOption.AnimatedDocks
+            | QMainWindow.DockOption.AllowTabbedDocks
+            | QMainWindow.DockOption.AllowNestedDocks
+        )
         self.serial_dock = QDockWidget("Serial Monitor", self)
         self.serial_dock.setObjectName("serialDock")
         self.serial_dock.setFeatures(
@@ -907,6 +917,7 @@ class QtMainWindow(QMainWindow):
             | QDockWidget.DockWidgetFeature.DockWidgetMovable
             | QDockWidget.DockWidgetFeature.DockWidgetFloatable
         )
+        self.serial_dock.setToolTip(DOCK_DRAG_HINT)
         # The monitor subscribes serial/* itself and keeps the full session
         # history — a dock that exists from startup needs no backlog replay.
         self.serial_monitor = build_serial_monitor(self)
@@ -923,6 +934,7 @@ class QtMainWindow(QMainWindow):
             | QDockWidget.DockWidgetFeature.DockWidgetMovable
             | QDockWidget.DockWidgetFeature.DockWidgetFloatable
         )
+        self.history_dock.setToolTip(DOCK_DRAG_HINT)
         self.history_view = build_history_view(self)
         self.history_dock.setWidget(self.history_view)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.history_dock)
@@ -1335,6 +1347,7 @@ class QtMainWindow(QMainWindow):
         # learning, toggle it away after.
         self.help_dock = QDockWidget("User Guide", self)
         self.help_dock.setObjectName("helpDock")
+        self.help_dock.setToolTip(DOCK_DRAG_HINT)
         self.help_view = build_help_window(self)
         self.help_dock.setWidget(self.help_view)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.help_dock)

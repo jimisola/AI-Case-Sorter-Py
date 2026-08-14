@@ -141,6 +141,19 @@ def test_the_history_dock_carries_its_full_name(window) -> None:
     assert window.history_dock.windowTitle() == "Classification History"
 
 
+def test_docks_allow_tabbing_and_carry_the_drag_hint(window) -> None:
+    """JL couldn't drop History next to the Serial Monitor: without
+    AllowTabbedDocks, Qt refuses a drop on an occupied area — which reads as
+    'docking is broken' — and nothing hinted panels can be dragged at all."""
+    from PySide6.QtWidgets import QMainWindow
+
+    options = window.dockOptions()
+    assert options & QMainWindow.DockOption.AllowTabbedDocks
+    assert options & QMainWindow.DockOption.AllowNestedDocks
+    for dock in (window.serial_dock, window.history_dock, window.help_dock):
+        assert "Re-dock panels" in dock.toolTip()
+
+
 def test_redock_panels_brings_a_floating_dock_home(window) -> None:
     """Seth floated the history panel and couldn't drag it back — the View
     menu's Re-dock action must always work, no dexterity required."""
