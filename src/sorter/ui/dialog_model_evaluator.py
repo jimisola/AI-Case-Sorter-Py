@@ -1,800 +1,884 @@
 """Model evaluator — score a trained model against a folder of labelled images.
 
-Recreates the legacy app's batch-image-tester feature using in-process
-inference (``sorter.ml.evaluator``). Launched from the Models tab's per-row
-"Evaluate" button.
+Pick a folder of ``{label}__{ticks}.jpg`` images, optionally map the folder's
+class names onto the model's headstamps, classify every image, and review
+accuracy, per-class stats and a filterable result table. Every run writes the
+legacy-format interactive HTML report into the model's ``reports/`` directory;
+the History tab is that directory, listed newest-first — no DB mirror, the
+folder is the history.
 
-Two dialogs:
+⚠️ The report interpolates result rows into a ``<script>`` block
+(``ml/eval_report.py``), so it is only safe to open for locally-evaluated,
+trusted image folders.
 
-* :class:`ModelEvaluatorDialog` — pick a folder, optionally set up a
-  folder-class -> model-class mapping, run inference, and review accuracy /
-  per-class stats / a filterable result table with image preview.
-* :class:`ClassMapperDialog` — map the folder's ground-truth class names onto
-  the model's headstamps. Mappings persist per-model for reuse.
+Evaluation runs on a ``QThread`` (not the window's ``run_worker``): the dialog
+takes either the main window or a bare ``Config``, so it can't depend on a bus
+being there. Progress and the result cross back as queued signals, i.e. on the
+main thread. ``notify``/``confirm``/``ask_folder``/``open_url``/``ensure_torch``
+are attributes, not direct calls, so a test drives the whole flow with nothing
+modal opening.
 """
 
 from __future__ import annotations
 
 import threading
-import tkinter as tk
-import webbrowser
-from collections.abc import Callable
+import traceback
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
+from PySide6.QtCore import Qt, QThread, QUrl, Signal
+from PySide6.QtGui import QBrush, QColor, QDesktopServices
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFileDialog,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QSplitter,
+    QTabWidget,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
 from .. import paths
-from ..data.db import Database
 from ..data.models import Model
 from ..data.repository import CartridgeRepo, HeadstampRepo, SettingsRepo
 from ..ml import eval_report, evaluator
-from . import torch_gate
-from .dialog_image_preview import ImagePreviewDialog
-from .theme import PALETTE
-from .widgets import ImagePanel, ScrollableFrame
+from . import formatting
+from .dialog_image_preview import ImagePreviewDialog, bgr_to_pixmap
 
-_MATCH_LABELS = {"match": "Match", "mismatch": "Mismatch", "unknown": "—"}
-_MATCH_FILTERS = ("All", "Match", "Mismatch", "No ground truth")
+MATCH_LABELS = {"match": "Match", "mismatch": "Mismatch", "unknown": "—"}
+# Row color per match status, as palette roles.
+MATCH_ROLES = {"match": "success", "mismatch": "error", "unknown": "text_muted"}
+_FALLBACK_COLORS = {"success": "#22c55e", "error": "#ef4444", "text_muted": "#9a9a9a"}
+MATCH_FILTERS = ("All", "Match", "Mismatch", "No ground truth")
+_MATCH_FOR_FILTER = {"Match": "match", "Mismatch": "mismatch", "No ground truth": "unknown"}
+RESULT_COLUMNS = ("Filename", "Predicted", "Conf.", "Ground truth", "Match")
+SUMMARY_COLUMNS = ("Classification", "# Images", "Avg conf.", "High", "Low", "Mismatched")
+HISTORY_COLUMNS = ("Report", "Created")
+UNMAPPED = "(Unmapped)"
+TORCH_REASON = "Evaluating needs PyTorch"
+PREVIEW_SIZE = 240
 
 
-def _mapping_key(model_id: int) -> str:
+def mapping_key(model_id: int) -> str:
+    """Settings key holding this model's folder-class -> model-class mapping."""
     return f"eval_class_mapping:{model_id}"
 
 
-class ModelEvaluatorDialog(tk.Toplevel):
+class _SortableItem(QTreeWidgetItem):
+    """Row that sorts on typed values rather than its displayed text."""
+
+    def __init__(self, texts: Sequence[str], sort_values: Sequence[Any], payload: Any = None) -> None:
+        super().__init__(list(texts))
+        self.sort_values = list(sort_values)
+        self.payload = payload
+
+    def __lt__(self, other: Any) -> bool:
+        tree = self.treeWidget()
+        column = tree.sortColumn() if tree is not None else 0
+        try:
+            return bool(self.sort_values[column] < other.sort_values[column])
+        except (AttributeError, IndexError, TypeError):
+            return super().__lt__(other)
+
+
+class _EvalWorker(QThread):
+    """Runs one folder evaluation and writes its report, off the UI thread."""
+
+    progress = Signal(int, int, str)  # index, total, filename ("" total = status-only message)
+    done = Signal(object)  # the evaluate_folder dict, plus "report_path" when one was written
+    failed = Signal(object)
+
     def __init__(
         self,
-        parent: tk.Misc,
-        db: Database,
-        model: Model,
+        parent: QWidget | None,
         *,
-        app: Any,
+        folder: str,
+        model_path: str,
+        image_size: int | None,
+        mapping: dict[str, str],
+        reports_dir: Path,
+        classify_fn: Any,
+        stop_event: threading.Event,
     ) -> None:
         super().__init__(parent)
-        self.db = db
+        self._folder = folder
+        self._model_path = model_path
+        self._image_size = image_size
+        self._mapping = mapping
+        self._reports_dir = reports_dir
+        self._classify_fn = classify_fn
+        self._stop_event = stop_event
+
+    def run(self) -> None:
+        try:
+            out = evaluator.evaluate_folder(
+                self._folder,
+                model_path=self._model_path,
+                image_size=self._image_size,
+                mapping=self._mapping,
+                classify_fn=self._classify_fn,
+                progress=self.progress.emit,
+                should_stop=self._stop_event.is_set,
+            )
+            if out["results"]:
+                # Thumbnail generation is I/O heavy; it belongs on this thread.
+                self.progress.emit(0, 0, "Building report…")
+                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                report_path = self._reports_dir / f"modelreport_{stamp}.html"
+                try:
+                    eval_report.generate_report(out["results"], report_path)
+                    out["report_path"] = str(report_path)
+                except Exception:
+                    traceback.print_exc()
+            self.done.emit(out)
+        except Exception as exc:  # surfaced through `failed`, never raised on this thread
+            traceback.print_exc()
+            self.failed.emit(exc)
+
+
+class ModelEvaluatorDialog(QDialog):
+    """Folder -> mapping -> run -> results/report/history, for one model."""
+
+    def __init__(self, parent: QWidget | None, source: Any, model: Model) -> None:
+        super().__init__(parent)
         self.model = model
-        self.app = app
-        self.settings = SettingsRepo(db)
-        self.headstamps_repo = HeadstampRepo(db)
-        cart = CartridgeRepo(db).get(model.cartridge_id)
-        self._cart_name = cart.name if cart else "—"
+        self._source = source
+        self.db = source.db
+        self.settings = SettingsRepo(self.db)
+        self.headstamps = HeadstampRepo(self.db)
+        cartridge = CartridgeRepo(self.db).get(model.cartridge_id)
+        self._cartridge_name = cartridge.name if cartridge else "—"
+        self._status_hook: Callable[[str], None] | None = getattr(source, "set_status", None)
 
-        self.title(f"Evaluate Model — {model.name}")
-        # wm_transient's stub wants a Wm (Tk/Toplevel), not the broader
-        # Misc `parent` type; winfo_toplevel() resolves to the actual
-        # top-level window, which is what Tk already does internally.
-        self.transient(parent.winfo_toplevel())
-        self.resizable(True, True)
-        self.minsize(900, 600)
-        self.configure(bg=PALETTE["bg_window"])
-
-        self._mapping: dict[str, str] = self._load_mapping()
-        self._results: list[dict[str, Any]] = []
-        self._running = False
+        self.mapping: dict[str, str] = self._load_mapping()
+        self.results: list[dict[str, Any]] = []
+        self._visible: list[dict[str, Any]] = []
         self._stop_event = threading.Event()
-        self._progress_topic = f"eval/progress/{id(self)}"
-        # Set by `_run` before the worker thread starts; `_do_eval` only ever
-        # runs after that, but the checker can't see across the
-        # run_worker(...) call, so it's declared optional here.
-        self._run_folder: str | None = None
+        self._worker: _EvalWorker | None = None
 
+        # Replaceable hooks — a test never opens a native dialog, and the
+        # PyTorch gate comes from the window when there is one (increment 7);
+        # without it we fall back to the presence probe, refusing rather than
+        # letting the worker raise mid-folder.
+        self.notify: Callable[[str, str], None] = self._warn
+        self.confirm: Callable[[str, str], bool] = self._ask
+        self.ask_folder: Callable[[str, str], str | None] = self._ask_folder
+        self.open_url: Callable[[str], bool] = self._open_url
+        self.ensure_torch: Callable[..., bool] | None = getattr(source, "ensure_torch", None)
+        # Injected straight into `evaluate_folder`; None means local inference.
+        self.classify_fn: Any = None
+
+        self.setWindowTitle(f"Evaluate model — {model.name}")
+        self.resize(940, 640)
         self._build_ui()
-        self._refresh_history()
-        self.app.bus.subscribe(self._progress_topic, self._on_progress)
-        self.protocol("WM_DELETE_WINDOW", self._close)
-        self.bind("<Escape>", lambda _e: self._close())
+        self.refresh_history()
 
     # ----- persistence --------------------------------------------------------
 
     def _load_mapping(self) -> dict[str, str]:
-        raw = self.settings.get(_mapping_key(self.model.id), {})
+        raw = self.settings.get(mapping_key(self.model.id), {})
         if isinstance(raw, dict):
             return {str(k): str(v) for k, v in raw.items()}
         return {}
 
     def _save_mapping(self) -> None:
-        self.settings.set(_mapping_key(self.model.id), self._mapping)
+        self.settings.set(mapping_key(self.model.id), self.mapping)
 
     # ----- construction -------------------------------------------------------
 
     def _build_ui(self) -> None:
-        top = ttk.Frame(self, style="Window.TFrame", padding=(10, 10, 10, 0))
-        top.pack(fill=tk.X)
+        column = QVBoxLayout(self)
+        column.setContentsMargins(12, 12, 12, 12)
+        column.setSpacing(8)
 
-        ttk.Label(
-            top,
-            text=f"{self.model.name}    ({self._cart_name} • {self.model.model_mode})",
-            style="Title.TLabel",
-        ).pack(anchor=tk.W)
+        title = QLabel(f"{self.model.name}    ({self._cartridge_name} • {self.model.model_mode})", self)
+        title.setObjectName("slotTitle")
+        column.addWidget(title)
 
-        folder_row = ttk.Frame(top, style="Window.TFrame")
-        folder_row.pack(fill=tk.X, pady=(8, 0))
-        ttk.Label(folder_row, text="Image folder", style="Subtitle.TLabel", width=12, anchor=tk.W).pack(side=tk.LEFT)
-        self._folder_var = tk.StringVar(value=str(paths.model_images_dir(self.model.id)))
-        ttk.Entry(folder_row, textvariable=self._folder_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 6))
-        ttk.Button(folder_row, text="Browse…", command=self._browse).pack(side=tk.LEFT)
+        folder_row = QHBoxLayout()
+        folder_row.addWidget(QLabel("Image folder", self))
+        self.folder_edit = QLineEdit(str(paths.model_images_dir(self.model.id)), self)
+        folder_row.addWidget(self.folder_edit, 1)
+        self.browse_button = QPushButton("Browse…", self)
+        self.browse_button.clicked.connect(self.browse)
+        folder_row.addWidget(self.browse_button)
+        column.addLayout(folder_row)
 
-        action_row = ttk.Frame(top, style="Window.TFrame")
-        action_row.pack(fill=tk.X, pady=(8, 0))
-        ttk.Button(action_row, text="Class mapping…", command=self._open_mapper).pack(side=tk.LEFT)
-        self._run_btn = ttk.Button(
-            action_row,
-            text="Run evaluation",
-            command=self._run,
-            style="Accent.TButton",
-        )
-        self._run_btn.pack(side=tk.LEFT, padx=(8, 0))
-        self._stop_btn = ttk.Button(
-            action_row,
-            text="Stop",
-            command=self._stop,
-            style="Danger.TButton",
-        )  # packed only while running
-        self._progress = ttk.Progressbar(action_row, mode="determinate", length=180)
-        self._status_var = tk.StringVar(value="")
-        ttk.Label(action_row, textvariable=self._status_var, style="Muted.TLabel").pack(side=tk.RIGHT)
+        action_row = QHBoxLayout()
+        self.mapping_button = QPushButton("Class mapping…", self)
+        self.mapping_button.clicked.connect(self.open_mapper)
+        action_row.addWidget(self.mapping_button)
+        self.run_button = QPushButton("Run evaluation", self)
+        self.run_button.setObjectName("action")
+        self.run_button.clicked.connect(self.run_evaluation)
+        action_row.addWidget(self.run_button)
+        self.cancel_button = QPushButton("Cancel", self)
+        self.cancel_button.setObjectName("danger")
+        self.cancel_button.clicked.connect(self.cancel)
+        self.cancel_button.setVisible(False)
+        action_row.addWidget(self.cancel_button)
+        self.progress_bar = QProgressBar(self)
+        self.progress_bar.setFixedWidth(200)
+        self.progress_bar.setVisible(False)
+        action_row.addWidget(self.progress_bar)
+        action_row.addStretch(1)
+        self.status_label = QLabel("", self)
+        self.status_label.setObjectName("mutedLabel")
+        action_row.addWidget(self.status_label)
+        column.addLayout(action_row)
 
-        # ---- stats row ------------------------------------------------------
-        self._stats = ttk.Frame(self, style="Window.TFrame", padding=(10, 8, 10, 0))
-        self._stats.pack(fill=tk.X)
-        self._stat_vars = {key: tk.StringVar(value="—") for key in ("total", "total_acc", "known_acc", "avg_conf")}
-        for label, key in (
-            ("Total images", "total"),
-            ("Total accuracy", "total_acc"),
-            ("Known accuracy", "known_acc"),
-            ("Avg confidence", "avg_conf"),
+        column.addLayout(self._build_stats_row())
+
+        self.tabs = QTabWidget(self)
+        self.tabs.addTab(self._build_results_tab(), "Results")
+        self.tabs.addTab(self._build_byclass_tab(), "By class")
+        self.tabs.addTab(self._build_history_tab(), "History")
+        column.addWidget(self.tabs, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
+        buttons.rejected.connect(self.reject)
+        column.addWidget(buttons)
+
+    def _build_stats_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        self.stat_labels: dict[str, QLabel] = {}
+        for key, caption in (
+            ("total", "Total images"),
+            ("total_acc", "Total accuracy"),
+            ("known_acc", "Known accuracy"),
+            ("avg_conf", "Avg confidence"),
         ):
-            self._stat_card(self._stats, label, self._stat_vars[key])
+            # `slotCard` is the palette's card surface; reused rather than a
+            # new QSS role so this dialog needs no theme change to look right.
+            card = QFrame(self)
+            card.setObjectName("slotCard")
+            card_column = QVBoxLayout(card)
+            card_column.setContentsMargins(10, 8, 10, 8)
+            caption_label = QLabel(caption, card)
+            caption_label.setObjectName("slotNames")
+            card_column.addWidget(caption_label)
+            value_label = QLabel("—", card)
+            value_label.setObjectName("slotTitle")
+            card_column.addWidget(value_label)
+            self.stat_labels[key] = value_label
+            row.addWidget(card, 1)
+        return row
 
-        # ---- notebook: Results + By class + History -------------------------
-        nb = ttk.Notebook(self)
-        self._nb = nb
-        nb.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+    def _make_table(self, columns: Sequence[str]) -> QTreeWidget:
+        tree = QTreeWidget(self)
+        tree.setObjectName("modelTable")  # the palette's table role
+        tree.setColumnCount(len(columns))
+        tree.setHeaderLabels(list(columns))
+        tree.setRootIsDecorated(False)
+        tree.setAlternatingRowColors(False)
+        tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        tree.header().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        tree.header().setStretchLastSection(True)
+        return tree
 
-        results_tab = ttk.Frame(nb)
-        nb.add(results_tab, text="Results")
-        self._build_results_tab(results_tab)
+    def _build_results_tab(self) -> QWidget:
+        page = QWidget(self)
+        column = QVBoxLayout(page)
+        column.setContentsMargins(4, 8, 4, 4)
 
-        byclass_tab = ttk.Frame(nb)
-        nb.add(byclass_tab, text="By class")
-        self._build_byclass_tab(byclass_tab)
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(QLabel("Filter", page))
+        self.filter_edit = QLineEdit(page)
+        self.filter_edit.setPlaceholderText("Filename contains…")
+        self.filter_edit.setClearButtonEnabled(True)
+        self.filter_edit.textChanged.connect(lambda _text: self.render_results())
+        filter_row.addWidget(self.filter_edit, 1)
+        filter_row.addWidget(QLabel("Match", page))
+        self.match_combo = QComboBox(page)
+        self.match_combo.addItems(list(MATCH_FILTERS))
+        self.match_combo.currentTextChanged.connect(lambda _text: self.render_results())
+        filter_row.addWidget(self.match_combo)
+        self.count_label = QLabel("", page)
+        self.count_label.setObjectName("mutedLabel")
+        filter_row.addWidget(self.count_label)
+        column.addLayout(filter_row)
 
-        history_tab = ttk.Frame(nb)
-        nb.add(history_tab, text="History")
-        self._build_history_tab(history_tab)
+        split = QSplitter(Qt.Orientation.Horizontal, page)
+        self.result_tree = self._make_table(RESULT_COLUMNS)
+        self.result_tree.setSortingEnabled(True)
+        # Qt's default sort indicator is column 0 *descending*, and re-enabling
+        # sorting after a fill applies it; ascending filename is the evaluator's
+        # own order, which is what the table should show before any header click.
+        self.result_tree.sortByColumn(0, Qt.SortOrder.AscendingOrder)
+        self.result_tree.currentItemChanged.connect(lambda current, _prev: self._show_preview(current))
+        self.result_tree.itemDoubleClicked.connect(lambda item, _col: self._open_preview(item))
+        split.addWidget(self.result_tree)
 
-        bottom = ttk.Frame(self, style="Window.TFrame")
-        bottom.pack(fill=tk.X, padx=10, pady=(0, 10))
-        ttk.Button(bottom, text="Close", command=self._close).pack(side=tk.RIGHT)
+        preview = QWidget(split)
+        preview_column = QVBoxLayout(preview)
+        preview_column.setContentsMargins(8, 0, 0, 0)
+        self.preview_label = QLabel(preview)
+        self.preview_label.setObjectName("imagePreview")
+        self.preview_label.setFixedSize(PREVIEW_SIZE, PREVIEW_SIZE)
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preview_column.addWidget(self.preview_label)
+        self.preview_caption = QLabel("", preview)
+        self.preview_caption.setObjectName("mutedLabel")
+        self.preview_caption.setWordWrap(True)
+        preview_column.addWidget(self.preview_caption)
+        hint = QLabel("Double-click a row to reclassify or delete the image.", preview)
+        hint.setObjectName("dialogHint")
+        hint.setWordWrap(True)
+        preview_column.addWidget(hint)
+        preview_column.addStretch(1)
+        split.addWidget(preview)
+        split.setStretchFactor(0, 3)
+        split.setStretchFactor(1, 1)
+        column.addWidget(split, 1)
+        return page
 
-    def _stat_card(self, parent: tk.Misc, label: str, var: tk.StringVar) -> None:
-        card = ttk.Frame(parent, style="Card.TFrame", padding=10)
-        card.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
-        ttk.Label(card, text=label, style="CardSubtle.TLabel").pack(anchor=tk.W)
-        ttk.Label(card, textvariable=var, style="CardSelTitle.TLabel").pack(anchor=tk.W)
+    def _build_byclass_tab(self) -> QWidget:
+        page = QWidget(self)
+        column = QVBoxLayout(page)
+        column.setContentsMargins(4, 8, 4, 4)
+        self.summary_tree = self._make_table(SUMMARY_COLUMNS)
+        self.summary_tree.setSortingEnabled(True)
+        self.summary_tree.sortByColumn(0, Qt.SortOrder.AscendingOrder)
+        column.addWidget(self.summary_tree, 1)
+        return page
 
-    def _build_results_tab(self, parent: tk.Misc) -> None:
-        filt = ttk.Frame(parent)
-        filt.pack(fill=tk.X, pady=(8, 4), padx=2)
-        ttk.Label(filt, text="Filter", style="Muted.TLabel").pack(side=tk.LEFT)
-        self._search_var = tk.StringVar()
-        self._search_var.trace_add("write", lambda *_: self._render_results())
-        ttk.Entry(filt, textvariable=self._search_var, width=22).pack(side=tk.LEFT, padx=(6, 12))
-        ttk.Label(filt, text="Match", style="Muted.TLabel").pack(side=tk.LEFT)
-        self._match_var = tk.StringVar(value=_MATCH_FILTERS[0])
-        match_combo = ttk.Combobox(
-            filt,
-            state="readonly",
-            width=18,
-            textvariable=self._match_var,
-            values=list(_MATCH_FILTERS),
+    def _build_history_tab(self) -> QWidget:
+        page = QWidget(self)
+        column = QVBoxLayout(page)
+        column.setContentsMargins(4, 8, 4, 4)
+        bar = QHBoxLayout()
+        note = QLabel(
+            "Saved HTML reports for this model (newest first). Open one to view "
+            "the full interactive report in your browser.",
+            page,
         )
-        match_combo.pack(side=tk.LEFT, padx=(6, 0))
-        match_combo.bind("<<ComboboxSelected>>", lambda _e: self._render_results())
-        self._count_var = tk.StringVar(value="")
-        ttk.Label(filt, textvariable=self._count_var, style="Subtle.TLabel").pack(side=tk.RIGHT)
+        note.setObjectName("mutedLabel")
+        note.setWordWrap(True)
+        bar.addWidget(note, 1)
+        self.open_report_button = QPushButton("Open in browser", page)
+        self.open_report_button.setObjectName("action")
+        self.open_report_button.clicked.connect(self.open_selected_report)
+        bar.addWidget(self.open_report_button)
+        column.addLayout(bar)
+        self.history_tree = self._make_table(HISTORY_COLUMNS)
+        self.history_tree.itemDoubleClicked.connect(lambda _item, _col: self.open_selected_report())
+        column.addWidget(self.history_tree, 1)
+        return page
 
-        split = ttk.Panedwindow(parent, orient=tk.HORIZONTAL)
-        split.pack(fill=tk.BOTH, expand=True)
+    # ----- default hooks ------------------------------------------------------
 
-        table_wrap = ttk.Frame(split)
-        split.add(table_wrap, weight=3)
-        cols = ("filename", "predicted", "confidence", "original", "match")
-        scroll = ttk.Scrollbar(table_wrap, orient=tk.VERTICAL)
-        self._tree = ttk.Treeview(
-            table_wrap,
-            columns=cols,
-            show="headings",
-            selectmode="browse",
-            yscrollcommand=scroll.set,
-        )
-        scroll.config(command=self._tree.yview)
-        for col, text, width, anchor in (
-            ("filename", "Filename", 200, tk.W),
-            ("predicted", "Predicted", 110, tk.W),
-            ("confidence", "Conf.", 70, tk.E),
-            ("original", "Ground truth", 120, tk.W),
-            ("match", "Match", 80, tk.W),
-        ):
-            self._tree.heading(col, text=text, command=lambda c=col: self._sort_by(c))
-            self._tree.column(col, width=width, anchor=anchor, stretch=(col in ("filename", "original")))
-        self._tree.tag_configure("match", foreground=PALETTE["success"])
-        self._tree.tag_configure("mismatch", foreground=PALETTE["error"])
-        self._tree.tag_configure("unknown", foreground=PALETTE["text_muted"])
-        scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self._tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self._tree.bind("<<TreeviewSelect>>", self._on_row_select)
-        # Double-clicking a row opens the shared previewer (reassign / delete),
-        # mirroring the model image manager's preview popup.
-        self._tree.bind("<Double-1>", self._open_preview)
+    def _warn(self, title: str, text: str) -> None:
+        QMessageBox.warning(self, title, text)
 
-        preview = ttk.Frame(split)
-        split.add(preview, weight=1)
-        ttk.Label(preview, text="Preview", style="Muted.TLabel").pack(anchor=tk.W, padx=6, pady=(0, 2))
-        self._preview = ImagePanel(preview, width=240, height=240)
-        self._preview.pack(padx=6, pady=2)
-        self._preview_label = tk.StringVar(value="")
-        ttk.Label(
-            preview, textvariable=self._preview_label, style="Subtle.TLabel", wraplength=240, justify=tk.LEFT
-        ).pack(anchor=tk.W, padx=6)
-        ttk.Label(
-            preview,
-            text="Double-click a row to reassign or delete.",
-            style="Subtle.TLabel",
-            wraplength=240,
-            justify=tk.LEFT,
-        ).pack(anchor=tk.W, padx=6, pady=(6, 0))
+    def _ask(self, title: str, text: str) -> bool:
+        return QMessageBox.question(self, title, text) == QMessageBox.StandardButton.Yes
 
-        self._sort_state: tuple[str, bool] | None = None
-        self._row_by_iid: dict[str, dict[str, Any]] = {}
+    def _ask_folder(self, title: str, start: str) -> str | None:
+        return QFileDialog.getExistingDirectory(self, title, start) or None
 
-    def _build_byclass_tab(self, parent: tk.Misc) -> None:
-        wrap = ttk.Frame(parent)
-        wrap.pack(fill=tk.BOTH, expand=True, pady=8, padx=2)
-        cols = ("cls", "count", "avg", "high", "low", "mismatch")
-        scroll = ttk.Scrollbar(wrap, orient=tk.VERTICAL)
-        self._summary_tree = ttk.Treeview(
-            wrap,
-            columns=cols,
-            show="headings",
-            selectmode="browse",
-            yscrollcommand=scroll.set,
-        )
-        scroll.config(command=self._summary_tree.yview)
-        for col, text, width, anchor in (
-            ("cls", "Classification", 180, tk.W),
-            ("count", "# Images", 90, tk.E),
-            ("avg", "Avg conf.", 90, tk.E),
-            ("high", "High", 80, tk.E),
-            ("low", "Low", 80, tk.E),
-            ("mismatch", "Mismatched", 100, tk.E),
-        ):
-            self._summary_tree.heading(col, text=text)
-            self._summary_tree.column(col, width=width, anchor=anchor, stretch=(col == "cls"))
-        scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self._summary_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    def _open_url(self, path: str) -> bool:
+        return bool(QDesktopServices.openUrl(QUrl.fromLocalFile(path)))
 
-    def _build_history_tab(self, parent: tk.Misc) -> None:
-        bar = ttk.Frame(parent)
-        bar.pack(fill=tk.X, pady=(8, 4), padx=2)
-        ttk.Label(
-            bar,
-            text="Saved HTML reports for this model (newest first). "
-            "Open one to view the full interactive report in your browser.",
-            style="Muted.TLabel",
-            wraplength=600,
-            justify=tk.LEFT,
-        ).pack(side=tk.LEFT)
-        ttk.Button(bar, text="Open in browser", command=self._open_selected_report, style="Accent.TButton").pack(
-            side=tk.RIGHT
-        )
-
-        wrap = ttk.Frame(parent)
-        wrap.pack(fill=tk.BOTH, expand=True, padx=2)
-        scroll = ttk.Scrollbar(wrap, orient=tk.VERTICAL)
-        self._history_tree = ttk.Treeview(
-            wrap,
-            columns=("report", "created"),
-            show="headings",
-            selectmode="browse",
-            yscrollcommand=scroll.set,
-        )
-        scroll.config(command=self._history_tree.yview)
-        self._history_tree.heading("report", text="Report")
-        self._history_tree.heading("created", text="Created")
-        self._history_tree.column("report", width=320, stretch=True, anchor=tk.W)
-        self._history_tree.column("created", width=170, stretch=False, anchor=tk.W)
-        scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self._history_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self._history_tree.bind("<Double-1>", lambda _e: self._open_selected_report())
-        self._report_by_iid: dict[str, Path] = {}
-
-    def _refresh_history(self, select_path: str | None = None) -> None:
-        self._history_tree.delete(*self._history_tree.get_children())
-        self._report_by_iid = {}
-        report_dir = paths.model_reports_dir(self.model.id)
-        reports = (
-            sorted(
-                (p for p in report_dir.glob("*.html") if p.is_file()),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
-            if report_dir.exists()
-            else []
-        )
-        for idx, p in enumerate(reports):
-            iid = str(idx)
-            created = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-            self._history_tree.insert("", "end", iid=iid, values=(p.name, created))
-            self._report_by_iid[iid] = p
-        if select_path is not None:
-            for iid, p in self._report_by_iid.items():
-                if str(p) == str(select_path):
-                    self._history_tree.selection_set(iid)
-                    self._history_tree.see(iid)
-                    break
-
-    def _open_selected_report(self) -> None:
-        sel = self._history_tree.selection()
-        path = self._report_by_iid.get(sel[0]) if sel else None
-        if path is None:  # default to the newest
-            children = self._history_tree.get_children()
-            if children:
-                path = self._report_by_iid.get(children[0])
-        if path is None:
-            messagebox.showinfo("No report", "No reports to open yet.", parent=self)
-            return
-        try:
-            # as_uri() + webbrowser are cross-platform (Windows/macOS/Linux).
-            webbrowser.open(Path(path).resolve().as_uri())
-        except Exception as exc:
-            messagebox.showerror("Open failed", str(exc), parent=self)
+    def _set_status(self, message: str) -> None:
+        self.status_label.setText(message)
+        if self._status_hook is not None:
+            self._status_hook(message)
 
     # ----- folder / mapping ---------------------------------------------------
 
-    def _browse(self) -> None:
-        start = self._folder_var.get() or str(paths.models_dir())
-        chosen = filedialog.askdirectory(
-            title="Select a folder of labelled images",
-            initialdir=start,
-            parent=self,
-        )
+    def browse(self) -> None:
+        start = self.folder_edit.text().strip() or str(paths.models_dir())
+        chosen = self.ask_folder("Select a folder of labelled images", start)
         if chosen:
-            self._folder_var.set(chosen)
+            self.folder_edit.setText(chosen)
 
-    def _open_mapper(self) -> None:
-        folder = self._folder_var.get().strip()
+    def model_class_names(self) -> list[str]:
+        return [h.name for h in self.headstamps.list_for_model(self.model.id)]
+
+    def build_mapper(self) -> ClassMapperDialog | None:
+        """The mapping dialog for the current folder, or None (and a notify)."""
+        folder = self.folder_edit.text().strip()
         if not folder or not Path(folder).is_dir():
-            messagebox.showwarning("No folder", "Pick a valid image folder first.", parent=self)
-            return
+            self.notify("No folder", "Pick a valid image folder first.")
+            return None
         target_classes = evaluator.folder_classes(folder)
         if not target_classes:
-            messagebox.showinfo(
+            self.notify(
                 "No classes",
                 "No labelled images found in that folder. Filenames must look like '<class>__<id>.jpg'.",
-                parent=self,
             )
+            return None
+        return ClassMapperDialog(self, target_classes, self.model_class_names(), dict(self.mapping))
+
+    def open_mapper(self) -> None:
+        dialog = self.build_mapper()
+        if dialog is None:
             return
-        model_classes = [h.name for h in self.headstamps_repo.list_for_model(self.model.id)]
+        if dialog.exec():
+            self.apply_mapping(dialog.mapping())
 
-        def _on_ok(mapping: dict[str, str]) -> None:
-            self._mapping = mapping
-            self._save_mapping()
-            self.app.set_status(f"Saved {len(mapping)} class mapping(s).")
-
-        ClassMapperDialog(
-            self,
-            target_classes,
-            model_classes,
-            dict(self._mapping),
-            on_ok=_on_ok,
-        )
+    def apply_mapping(self, mapping: dict[str, str]) -> None:
+        self.mapping = dict(mapping)
+        self._save_mapping()
+        self._set_status(f"Saved {len(self.mapping)} class mapping(s).")
 
     # ----- run ----------------------------------------------------------------
 
-    def _run(self) -> None:
-        if self._running:
+    @property
+    def running(self) -> bool:
+        return self._worker is not None and self._worker.isRunning()
+
+    def run_evaluation(self) -> None:
+        """Preflight, then start the worker."""
+        if self.running:
             return
-        folder = self._folder_var.get().strip()
+        folder = self.folder_edit.text().strip()
         if not folder or not Path(folder).is_dir():
-            messagebox.showwarning("No folder", "Pick a valid image folder first.", parent=self)
+            self.notify("No folder", "Pick a valid image folder first.")
             return
         if not self.model.model_path or not Path(self.model.model_path).exists():
-            messagebox.showerror(
+            self.notify(
                 "Not trained",
                 "This model has no trained checkpoint to evaluate. Train or import it first.",
-                parent=self,
             )
             return
-        if not evaluator.list_images(folder):
-            messagebox.showinfo("No images", "That folder has no images to evaluate.", parent=self)
+        images = evaluator.list_images(folder)
+        if not images:
+            self.notify("No images", "That folder has no images to evaluate.")
             return
         # Evaluation is inference over a whole folder — offer the install here
-        # rather than letting the worker raise once it's under way. On success
-        # this method re-runs and the evaluation starts.
-        if not torch_gate.ensure_torch(
-            self,
-            self._run,
-            reason="Evaluating needs PyTorch",
-            model=self.model,
-        ):
+        # rather than letting the worker raise once it is under way. The gate
+        # re-enters this method on success.
+        if not self._ensure_torch():
             return
 
-        # Snapshot everything the worker needs on the UI thread — the worker
-        # must not touch Tk widgets/vars from its background thread.
-        self._run_folder = folder
-        self._running = True
-        self._stop_event.clear()
-        self._run_btn.configure(state=tk.DISABLED)
-        self._stop_btn.pack(side=tk.LEFT, padx=(8, 0))
-        self._progress.pack(side=tk.LEFT, padx=(12, 0))
-        self._progress.configure(value=0, maximum=max(1, len(evaluator.list_images(folder))))
-        self._status_var.set("Starting…")
-        self.app.run_worker(self._do_eval, on_done=self._on_done, on_error=self._on_error)
-
-    def _do_eval(self) -> dict[str, Any]:
-        from ..ml import local_inference
-
-        if not local_inference.is_available():
-            raise RuntimeError(
-                "PyTorch is not installed — it's required to evaluate a local model (pip install .[ml])."
-            )
-        # `_run` always sets this, and already verified the checkpoint
-        # exists, before starting the worker that calls here.
-        if self._run_folder is None:
-            raise RuntimeError("Evaluation worker started without a folder to evaluate.")
-        if not self.model.model_path:
-            raise RuntimeError("Evaluation worker started without a trained checkpoint.")
+        self._stop_event = threading.Event()
+        self.run_button.setEnabled(False)
+        self.cancel_button.setVisible(True)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, len(images))
+        self.progress_bar.setValue(0)
+        self._set_status("Starting…")
         image_size = int(self.model.training_config.image_size) if self.model.training_config else None
-        out = evaluator.evaluate_folder(
-            self._run_folder,
+        worker = _EvalWorker(
+            self,
+            folder=folder,
             model_path=self.model.model_path,
             image_size=image_size,
-            mapping=dict(self._mapping),
-            progress=lambda i, n, name: self.app.bus.post(self._progress_topic, (i, n, name)),
-            should_stop=self._stop_event.is_set,
+            mapping=dict(self.mapping),
+            reports_dir=paths.model_reports_dir(self.model.id),
+            classify_fn=self.classify_fn,
+            stop_event=self._stop_event,
         )
-        # Produce the self-contained HTML report (same format as the legacy
-        # app). Runs on the worker thread — thumbnail generation is I/O heavy.
-        if out["results"]:
-            self.app.bus.post(self._progress_topic, (0, 0, "Building report…"))
-            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            report_path = paths.model_reports_dir(self.model.id) / f"modelreport_{stamp}.html"
-            try:
-                eval_report.generate_report(out["results"], report_path)
-                out["report_path"] = str(report_path)
-            except Exception:
-                import traceback
+        worker.progress.connect(self._on_progress)
+        worker.done.connect(self._on_done)
+        worker.failed.connect(self._on_error)
+        worker.finished.connect(lambda w=worker: self._on_worker_finished(w))
+        self._worker = worker
+        worker.start()
 
-                traceback.print_exc()
-        return out
+    def _ensure_torch(self) -> bool:
+        if self.ensure_torch is not None:
+            return bool(self.ensure_torch(self, self.run_evaluation, reason=TORCH_REASON))
+        from ..ml import local_inference
 
-    def _on_progress(self, payload: tuple[int, int, str]) -> None:
-        i, n, name = payload
-        try:
-            if n > 0:
-                self._progress.configure(maximum=n, value=i)
-                self._status_var.set(f"Classifying {i}/{n}: {name}")
-            else:
-                self._status_var.set(name)  # status-only message (e.g. report build)
-        except tk.TclError:
-            return
+        # `is_installed` is the free find_spec probe — never `is_available`,
+        # which imports torch and runs the device benchmark on this thread.
+        if local_inference.is_installed():
+            return True
+        self.notify(
+            "PyTorch required",
+            "Evaluating a local model needs PyTorch. Install it (pip install .[ml]) and try again.",
+        )
+        return False
+
+    def cancel(self) -> None:
+        self._stop_event.set()
+        self.status_label.setText("Stopping…")
+
+    def _on_progress(self, index: int, total: int, name: str) -> None:
+        if total > 0:
+            self.progress_bar.setRange(0, total)
+            self.progress_bar.setValue(index)
+            self.status_label.setText(f"Classifying {index}/{total}: {name}")
+        else:
+            self.status_label.setText(name)  # status-only message (e.g. report build)
 
     def _on_done(self, out: dict[str, Any]) -> None:
-        self._results = out.get("results", [])
+        self.results = out.get("results", [])
         self._finish_run()
-        self._render_summary(out.get("summary", {}))
-        self._render_results()
+        self.render_summary(out.get("summary", {}))
+        self.render_results()
         report_path = out.get("report_path")
-        self._refresh_history(select_path=report_path)
+        self.refresh_history(select_path=report_path)
         base = "Stopped" if out.get("stopped") else "Done"
-        msg = f"{base} — {len(self._results)} image(s) evaluated."
+        message = f"{base} — {len(self.results)} image(s) evaluated."
         if report_path:
-            msg += "  Report saved → History tab."
-        self._status_var.set(msg)
+            message += "  Report saved → History tab."
+        self._set_status(message)
 
     def _on_error(self, exc: Exception) -> None:
         self._finish_run()
-        self._status_var.set("Evaluation failed.")
-        messagebox.showerror("Evaluation failed", str(exc), parent=self)
+        self.status_label.setText("Evaluation failed.")
+        self.notify("Evaluation failed", str(exc))
 
     def _finish_run(self) -> None:
-        self._running = False
-        try:
-            self._run_btn.configure(state=tk.NORMAL)
-            self._stop_btn.pack_forget()
-            self._progress.pack_forget()
-        except tk.TclError:
-            pass
+        self.run_button.setEnabled(True)
+        self.cancel_button.setVisible(False)
+        self.progress_bar.setVisible(False)
 
-    def _stop(self) -> None:
-        self._stop_event.set()
-        self._status_var.set("Stopping…")
+    def _on_worker_finished(self, worker: _EvalWorker) -> None:
+        # Drop the reference before deleteLater() — a later run must not wait
+        # on an already-deleted C++ object.
+        if self._worker is worker:
+            self._worker = None
+        worker.deleteLater()
 
     # ----- rendering ----------------------------------------------------------
 
-    def _render_summary(self, summary: dict[str, Any]) -> None:
-        def _acc(value, matches, denom):
+    def render_summary(self, summary: dict[str, Any]) -> None:
+        def accuracy(value: Any, matches: Any, denominator: Any) -> str:
             if value is None:
                 return "N/A"
-            return f"{value:.1f}% ({matches}/{denom})"
+            return f"{value:.1f}% ({matches}/{denominator})"
 
-        self._stat_vars["total"].set(str(summary.get("total", 0)))
-        self._stat_vars["total_acc"].set(
-            _acc(summary.get("total_accuracy"), summary.get("total_matches", 0), summary.get("with_original", 0))
+        self.stat_labels["total"].setText(str(summary.get("total", 0)))
+        self.stat_labels["total_acc"].setText(
+            accuracy(summary.get("total_accuracy"), summary.get("total_matches", 0), summary.get("with_original", 0))
         )
-        self._stat_vars["known_acc"].set(
-            _acc(summary.get("known_accuracy"), summary.get("known_matches", 0), summary.get("with_mapping", 0))
+        self.stat_labels["known_acc"].setText(
+            accuracy(summary.get("known_accuracy"), summary.get("known_matches", 0), summary.get("with_mapping", 0))
         )
-        self._stat_vars["avg_conf"].set(f"{summary.get('avg_confidence', 0.0):.1f}%")
+        self.stat_labels["avg_conf"].setText(f"{summary.get('avg_confidence', 0.0):.1f}%")
 
-        self._summary_tree.delete(*self._summary_tree.get_children())
+        self.summary_tree.setSortingEnabled(False)
+        self.summary_tree.clear()
         for row in summary.get("per_class", []):
-            self._summary_tree.insert(
-                "",
-                "end",
-                values=(
+            item = _SortableItem(
+                (
                     row["cls"],
-                    row["count"],
+                    str(row["count"]),
                     f"{row['avg']:.1f}%",
                     f"{row['high']:.1f}%",
                     f"{row['low']:.1f}%",
-                    row["mismatches"],
+                    str(row["mismatches"]),
                 ),
+                (row["cls"].casefold(), row["count"], row["avg"], row["high"], row["low"], row["mismatches"]),
             )
+            for column in range(1, len(SUMMARY_COLUMNS)):
+                item.setTextAlignment(column, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.summary_tree.addTopLevelItem(item)
+        self.summary_tree.setSortingEnabled(True)
 
-    def _filtered_results(self) -> list[dict[str, Any]]:
-        needle = self._search_var.get().strip().casefold()
-        match_filter = self._match_var.get()
-        want = {
-            "Match": "match",
-            "Mismatch": "mismatch",
-            "No ground truth": "unknown",
-        }.get(match_filter)
+    def filtered_results(self) -> list[dict[str, Any]]:
+        needle = self.filter_edit.text().strip().casefold()
+        wanted = _MATCH_FOR_FILTER.get(self.match_combo.currentText())
         rows = []
-        for r in self._results:
-            if needle and needle not in r["filename"].casefold():
+        for row in self.results:
+            if needle and needle not in row["filename"].casefold():
                 continue
-            if want is not None and r["match"] != want:
+            if wanted is not None and row["match"] != wanted:
                 continue
-            rows.append(r)
-        if self._sort_state is not None:
-            col, descending = self._sort_state
-            key = {
-                "filename": lambda r: r["filename"].casefold(),
-                "predicted": lambda r: r["predicted"].casefold(),
-                "confidence": lambda r: r["confidence"],
-                "original": lambda r: r["original"].casefold(),
-                "match": lambda r: r["match"],
-            }.get(col, lambda r: r["filename"])
-            rows.sort(key=key, reverse=descending)
+            rows.append(row)
         return rows
 
-    def _render_results(self) -> None:
-        if not hasattr(self, "_tree"):
-            return
-        self._tree.delete(*self._tree.get_children())
-        self._row_by_iid = {}
-        rows = self._filtered_results()
-        for idx, r in enumerate(rows):
-            iid = str(idx)
-            self._tree.insert(
-                "",
-                "end",
-                iid=iid,
-                values=(
-                    r["filename"],
-                    r["predicted"],
-                    f"{r['confidence']:.1f}%",
-                    r["original"] or "—",
-                    _MATCH_LABELS.get(r["match"], "—"),
+    def render_results(self) -> None:
+        self.result_tree.setSortingEnabled(False)
+        self.result_tree.clear()
+        self._visible = self.filtered_results()
+        for row in self._visible:
+            item = _SortableItem(
+                (
+                    row["filename"],
+                    row["predicted"],
+                    f"{row['confidence']:.1f}%",
+                    row["original"] or "—",
+                    MATCH_LABELS.get(row["match"], "—"),
                 ),
-                tags=(r["match"],),
+                (
+                    row["filename"].casefold(),
+                    row["predicted"].casefold(),
+                    row["confidence"],
+                    row["original"].casefold(),
+                    row["match"],
+                ),
+                payload=row,
             )
-            self._row_by_iid[iid] = r
-        self._count_var.set(f"{len(rows)} of {len(self._results)} shown")
+            item.setTextAlignment(2, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            brush = QBrush(QColor(self.role_color(MATCH_ROLES.get(row["match"], "text_muted"))))
+            for column in range(len(RESULT_COLUMNS)):
+                item.setForeground(column, brush)
+            self.result_tree.addTopLevelItem(item)
+        self.result_tree.setSortingEnabled(True)
+        self.count_label.setText(f"{len(self._visible)} of {len(self.results)} shown")
 
-    def _sort_by(self, column: str) -> None:
-        if self._sort_state and self._sort_state[0] == column:
-            self._sort_state = (column, not self._sort_state[1])
-        else:
-            self._sort_state = (column, False)
-        self._render_results()
+    def role_color(self, role: str) -> str:
+        """A palette color, from the window when there is one."""
+        palette = getattr(self._source, "palette_colors", None) or {}
+        return str(palette.get(role) or _FALLBACK_COLORS[role])
 
-    def _on_row_select(self, _event: tk.Event) -> None:
-        sel = self._tree.selection()
-        if not sel:
+    def apply_palette(self) -> None:
+        """Re-read colors after a theme switch — the row colors are baked in.
+
+        Same contract as the serial monitor's ``apply_palette``: the stylesheet
+        can't reach a QTreeWidgetItem's brush, so the host asks for this by name.
+        """
+        self.render_results()
+
+    def result_rows_shown(self) -> list[dict[str, Any]]:
+        """The rows in the table, in the order the table shows them."""
+        items = [self.result_tree.topLevelItem(i) for i in range(self.result_tree.topLevelItemCount())]
+        return [item.payload for item in items if isinstance(item, _SortableItem) and item.payload is not None]
+
+    # ----- preview -------------------------------------------------------------
+
+    def _show_preview(self, item: Any) -> None:
+        row = item.payload if isinstance(item, _SortableItem) else None
+        if row is None:
             return
-        row = self._row_by_iid.get(sel[0])
-        if not row:
-            return
-        self._preview_label.set(
-            f"{row['filename']}\nPredicted: {row['predicted']} ({row['confidence']:.1f}%)"
-            + (f"\nGround truth: {row['original']}" if row["original"] else "")
-        )
+        caption = f"{row['filename']}\nPredicted: {row['predicted']} ({row['confidence']:.1f}%)"
+        if row["original"]:
+            caption += f"\nGround truth: {row['original']}"
+        self.preview_caption.setText(caption)
+        frame = None
         try:
             import cv2
 
-            img = cv2.imread(row["filepath"])
-            self._preview.show_bgr(img)
+            frame = cv2.imread(row["filepath"])
         except Exception:
-            self._preview.show_bgr(None)
+            frame = None
+        self.preview_label.setPixmap(bgr_to_pixmap(frame, PREVIEW_SIZE))
 
-    # ----- hybrid preview (shared with the model image manager) ----------------
-
-    def _open_preview(self, event: tk.Event) -> None:
-        iid = self._tree.identify_row(event.y)
-        row = self._row_by_iid.get(iid) if iid else None
-        if not row:
+    def _open_preview(self, item: Any) -> None:
+        row = item.payload if isinstance(item, _SortableItem) else None
+        if row is None:
             return
-        headstamps = [h.name for h in self.headstamps_repo.list_for_model(self.model.id)]
-        ImagePreviewDialog(
+        shown = self.result_rows_shown()
+        image_paths = [r["filepath"] for r in shown]
+        try:
+            index = image_paths.index(row["filepath"])
+        except ValueError:
+            index = 0
+        dialog = ImagePreviewDialog(
             self,
-            row["filepath"],
-            headstamps,
-            row.get("raw_original") or None,
-            on_changed=self._apply_image_change,
+            image_paths,
+            index,
+            self.model_class_names(),
+            on_changed=self.apply_image_change,
         )
+        dialog.exec()
 
-    def _apply_image_change(self, change: dict[str, Any]) -> None:
-        """Reflect a delete/reassign done in the previewer back into the table.
+    def apply_image_change(self, change: dict[str, Any]) -> None:
+        """Fold a preview reclassify/delete back into the results and re-score.
 
-        The previewer renamed/removed the file on disk; here we update the
-        in-memory results (ground truth follows the filename prefix) and
-        re-score so the stats and per-class tabs stay in sync — no re-run needed.
+        The file already moved on disk; ground truth follows the filename, so
+        the row is re-derived and the stats re-summarized without a re-run.
         """
-        updated = self._apply_change(self._results, change, self._mapping)
+        updated = self.updated_results(self.results, change, self.mapping)
         if updated is None:
             return
-        self._results = updated
-        self._render_summary(evaluator.summarize(self._results))
-        self._render_results()
+        self.results = updated
+        self.render_summary(evaluator.summarize(self.results))
+        self.render_results()
 
     @staticmethod
-    def _apply_change(
+    def updated_results(
         results: list[dict[str, Any]],
         change: dict[str, Any],
         mapping: dict[str, str],
     ) -> list[dict[str, Any]] | None:
-        """Pure result-list update for a previewer change. None = no-op.
-
-        Reclassify re-derives ground truth from the new headstamp prefix and
-        re-scores the row against the (unchanged) prediction; delete drops it.
-        """
+        """Pure result-list update for a previewer change. None = no-op."""
         old_path = change.get("old_path")
         action = change.get("action")
         if action == "deleted":
             return [r for r in results if r["filepath"] != old_path]
-        if action == "reclassified":
-            new_path = change.get("new_path")
-            # The preview dialog only ever emits "reclassified" with a
-            # `new_path` string (see dialog_image_preview._reclassify) — the
-            # dict is typed as `dict[str, Any]` because it also carries
-            # "deleted" changes, so the checker can't see that.
-            if not isinstance(new_path, str):
-                raise ValueError(f"'reclassified' change missing a new_path: {change!r}")
-            raw = change.get("new_headstamp") or ""
-            original, was_mapped = evaluator.map_classification(raw, mapping)
-            out = []
-            for r in results:
-                if r["filepath"] == old_path:
-                    r = {
-                        **r,
-                        "filepath": new_path,
-                        "filename": Path(new_path).name,
-                        "raw_original": raw,
-                        "original": original,
-                        "has_mapping": was_mapped,
-                        "match": evaluator.match_status(r["predicted"], original),
-                    }
-                out.append(r)
-            return out
+        if action != "reclassified":
+            return None
+        new_path = change.get("new_path")
+        if not isinstance(new_path, str):
+            raise ValueError(f"'reclassified' change missing a new_path: {change!r}")
+        raw = change.get("new_headstamp") or ""
+        original, was_mapped = evaluator.map_classification(raw, mapping)
+        out = []
+        for row in results:
+            if row["filepath"] == old_path:
+                row = {
+                    **row,
+                    "filepath": new_path,
+                    "filename": Path(new_path).name,
+                    "raw_original": raw,
+                    "original": original,
+                    "has_mapping": was_mapped,
+                    "match": evaluator.match_status(row["predicted"], original),
+                }
+            out.append(row)
+        return out
+
+    # ----- history --------------------------------------------------------------
+
+    def report_paths(self) -> list[Path]:
+        """Saved reports for this model, newest first — the folder is the history."""
+        report_dir = paths.model_reports_dir(self.model.id)
+        if not report_dir.exists():
+            return []
+        return sorted(
+            (p for p in report_dir.glob("*.html") if p.is_file()),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+
+    def refresh_history(self, select_path: str | None = None) -> None:
+        self.history_tree.clear()
+        for path in self.report_paths():
+            mtime = path.stat().st_mtime
+            # Display in the OS's regional format; sort on the raw mtime — a
+            # locale-formatted string doesn't sort chronologically in general.
+            created = formatting.format_datetime(datetime.fromtimestamp(mtime))
+            item = _SortableItem((path.name, created), (path.name.casefold(), mtime), payload=path)
+            self.history_tree.addTopLevelItem(item)
+            if select_path is not None and str(path) == str(select_path):
+                self.history_tree.setCurrentItem(item)
+
+    def selected_report(self) -> Path | None:
+        item = self.history_tree.currentItem()
+        if not isinstance(item, _SortableItem) or item.payload is None:
+            item = self.history_tree.topLevelItem(0)  # default to the newest
+        if isinstance(item, _SortableItem) and isinstance(item.payload, Path):
+            return item.payload
         return None
 
-    # ----- lifecycle ----------------------------------------------------------
+    def open_selected_report(self) -> None:
+        path = self.selected_report()
+        if path is None:
+            self.notify("No report", "No reports to open yet.")
+            return
+        if not self.open_url(str(path.resolve())):
+            self.notify("Open failed", str(path))
 
-    def _close(self) -> None:
+    # ----- lifecycle -------------------------------------------------------------
+
+    def closeEvent(self, event: Any) -> None:
         self._stop_event.set()
-        try:
-            self.app.bus.unsubscribe(self._progress_topic, self._on_progress)
-        except Exception:
-            pass
-        self.destroy()
+        worker = self._worker
+        if worker is not None:
+            worker.wait(2000)
+        super().closeEvent(event)
 
 
-class ClassMapperDialog(tk.Toplevel):
-    """Map folder ground-truth classes onto the model's headstamp classes."""
-
-    UNMAPPED = "(Unmapped)"
+class ClassMapperDialog(QDialog):
+    """Map the folder's ground-truth class names onto the model's headstamps."""
 
     def __init__(
         self,
-        parent: tk.Misc,
-        target_classes: list[str],
-        model_classes: list[str],
+        parent: QWidget | None,
+        target_classes: Sequence[str],
+        model_classes: Sequence[str],
         initial: dict[str, str],
-        *,
-        on_ok: Callable[[dict[str, str]], None],
     ) -> None:
         super().__init__(parent)
-        self.title("Map folder classes to model")
-        # wm_transient's stub wants a Wm (Tk/Toplevel), not the broader
-        # Misc `parent` type; winfo_toplevel() resolves to the actual
-        # top-level window, which is what Tk already does internally.
-        self.transient(parent.winfo_toplevel())
-        self.resizable(True, True)
-        self.minsize(520, 360)
-        self.configure(bg=PALETTE["bg_window"])
-        self._model_classes = model_classes
-        self._on_ok = on_ok
-        self._combos: dict[str, ttk.Combobox] = {}
+        self._model_classes = list(model_classes)
+        self.combos: dict[str, QComboBox] = {}
+        self.notify: Callable[[str, str], None] = self._inform
+        self.confirm: Callable[[str, str], bool] = self._ask
 
-        header = ttk.Frame(self, style="Window.TFrame", padding=(12, 12, 12, 4))
-        header.pack(fill=tk.X)
-        ttk.Label(header, text="Folder class  →  model class", style="Header.TLabel").pack(side=tk.LEFT)
-        ttk.Button(header, text="Auto-map all", command=self._auto_map).pack(side=tk.RIGHT)
+        self.setWindowTitle("Map folder classes to model")
+        self.resize(560, 420)
+        column = QVBoxLayout(self)
 
-        body = ScrollableFrame(self)
-        body.pack(fill=tk.BOTH, expand=True, padx=12)
-        grid = body.body
-        values = [self.UNMAPPED] + model_classes
+        header = QHBoxLayout()
+        header.addWidget(QLabel("Folder class  →  model class", self))
+        header.addStretch(1)
+        self.auto_button = QPushButton("Auto-map all", self)
+        self.auto_button.clicked.connect(self.auto_map)
+        header.addWidget(self.auto_button)
+        column.addLayout(header)
+
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        host = QWidget(scroll)
+        grid = QGridLayout(host)
+        grid.setContentsMargins(4, 4, 4, 4)
+        values = [UNMAPPED, *self._model_classes]
         for row, target in enumerate(target_classes):
-            ttk.Label(grid, text=target, anchor=tk.W).grid(row=row, column=0, sticky="w", padx=(0, 8), pady=3)
-            ttk.Label(grid, text="→", style="Muted.TLabel").grid(row=row, column=1, padx=4)
-            # Use the combobox's own value (set/get) rather than a per-row
-            # StringVar — a loop-local Variable would be garbage-collected and
-            # silently blank the widget.
-            combo = ttk.Combobox(grid, state="readonly", width=28, values=values)
-            # Preselect saved mapping, else a suggestion, else Unmapped.
-            if target in initial and initial[target] in model_classes:
-                combo.set(initial[target])
+            grid.addWidget(QLabel(target, host), row, 0)
+            arrow = QLabel("→", host)
+            arrow.setObjectName("mutedLabel")
+            grid.addWidget(arrow, row, 1)
+            combo = QComboBox(host)
+            combo.addItems(values)
+            # Saved mapping wins over a suggestion; a suggestion over Unmapped.
+            saved = initial.get(target)
+            if saved in self._model_classes:
+                combo.setCurrentText(saved)
             else:
-                suggestion = evaluator.suggest_mapping(target, model_classes)
-                combo.set(suggestion if suggestion in model_classes else self.UNMAPPED)
-            combo.grid(row=row, column=2, sticky="w", pady=3)
-            self._combos[target] = combo
-        grid.columnconfigure(0, weight=1)
-        grid.columnconfigure(2, weight=1)
+                suggestion = evaluator.suggest_mapping(target, self._model_classes)
+                combo.setCurrentText(suggestion if suggestion in self._model_classes else UNMAPPED)
+            grid.addWidget(combo, row, 2)
+            self.combos[target] = combo
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(2, 1)
+        scroll.setWidget(host)
+        column.addWidget(scroll, 1)
 
-        btns = ttk.Frame(self, style="Window.TFrame", padding=12)
-        btns.pack(fill=tk.X)
-        ttk.Button(btns, text="Cancel", command=self.destroy).pack(side=tk.RIGHT)
-        ttk.Button(btns, text="Save mapping", command=self._save, style="Accent.TButton").pack(
-            side=tk.RIGHT, padx=(0, 8)
-        )
+        buttons = QDialogButtonBox(self)
+        save = buttons.addButton("Save mapping", QDialogButtonBox.ButtonRole.AcceptRole)
+        save.setObjectName("action")
+        save.clicked.connect(self.save)
+        buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
+        buttons.rejected.connect(self.reject)
+        column.addWidget(buttons)
 
-        self.bind("<Escape>", lambda _e: self.destroy())
+    def _inform(self, title: str, text: str) -> None:
+        QMessageBox.information(self, title, text)
 
-    def _auto_map(self) -> None:
+    def _ask(self, title: str, text: str) -> bool:
+        return QMessageBox.question(self, title, text) == QMessageBox.StandardButton.Yes
+
+    def auto_map(self) -> None:
         mapped = 0
-        for target, combo in self._combos.items():
+        for target, combo in self.combos.items():
             suggestion = evaluator.suggest_mapping(target, self._model_classes)
             if suggestion in self._model_classes:
-                combo.set(suggestion)
+                combo.setCurrentText(suggestion)
                 mapped += 1
-        messagebox.showinfo(
-            "Auto-map",
-            f"Auto-mapped {mapped} of {len(self._combos)} classes.",
-            parent=self,
-        )
+        self.notify("Auto-map", f"Auto-mapped {mapped} of {len(self.combos)} classes.")
 
-    def _current_mapping(self) -> dict[str, str]:
+    def mapping(self) -> dict[str, str]:
         out: dict[str, str] = {}
-        for target, combo in self._combos.items():
-            value = combo.get()
-            if value and value != self.UNMAPPED:
+        for target, combo in self.combos.items():
+            value = combo.currentText()
+            if value and value != UNMAPPED:
                 out[target] = value
         return out
 
-    def _save(self) -> None:
-        mapping = self._current_mapping()
-        unmapped = len(self._combos) - len(mapping)
-        if unmapped > 0 and not messagebox.askyesno(
+    def save(self) -> None:
+        unmapped = len(self.combos) - len(self.mapping())
+        if unmapped > 0 and not self.confirm(
             "Unmapped classes",
             f"{unmapped} class(es) are unmapped and won't count toward known accuracy.\n\nSave anyway?",
-            parent=self,
         ):
             return
-        self._on_ok(mapping)
-        self.destroy()
+        self.accept()
+
+
+def build_model_evaluator(parent: QWidget | None, source: Any, model: Model) -> ModelEvaluatorDialog:
+    """Factory mirroring the other dialogs' ``build_*`` entry points."""
+    return ModelEvaluatorDialog(parent, source, model)

@@ -124,7 +124,7 @@ stay reachable forever at their own URL.
   PDF machinery lives in `mkdocs-pdf.yml` (used with `-F` by the workflow), NOT in
   `mkdocs.yml`: the plugin's dormant-notice and its WeasyPrint CSS complaints would fail
   `--strict`, and a laptop's `mkdocs serve` needs none of it (WeasyPrint wants system pango).
-- **`docs/guide/GUIDE.md` is also the in-app F1 guide** (`sorter/qtui/help_viewer.py` loads
+- **`docs/guide/GUIDE.md` is also the in-app F1 guide** (`sorter/ui/help_viewer.py` loads
   that exact file into a `QTextBrowser`). It must stay at that path and stay plain Markdown --
   Material-only syntax would render as source text at the user. Its heading anchors are
   GitHub's, and MkDocs slugs them identically, so a deep link into the published site and one
@@ -141,9 +141,8 @@ uv run --group docs mkdocs build --strict       # what CI would fail on
 anchors into warnings, and `--strict` turns warnings into errors. The guide's table of contents
 is 22 same-page links; a broken one there breaks the in-app navigation identically.
 
-Note that either command syncs the venv to *exactly* the default groups plus `docs` -- so it
-uninstalls the `qt` extra if you had it, and `tests/unit/qtui/` then skips instead of failing.
-`uv sync --extra qt` puts it back.
+Note that either command syncs the venv to *exactly* the default groups plus `docs`, so it
+uninstalls the `ml` extra if you had it. `uv sync --extra ml` puts it back.
 
 **Re-publishing by hand** is Actions -> Docs -> Run workflow, with the tag as `version`. Doing
 it from a laptop is the same thing the workflow runs, and needs push rights to `gh-pages`:

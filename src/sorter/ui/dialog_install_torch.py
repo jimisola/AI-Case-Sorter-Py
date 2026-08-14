@@ -1,71 +1,50 @@
-"""Modal that installs PyTorch + torchvision into the active venv.
+"""Install PyTorch + torchvision into the running venv.
 
-Every local-model action is gated on this — training *and* inference — so
-AI-Config-only users never pay the ~2 GB torch install cost. Callers reach it
-through `torch_gate.ensure_torch` rather than constructing it directly; pass
-`reason` to say which action is asking, since "Training needs PyTorch" is the
-wrong headline when the user just pressed Start on the Run tab.
+Every worker — the output pump and the ``nvidia-smi`` probe — only puts a
+message on a ``queue.Queue``, and a main-thread ``QTimer`` drains it into the
+widgets (CLAUDE.md §8). Same contract the event bus gives the rest of the app,
+minus the bus (a dialog has no access to one).
 
-On open we detect a supported Nvidia GPU (compute capability ≥ 8.0). If one is
-present, the user gets to pick between the GPU build (CUDA 12.9 wheels on
-Linux, CUDA 13.0 on Windows) and the CPU build; otherwise only the CPU build
-is offered.
+Callers reach this through ``torch_gate`` rather than constructing it; pass
+``reason`` to say which action is asking, since "Training needs PyTorch" is the
+wrong headline when the user just pressed Start on the Sort page.
 
-`uv pip install --python <this interpreter>` runs in a subprocess and streams
-its output to the dialog's console. Prefers uv over `python -m pip` because a
-uv-managed venv (see bootstrap.py) doesn't ship pip by default -- `--python`
-targets the running venv explicitly regardless of how it was created. Falls
-back to `python -m pip` when uv isn't installed, which is the normal state of
-a plain `python -m venv` checkout. On success the caller's `on_success`
-callback fires and the gated action proceeds; on cancel/failure the venv is
-left as-is.
+GPU detection shells out (up to a 5 s timeout), so the install buttons stay
+disabled until the probe lands — what to offer depends on its answer.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import queue
 import subprocess
 import sys
 import threading
-import tkinter as tk
 import tomllib
 from collections.abc import Callable
 from pathlib import Path
-from tkinter import ttk
+from typing import Any
+
+from PySide6.QtCore import QTimer
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import (
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QPlainTextEdit,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..ml.gpu_detect import GpuInfo, detect_supported_nvidia_gpu
 from ..paths import find_uv
-from .theme import PALETTE
 
-# The torch/torchvision versions come from pyproject.toml's [ml] extra —
-# read at install time by ml_pin_targets() below, never duplicated here as a
-# constant. One declaration means Renovate and vulnerability scanners see the
-# pins users actually install, and a bump in pyproject.toml is the whole bump
-# (#67: the two copies had drifted apart, and the .py copy was invisible to
-# every scanner). The pins themselves stay exact rather than floating
-# (`torch>=2.2`): the latest-at-install-time is a moving target and has been
-# observed to regress ConvNeXt inference on the RTX 50-series.
-#
-# Only the CUDA index for the GPU build is decided here, per OS. Why not
-# plain PyPI: each torch release ships there as a single build at that
-# release's default CUDA — for 2.13 that is CUDA 13, which needs an R580+
-# NVIDIA driver — and on Windows the PyPI wheel is CPU-only. Why two
-# indexes: upstream builds no Windows wheels at all for CUDA 12.9 (it is
-# Linux-only in pytorch's binary build matrix), so each OS gets the
-# lowest-driver-bar index that still covers every supported card:
-#
-#   linux — cu129: sm_75 (Turing) through sm_120 (Blackwell / RTX
-#     50-series), and CUDA 12.x minor-version compatibility means any R525+
-#     driver works — a driver bar roughly three years older than CUDA 13's.
-#   win32 — cu130: the only Windows index for current torch that bakes in
-#     sm_120; needs an R580+ driver. (Windows' CUDA-12.x alternative,
-#     cu126, stops at sm_90 and would drop the RTX 50-series.)
-#
-# The index and the version are coupled: an index only carries the torch
-# versions actually built for it (cu128 stopped at 2.11), so a version bump
-# in pyproject.toml must keep this table in step —
-# tests/integration/test_torch_wheel_index.py resolves every (pin, index,
-# platform) combination before a user's install ever has to.
+# The torch/torchvision pins live in pyproject.toml's [ml] extra and are read
+# from there at install time, never re-declared here (CLAUDE.md §8). Only the
+# per-OS CUDA index for the GPU build is decided in code: upstream never builds
+# Windows cu129 wheels, so the two platforms differ.
+# tests/integration/test_torch_wheel_index.py resolves each pin against each.
 _CUDA_INDEX_BY_OS = {
     "linux": "https://download.pytorch.org/whl/cu129",
     "win32": "https://download.pytorch.org/whl/cu130",
@@ -76,12 +55,9 @@ _CUDA_INDEX = _CUDA_INDEX_BY_OS.get(sys.platform, _CUDA_INDEX_BY_OS["linux"])
 def ml_pin_targets() -> tuple[str, ...] | None:
     """The exact requirement strings pyproject.toml's [ml] extra pins.
 
-    Resolved relative to this source tree — the app always runs from one
-    (see CLAUDE.md §2), so the versions installed at runtime can never
-    drift from the ones declared to dependency scanners. Returns None when
-    the file is missing or doesn't parse; that's a tree the launcher
-    couldn't have synced either, so the caller reports it instead of
-    guessing at a version.
+    ``None`` on any failure — an unreadable pyproject installs nothing rather
+    than a guess. The ``project.name`` guard matters: ``parents[3]`` is
+    whatever directory the tree happens to sit in.
     """
     path = Path(__file__).resolve().parents[3] / "pyproject.toml"
     try:
@@ -91,10 +67,6 @@ def ml_pin_targets() -> tuple[str, ...] | None:
             return None
         targets = data["project"]["optional-dependencies"]["ml"]
     except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError, KeyError, TypeError):
-        # UnicodeDecodeError is spelled out because it is a sibling of
-        # TOMLDecodeError (both subclass ValueError), not covered by it:
-        # tomllib decodes the raw bytes itself, so a pyproject.toml re-saved
-        # in a non-UTF-8 editor raises it before parsing even starts.
         return None
     if not isinstance(targets, list) or not targets or not all(isinstance(t, str) for t in targets):
         return None
@@ -102,198 +74,224 @@ def ml_pin_targets() -> tuple[str, ...] | None:
 
 
 # Shown when the caller doesn't name the action. Deliberately generic: this
-# dialog now fronts inference as well as training.
+# dialog fronts inference as well as training.
 DEFAULT_REASON = "This model needs PyTorch"
 
+BODY_TEXT = (
+    "Running or training a model on this computer requires PyTorch and "
+    "torchvision. The download is large and only happens once. "
+    "(Models classified by an AI Config server don't need it.)"
+)
+NO_GPU_TEXT = (
+    "No supported NVIDIA GPU detected — the CPU build will be installed. "
+    "(For NVIDIA GPUs requires Ampere or newer; compute capability ≥ 8.0.)"
+)
+PROBING_TEXT = "Checking for a supported GPU…"
+NO_INSTALLER_TEXT = (
+    "Could not find uv or pip. uv should have been installed by bootstrap.py "
+    "on first launch — try restarting the app via start.sh/start.bat, or "
+    "install uv yourself from https://docs.astral.sh/uv/.\n"
+)
+NO_PINS_TEXT = (
+    "Could not read the pinned PyTorch version from pyproject.toml "
+    "(expected next to bootstrap.py, at the top of the app folder). "
+    "The install can't proceed without it — restart via start.sh/start.bat, "
+    "or reinstall the app if the file is really gone.\n"
+)
 
-class TorchInstallDialog(tk.Toplevel):
+DRAIN_MS = 50
+# Grace given to a cancelled install between SIGTERM and SIGKILL.
+TERMINATE_GRACE_S = 5.0
+
+
+def build_install_command(*, use_gpu: bool, uv: str | None, pip_available: bool) -> list[str] | None:
+    """The argv for one install, or None when it can't be built.
+
+    Two ways there is no command: the pins are unreadable, or neither installer
+    is available. uv first, because a uv-managed venv (the launcher's default)
+    has no pip in it at all. But a plain ``python -m venv`` + ``pip install -e .``
+    checkout is a documented way to run this app, and there uv may legitimately
+    be absent while pip is right there — so fall back rather than refusing to
+    install.
+    """
+    targets = ml_pin_targets()
+    if targets is None:
+        return None
+    if uv is not None:
+        cmd = [uv, "pip", "install", "--python", sys.executable, *targets]
+    elif pip_available:
+        cmd = [sys.executable, "-u", "-m", "pip", "install", *targets]
+    else:
+        return None
+    if use_gpu:
+        cmd.extend(["--index-url", _CUDA_INDEX])
+    return cmd
+
+
+def _restyle(widget: QWidget, object_name: str) -> None:
+    """Swap a widget's QSS selector after the stylesheet was applied."""
+    widget.setObjectName(object_name)
+    style = widget.style()
+    style.unpolish(widget)
+    style.polish(widget)
+
+
+class TorchInstallDialog(QDialog):
+    """Non-blocking modal: opened with ``open()``, never ``exec()``.
+
+    ``build_command`` and ``detect`` are the test seams — replacing
+    ``build_command`` runs an arbitrary process through the same streaming
+    path without installing anything.
+    """
+
     def __init__(
         self,
-        parent: tk.Misc,
+        parent: QWidget | None = None,
         *,
         on_success: Callable[[], None] | None = None,
         on_cancel: Callable[[], None] | None = None,
         reason: str | None = None,
+        detect: Callable[[], GpuInfo | None] | None = None,
     ) -> None:
         super().__init__(parent)
-        self.title("Install PyTorch")
-        # wm_transient's stub wants a Wm (Tk/Toplevel), not the broader
-        # Misc `parent` type; winfo_toplevel() resolves to the actual
-        # top-level window, which is what Tk already does internally.
-        self.transient(parent.winfo_toplevel())
-        self.resizable(True, True)
-        self.geometry("720x520")
-        self.minsize(640, 460)
-        self.configure(bg=PALETTE["bg_surface"])
-        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.setWindowTitle("Install PyTorch")
+        self.setMinimumSize(640, 460)
+        self.resize(720, 520)
 
         self._on_success = on_success
         self._on_cancel = on_cancel
         self._reason = reason or DEFAULT_REASON
-        self._proc: subprocess.Popen | None = None
+        self._detect = detect or detect_supported_nvidia_gpu
+        self._events: queue.Queue[tuple[str, Any]] = queue.Queue()
+        self._proc: subprocess.Popen[str] | None = None
         self._installing = False
-        self._gpu: GpuInfo | None = detect_supported_nvidia_gpu()
+        self._closed = False
+        self.gpu: GpuInfo | None = None
+        self.gpu_known = False
+        # Instance attribute so a test can point the install at its own process.
+        self.build_command: Callable[[bool], list[str] | None] = self._default_command
 
-        # IMPORTANT: pack the button row FIRST with side=BOTTOM so it reserves
-        # vertical space before the resizable content above gets it. Without
-        # this the console swallows everything and the buttons get clipped.
-        btns = ttk.Frame(self, padding=(12, 0, 12, 12))
-        btns.pack(side=tk.BOTTOM, fill=tk.X)
-        self._build_buttons(btns)
+        self._build_ui()
 
-        wrap = ttk.Frame(self, padding=12)
-        wrap.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        self._build_header(wrap)
-        self._build_console(wrap)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._drain)
+        self._timer.start(DRAIN_MS)
+        threading.Thread(target=self._probe_gpu, daemon=True).start()
 
     # ----- UI build -----------------------------------------------------------
 
-    def _build_header(self, parent: tk.Misc) -> None:
-        ttk.Label(parent, text=self._reason, style="Header.TLabel").pack(anchor="w")
+    def _build_ui(self) -> None:
+        column = QVBoxLayout(self)
 
-        body = (
-            "Running or training a model on this computer requires PyTorch and "
-            "torchvision. The download is large and only happens once. "
-            "(Models classified by an AI Config server don't need it.)"
-        )
-        ttk.Label(parent, text=body, style="Muted.TLabel", wraplength=660, justify=tk.LEFT).pack(
-            anchor="w",
-            pady=(6, 6),
-            fill=tk.X,
-        )
+        header = QLabel(self._reason, self)
+        header_font = QFont(header.font())
+        header_font.setBold(True)
+        header.setFont(header_font)
+        header.setWordWrap(True)
+        column.addWidget(header)
 
-        if self._gpu is not None:
-            gpu_msg = (
-                f"Detected supported GPU: {self._gpu.name} "
-                f"(compute capability {self._gpu.compute_str}).\n\n"
-                "Pick GPU build for fast training, or CPU only if you'd rather "
-                "skip the larger download / CUDA driver requirements."
-            )
-            ttk.Label(parent, text=gpu_msg, style="Accent.TLabel", wraplength=660, justify=tk.LEFT).pack(
-                anchor="w",
-                pady=(0, 8),
-                fill=tk.X,
-            )
-        else:
-            ttk.Label(
-                parent,
-                text=(
-                    "No supported NVIDIA GPU detected — the CPU build will be "
-                    "installed. (For Nvidia GPUs requires Ampere or newer; "
-                    "compute capability ≥ 8.0.)"
-                ),
-                style="Muted.TLabel",
-                wraplength=660,
-                justify=tk.LEFT,
-            ).pack(anchor="w", pady=(0, 8), fill=tk.X)
+        body = QLabel(BODY_TEXT, self)
+        body.setObjectName("dialogHint")
+        body.setWordWrap(True)
+        column.addWidget(body)
 
-    def _build_console(self, parent: tk.Misc) -> None:
-        console_wrap = ttk.Frame(parent, style="Card.TFrame", padding=4)
-        console_wrap.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        self.console = tk.Text(
-            console_wrap,
-            height=10,
-            wrap=tk.NONE,
-            state=tk.DISABLED,
-            bg=PALETTE["bg_input"],
-            fg=PALETTE["text"],
-            insertbackground=PALETTE["accent"],
-            highlightthickness=0,
-            borderwidth=0,
-        )
-        self.console.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        ttk.Scrollbar(console_wrap, orient=tk.VERTICAL, command=self.console.yview).pack(side=tk.RIGHT, fill=tk.Y)
+        self.gpu_label = QLabel(PROBING_TEXT, self)
+        self.gpu_label.setObjectName("mutedLabel")
+        self.gpu_label.setWordWrap(True)
+        column.addWidget(self.gpu_label)
 
-    def _build_buttons(self, parent: tk.Misc) -> None:
-        self.cancel_btn = ttk.Button(parent, text="Cancel", command=self._cancel)
-        self.cancel_btn.pack(side=tk.RIGHT)
-        if self._gpu is not None:
-            self.gpu_btn = ttk.Button(
-                parent,
-                text="Install with GPU support",
-                style="Accent.TButton",
-                command=lambda: self._start_install(use_gpu=True),
-            )
-            self.gpu_btn.pack(side=tk.RIGHT, padx=(0, 8))
-            self.cpu_btn = ttk.Button(
-                parent,
-                text="CPU only",
-                command=lambda: self._start_install(use_gpu=False),
-            )
-            self.cpu_btn.pack(side=tk.RIGHT, padx=(0, 8))
-            self._install_buttons = [self.gpu_btn, self.cpu_btn]
-        else:
-            self.cpu_btn = ttk.Button(
-                parent,
-                text="Install PyTorch",
-                style="Accent.TButton",
-                command=lambda: self._start_install(use_gpu=False),
-            )
-            self.cpu_btn.pack(side=tk.RIGHT, padx=(0, 8))
-            self._install_buttons = [self.cpu_btn]
+        self.console = QPlainTextEdit(self)
+        self.console.setObjectName("installConsole")
+        self.console.setReadOnly(True)
+        self.console.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        # Enough scrollback to see what failed, bounded so a long install
+        # can't grow the document without limit.
+        self.console.setMaximumBlockCount(5000)
+        self.console.setFont(QFont("Monospace"))
+        column.addWidget(self.console, 1)
 
-    # ----- console helpers ----------------------------------------------------
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.gpu_button = QPushButton("Install with GPU support", self)
+        self.gpu_button.setVisible(False)
+        self.gpu_button.clicked.connect(lambda: self.start_install(use_gpu=True))
+        row.addWidget(self.gpu_button)
 
-    def _append(self, text: str) -> None:
+        self.cpu_button = QPushButton("Install PyTorch", self)
+        self.cpu_button.clicked.connect(lambda: self.start_install(use_gpu=False))
+        row.addWidget(self.cpu_button)
+
+        self.cancel_button = QPushButton("Cancel", self)
+        self.cancel_button.clicked.connect(self.cancel)
+        row.addWidget(self.cancel_button)
+        column.addLayout(row)
+
+        # Nothing to install until the probe says which builds to offer.
+        self.cpu_button.setEnabled(False)
+
+    # ----- GPU probe ----------------------------------------------------------
+
+    def _probe_gpu(self) -> None:
+        """Worker: ``nvidia-smi`` shells out, so it never runs on the UI thread."""
         try:
-            self.console.config(state=tk.NORMAL)
-            self.console.insert(tk.END, text)
-            self.console.see(tk.END)
-            self.console.config(state=tk.DISABLED)
-        except tk.TclError:
-            pass
+            gpu = self._detect()
+        except Exception:
+            gpu = None
+        self._events.put(("gpu", gpu))
+
+    def _apply_gpu(self, gpu: GpuInfo | None) -> None:
+        self.gpu = gpu
+        self.gpu_known = True
+        if gpu is not None:
+            self.gpu_label.setText(
+                f"Detected supported GPU: {gpu.name} (compute capability {gpu.compute_str}).\n"
+                "Pick GPU build for fast training, or CPU only if you'd rather skip the "
+                "larger download / CUDA driver requirements."
+            )
+            _restyle(self.gpu_label, "aiResultLabel")
+            self.gpu_button.setVisible(True)
+            _restyle(self.gpu_button, "action")
+            self.cpu_button.setText("CPU only")
+        else:
+            self.gpu_label.setText(NO_GPU_TEXT)
+            _restyle(self.cpu_button, "action")
+        self._set_buttons_enabled(True)
 
     # ----- install flow -------------------------------------------------------
 
-    def _start_install(self, *, use_gpu: bool) -> None:
+    def _default_command(self, use_gpu: bool) -> list[str] | None:
+        """The real argv — and, when there is none, the console line saying why.
+
+        The reason lives here rather than in ``start_install`` because only the
+        real builder knows which precondition failed; a replaced
+        ``build_command`` speaks for itself.
+        """
+        if ml_pin_targets() is None:
+            self._append(NO_PINS_TEXT)
+            return None
+        uv = find_uv()
+        pip_available = importlib.util.find_spec("pip") is not None
+        if uv is None:
+            self._append(
+                "uv not found; falling back to pip in the running interpreter.\n"
+                if pip_available
+                else NO_INSTALLER_TEXT
+            )
+        return build_install_command(use_gpu=use_gpu, uv=uv, pip_available=pip_available)
+
+    def start_install(self, *, use_gpu: bool) -> None:
         if self._installing:
             return
+        cmd = self.build_command(use_gpu)
+        if cmd is None:
+            return  # the builder already put the reason on the console
         self._installing = True
-        for b in self._install_buttons:
-            b.config(state=tk.DISABLED)
-        # Mark the chosen button as the one in progress.
-        active_btn = self.gpu_btn if (use_gpu and self._gpu is not None) else self.cpu_btn
-        active_btn.config(text="Installing…")
-
-        targets = ml_pin_targets()
-        if targets is None:
-            self._append(
-                "Could not read the pinned PyTorch version from pyproject.toml "
-                "(expected next to bootstrap.py, at the top of the app folder). "
-                "The install can't proceed without it — restart via "
-                "start.sh/start.bat, or reinstall the app if the file is "
-                "really gone.\n"
-            )
-            self._finish(success=False)
-            return
-
-        # uv first, because a uv-managed venv (the launcher's default) has no
-        # pip in it at all. But a plain `python -m venv` + `pip install -e .`
-        # checkout is a documented way to run this app, and there uv may
-        # legitimately be absent while pip is right there -- so fall back
-        # rather than refusing to install. Only give up if neither exists.
-        uv = find_uv()
-        if uv is not None:
-            cmd: list[str] = [uv, "pip", "install", "--python", sys.executable, *targets]
-        elif importlib.util.find_spec("pip") is not None:
-            self._append("uv not found; falling back to pip in the running interpreter.\n")
-            cmd = [sys.executable, "-u", "-m", "pip", "install", *targets]
-        else:
-            self._append(
-                "Could not find uv or pip. uv should have been installed by "
-                "bootstrap.py on first launch -- try restarting the app via "
-                "start.sh/start.bat, or install uv yourself from "
-                "https://docs.astral.sh/uv/.\n"
-            )
-            self._finish(success=False)
-            return
-
-        if use_gpu:
-            cmd.extend(["--index-url", _CUDA_INDEX])
+        self._set_buttons_enabled(False)
+        (self.gpu_button if (use_gpu and self.gpu is not None) else self.cpu_button).setText("Installing…")
         self._append("$ " + " ".join(cmd) + "\n")
 
         try:
-            self._proc = subprocess.Popen(
+            proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -304,46 +302,105 @@ class TorchInstallDialog(tk.Toplevel):
             self._append(f"Failed to spawn {cmd[0]}: {exc}\n")
             self._finish(success=False)
             return
-        threading.Thread(target=self._pump, daemon=True).start()
+        self._proc = proc
+        threading.Thread(target=self._pump, args=(proc,), daemon=True).start()
 
-    def _pump(self) -> None:
-        assert self._proc is not None and self._proc.stdout is not None
+    def _pump(self, proc: subprocess.Popen[str]) -> None:
+        """Worker: reads the child's output; the queue does the marshalling."""
+        rc = -1
         try:
-            for line in self._proc.stdout:
-                self.after(0, self._append, line)
-            rc = self._proc.wait()
+            if proc.stdout is not None:
+                for line in proc.stdout:
+                    self._events.put(("line", line))
+            rc = proc.wait()
         except Exception as exc:
-            self.after(0, self._append, f"\n[pip pump] {exc}\n")
-            rc = -1
-        self.after(0, self._finish, rc == 0)
+            self._events.put(("line", f"\n[install] {exc}\n"))
+        self._events.put(("exit", rc))
 
-    def _finish(self, success: bool) -> None:
-        self._installing = False
-        if success:
-            self._append("\nInstall complete.\n")
-            for b in self._install_buttons:
-                b.config(state=tk.DISABLED, text="Done")
-            self.cancel_btn.config(text="Close")
-            if self._on_success is not None:
-                self._on_success()
-            self.destroy()
-        else:
-            self._append("\nInstall failed. See output above.\n")
-            for b in self._install_buttons:
-                b.config(state=tk.NORMAL)
-            if self._gpu is not None:
-                self.gpu_btn.config(text="Install with GPU support")
-            self.cpu_btn.config(text="CPU only" if self._gpu is not None else "Install PyTorch")
-
-    def _cancel(self) -> None:
-        if self._installing and self._proc is not None and self._proc.poll() is None:
+    def _drain(self) -> None:
+        """Main thread: the only place worker output reaches a widget."""
+        while True:
             try:
-                self._proc.terminate()
+                kind, payload = self._events.get_nowait()
+            except queue.Empty:
+                return
+            if kind == "gpu":
+                self._apply_gpu(payload)
+            elif kind == "line":
+                self._append(payload)
+            elif kind == "exit":
+                self._finish(success=payload == 0)
+
+    def _finish(self, *, success: bool) -> None:
+        self._installing = False
+        self._proc = None
+        if not success:
+            self._append("\nInstall failed. See output above.\n")
+            self._reset_buttons()
+            return
+        self._append("\nInstall complete.\n")
+        self._timer.stop()
+        self._closed = True
+        self.accept()
+        # After accept(), so the re-entered action doesn't run behind a dialog
+        # that is on its way out. Safe to call inline: the gate opens this with
+        # open(), so there is no nested event loop to re-enter.
+        if self._on_success is not None:
+            self._on_success()
+
+    def cancel(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        proc = self._proc
+        was_installing = self._installing
+        if was_installing and proc is not None and proc.poll() is None:
+            self._append("\nCancelled.\n")
+            self._terminate(proc)
+        self._installing = False
+        self._timer.stop()
+        # A cancel *during* an install is a cancel of the install, not of the
+        # action that asked for it, so the caller isn't re-entered.
+        if self._on_cancel is not None and not was_installing:
+            self._on_cancel()
+        super().reject()
+
+    def reject(self) -> None:
+        """Esc and the window's close button both land here."""
+        self.cancel()
+
+    @staticmethod
+    def _terminate(proc: subprocess.Popen[str]) -> None:
+        try:
+            proc.terminate()
+        except Exception:
+            return
+
+        def _escalate() -> None:
+            try:
+                proc.wait(timeout=TERMINATE_GRACE_S)
+            except subprocess.TimeoutExpired:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
             except Exception:
                 pass
-        if self._on_cancel is not None and not self._installing:
-            self._on_cancel()
-        try:
-            self.destroy()
-        except tk.TclError:
-            pass
+
+        threading.Thread(target=_escalate, daemon=True).start()
+
+    # ----- widget helpers -----------------------------------------------------
+
+    def _append(self, text: str) -> None:
+        self.console.appendPlainText(text.rstrip("\n"))
+        bar = self.console.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
+    def _set_buttons_enabled(self, enabled: bool) -> None:
+        self.cpu_button.setEnabled(enabled)
+        self.gpu_button.setEnabled(enabled)
+
+    def _reset_buttons(self) -> None:
+        self.cpu_button.setText("CPU only" if self.gpu is not None else "Install PyTorch")
+        self.gpu_button.setText("Install with GPU support")
+        self._set_buttons_enabled(self.gpu_known)

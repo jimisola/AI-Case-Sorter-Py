@@ -15,10 +15,11 @@ serve) and imports nothing beyond the standard library.
 
 What it does, in order:
   1. On Linux, offer to install libGL/glib via the system package manager
-     if the app's dependencies need them and they're missing. uv's
-     provisioned Python bundles Tcl/Tk (verified empirically while building
-     this), but graphics libraries like libGL aren't part of a Python
-     build -- they're system X11/GPU libraries opencv dlopens at runtime.
+     if the app's dependencies need them and they're missing, and the same
+     for libxcb-cursor when there is a display. Graphics libraries like
+     libGL aren't part of a Python build -- they're system X11/GPU
+     libraries opencv dlopens at runtime, and Qt's xcb platform plugin
+     loads the cursor one.
   2. Ensure uv is available, installing it via the official installer
      (pinned to UV_VERSION, not "latest") into a project-local .uv/ if it
      isn't already on PATH. The installer itself verifies a sha256 baked in
@@ -51,8 +52,8 @@ What it does, in order:
      installed into the venv (step 4), so there is otherwise nothing for it
      to resolve. Doing it this way keeps sys.path surgery out of the
      application entirely: `-m` also leaves `src/sorter` itself off the
-     path, where subpackages like `ui` and `data` would shadow same-named
-     third-party ones.
+     path, where subpackages like `data` and `update` would shadow
+     same-named third-party ones.
 """
 
 from __future__ import annotations
@@ -67,10 +68,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"
 
-# Bump deliberately, not automatically -- re-verify tkinter/libGL behavior
-# (see the module docstring) after bumping, the same way this version was
-# chosen: by actually running `uv python install` and importing tkinter/cv2,
-# not by assuming.
+# Bump deliberately, not automatically -- re-verify the libGL behavior (see
+# the module docstring) after bumping, the same way this version was chosen:
+# by actually running `uv python install` and importing cv2, not by assuming.
 UV_VERSION = "0.12.1"
 UV_INSTALL_DIR = ROOT / ".uv" / "bin"
 
@@ -246,9 +246,9 @@ _PKG_INSTALL = {
     "pacman": ["sudo", "pacman", "-S", "--noconfirm"],
 }
 _PKG_NAMES = {
-    "apt": {"gl": "libgl1", "glib": "libglib2.0-0"},
-    "dnf": {"gl": "mesa-libGL", "glib": "glib2"},
-    "pacman": {"gl": "libglvnd", "glib": "glib2"},
+    "apt": {"gl": "libgl1", "glib": "libglib2.0-0", "xcb-cursor": "libxcb-cursor0"},
+    "dnf": {"gl": "mesa-libGL", "glib": "glib2", "xcb-cursor": "xcb-util-cursor"},
+    "pacman": {"gl": "libglvnd", "glib": "glib2", "xcb-cursor": "xcb-util-cursor"},
 }
 
 
@@ -278,10 +278,10 @@ def _try_install_system_pkg(feature: str, auto_install: bool) -> bool:
 
 
 def ensure_linux_runtime_libs(uv: str, auto_install: bool) -> None:
-    """opencv dlopens libGL/glib at runtime. uv's Python bundles Tcl/Tk, but
-    not these -- they're system X11/graphics libraries, not part of a Python
-    build. Probed the same way start.sh did: try the import for real, in the
-    app's actual environment, and read the failure instead of guessing.
+    """opencv dlopens libGL/glib at runtime -- system X11/graphics libraries,
+    not part of a Python build. Probed the same way start.sh did: try the
+    import for real, in the app's actual environment, and read the failure
+    instead of guessing.
 
     The probe loops because the import reports only the *first* library it
     fails to find: on a minimal container or a fresh WSL image both libGL and
@@ -331,6 +331,34 @@ def ensure_linux_runtime_libs(uv: str, auto_install: bool) -> None:
 
     # Every library we know about has been installed and it still won't import.
     raise SystemExit("[bootstrap] OpenCV still fails to import after installing its system libraries.")
+
+
+def ensure_qt_platform_libs(auto_install: bool) -> None:
+    """Qt's xcb platform plugin needs libxcb-cursor, which no wheel carries.
+
+    Unlike the opencv libraries above this never blocks a launch: the app asks
+    for `xcb;wayland` (sorter/ui/app.py), so a missing xcb-cursor costs the
+    Wayland fallback's limitation -- a floated panel can't be moved or resized
+    -- rather than a start-up failure. Offer the install, then continue either
+    way.
+
+    Probed by looking the library up rather than by starting Qt: loading the
+    plugin for real needs a display *and* PySide6, and this runs before the
+    sync that installs it. Skipped entirely with no display, where the
+    offscreen platform is what runs and needs none of this.
+    """
+    if not sys.platform.startswith("linux"):
+        return
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return
+
+    import ctypes.util
+
+    if ctypes.util.find_library("xcb-cursor"):
+        return
+    log("Qt's xcb platform plugin needs libxcb-cursor, which isn't installed.")
+    if not _try_install_system_pkg("xcb-cursor", auto_install):
+        warn("Continuing on the Wayland fallback -- floating panels won't be movable or resizable.")
 
 
 # ---------------------------------------------------------------------------
@@ -525,6 +553,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(message) from exc
 
     ensure_linux_runtime_libs(uv, auto_install)
+    ensure_qt_platform_libs(auto_install)
 
     # Everything this file is responsible for is done at this point; from
     # here on the process is just the app. Worth saying out loud on a first

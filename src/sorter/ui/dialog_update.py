@@ -1,217 +1,337 @@
-"""Update dialog — review, download, restart to install.
+"""Software update — review, download, restart.
 
-Three states, in order:
+States, in order:
 
-    available   → version summary + release notes, "Download & Install"
+    checking    → an explicit check is in flight (Help → "Check for updates…")
+    available   → version summary + release notes, "Download & install"
     downloading → progress bar, cancellable
-    ready       → "Restart to update"
+    ready       → "Restart now"
 
-The dialog never writes to the app folder. Downloading only *stages* the
-update under the data root; the launcher applies it on the next start (see
-``sorter/update/apply_update.py``). "Restart Now" re-execs the launcher script and
-closes the app — which is what makes the staged update take effect.
+The dialog never writes to the app folder. Downloading only *stages* the update
+under the data root; the launcher applies it on the next start (CLAUDE.md §7).
+"Restart now" re-execs the launcher and closes the app, which is what makes a
+staged update take effect. Opening with an update already staged jumps straight
+to ``ready``, so a user who picked "Later" can come back and restart.
 
-Opening the dialog when an update is already staged jumps straight to
-``ready``, so a user who picked "Later" can come back and restart.
+Updates live under **Help → "Check for updates…"**, not in Settings (JL), and
+two things follow from that:
 
-Version picker
----------------
-The dialog opens showing only the latest stable release — exactly what it
-always showed — so a user who never touches the picker sees today's
-behaviour unchanged. Nothing is fetched over the network beyond the single
-check ``MainWindow`` already made before opening the dialog.
+* ``check_on_open=True`` lets the menu action open the dialog and run the check
+  *inside* it, so the user gets a window immediately instead of a status-bar
+  message. Passing an ``info=`` the shell already has (from the silent startup
+  check) skips the check entirely.
+* A check that fails is shown here rather than in the status bar; the dialog is
+  the only surface the menu action opens.
 
-Clicking "Choose a different version…" is what triggers the extra request:
-``updater.list_releases()`` runs on a worker thread and the picker (a
-combobox of every published, non-prerelease release plus a "Show
-prereleases" opt-in) appears once it returns. Picking an entry there changes
-what "Download & Install" targets — including an older release than what's
-currently offered — and the detail text says so explicitly whenever the
-selection isn't the newest one available.
+Threading follows CLAUDE.md §8: a worker only ever puts a message on a
+``queue.Queue`` and a main-thread ``QTimer`` drains it into the widgets. Two
+independent queue/timer pairs, because a release-list load and a download can
+be in flight at once and one queue would force the consumer to disentangle them
+by payload shape. The initial check rides the metadata pair (it can't overlap a
+picker load: both go through ``_loading_meta``).
+
+Release notes are Markdown, rendered by ``QTextBrowser.setMarkdown``.
+``linkify_notes`` supplies the two things GitHub does that CommonMark doesn't —
+``@user`` and ``#123`` — plus the size caps, and links open through a scheme
+check rather than ``setOpenExternalLinks``: a release body is
+attacker-influenced in principle (``CASESORTER_UPDATE_REPO`` points wherever it
+points).
 """
 
 from __future__ import annotations
 
 import queue
+import re
 import subprocess
 import sys
 import threading
-import tkinter as tk
-from tkinter import ttk
-from typing import Literal
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any, Literal
+from urllib.parse import quote
+
+from PySide6.QtCore import QTimer, QUrl
+from PySide6.QtGui import QDesktopServices, QFont
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QProgressBar,
+    QPushButton,
+    QTextBrowser,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..update import updater
 from ..update.updater import PendingUpdate, UpdateError, UpdateInfo
-from .markdown_render import render_release_notes
-from .theme import PALETTE, get_fonts
+from . import formatting
 
-# Tagged union for the worker->main-thread queue below: the "kind" string
-# picks which payload shape goes with it, so _poll_events can narrow by
-# literal instead of casting.
+DRAIN_MS = 50
+
+TITLE_CHECKING = "Checking for updates…"
+TITLE_CHECK_FAILED = "Couldn't check for updates"
+TITLE_AVAILABLE = "Update available"
+TITLE_REINSTALL = "Reinstall this version"
+TITLE_UP_TO_DATE = "You're up to date"
+TITLE_PENDING = "Update ready to install"
+
+PICKER_LABEL = "Choose a different version…"
+PICKER_LOADING = "Loading releases…"
+PRERELEASE_LABEL = "Show prereleases"
+AUTO_CHECK_LABEL = "Check for updates on startup"
+
+PRIMARY_DOWNLOAD = "Download & install"
+PRIMARY_DOWNLOADING = "Downloading…"
+PRIMARY_RESTART = "Restart now"
+PRIMARY_RETRY = "Try again"
+SECONDARY_LATER = "Later"
+SECONDARY_CLOSE = "Close"
+SECONDARY_CANCEL = "Cancel"
+
+UP_TO_DATE_DETAIL = "No newer release is available. Choose a different version below to install one anyway."
+PENDING_DETAIL = (
+    "The update has been downloaded. It installs the next time the app starts — "
+    "restart now, or keep working and it will be applied on your next launch."
+)
+PENDING_NOTES = (
+    "Nothing is changed until you restart.\n\n"
+    "Your models, training images, and settings are stored separately from the "
+    "app and are not affected by an update."
+)
+NO_NOTES = "No release notes were provided."
+NO_RELEASES = "No published releases were found."
+NO_LAUNCHER_DETAIL = "Close the app and start it again to finish installing the update."
+
+# Tagged unions for the worker->main-thread queues: the "kind" string picks
+# which payload shape goes with it, so a drain can narrow by literal.
 _DownloadEvent = (
     tuple[Literal["progress"], tuple[int, int | None]]
     | tuple[Literal["done"], PendingUpdate]
     | tuple[Literal["error"], str]
 )
+_MetaEvent = (
+    tuple[Literal["releases"], list[UpdateInfo]]
+    | tuple[Literal["checked"], UpdateInfo | None]
+    | tuple[Literal["error"], str]
+)
 
-# Same shape, for the (separate) worker that lists releases for the picker.
-# Kept as its own queue/type rather than folding into _DownloadEvent: the two
-# workers can be in flight at once in principle (picker load while a stale
-# download error is still displayed), and a shared queue would need the
-# consumer to disentangle them by payload shape instead of by which queue it
-# came from.
-_ReleasesEvent = tuple[Literal["releases"], list[UpdateInfo]] | tuple[Literal["error"], str]
+# A real release body is a few KB; an enormous one must degrade to "truncated"
+# rather than wedge the UI laying out megabytes of text.
+MAX_SOURCE_CHARS = 100_000
+MAX_LINES = 4_000
+TRUNCATED_NOTE = "\n\n*[Release notes truncated]*"
+
+# Inline tokens, first match wins. Links and code spans are matched only so the
+# rewrites below skip over them; every branch is linear in the input.
+_INLINE_RE = re.compile(
+    r"(?P<link>\[[^\]\n]*\]\([^\s()]*\))"
+    r"|(?P<code>`[^`\n]+`)"
+    r"|(?P<user>(?<![\w/])@(?P<user_name>[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?(?:\[bot])?))"
+    r"|(?P<pr>(?<![\w#])#(?P<pr_num>\d+))"
+)
 
 
-class UpdateDialog(tk.Toplevel):
+def _user_url(name: str) -> str:
+    # Bot accounts (`renovate[bot]`) have no normal profile — theirs is /apps/<name>.
+    if name.endswith("[bot]"):
+        return f"https://github.com/apps/{quote(name[: -len('[bot]')])}"
+    return f"https://github.com/{quote(name)}"
+
+
+def _pr_url(repo: str, number: str) -> str:
+    # GitHub redirects /issues/<n> to /pull/<n> when it is one, so #N needn't be resolved.
+    return f"https://github.com/{repo}/issues/{number}"
+
+
+def linkify_notes(source: str, repo: str) -> str:
+    """Markdown in, Markdown out: ``@user`` and ``#123`` become links, size capped.
+
+    Everything else is left exactly as written — ``setMarkdown`` handles the
+    headings, bullets, bold and code spans git-cliff emits. Never raises; the
+    caller shows the source verbatim if it somehow does.
+    """
+    truncated = False
+    if len(source) > MAX_SOURCE_CHARS:
+        source = source[:MAX_SOURCE_CHARS]
+        truncated = True
+    lines = source.splitlines()
+    if len(lines) > MAX_LINES:
+        lines = lines[:MAX_LINES]
+        truncated = True
+    source = "\n".join(lines)
+
+    def _replace(match: re.Match[str]) -> str:
+        if match.lastgroup is None:
+            return match.group(0)
+        name = match.group("user_name")
+        if name is not None:
+            # Escape the brackets a bot suffix carries, or the label ends the link early.
+            label = f"@{name}".replace("[", r"\[").replace("]", r"\]")
+            return f"[{label}]({_user_url(name)})"
+        number = match.group("pr_num")
+        if number is not None:
+            return f"[#{number}]({_pr_url(repo, number)})"
+        return match.group(0)  # a link or code span: left alone
+
+    out = _INLINE_RE.sub(_replace, source)
+    return out + TRUNCATED_NOTE if truncated else out
+
+
+def spawn_launcher(launcher: Path) -> None:
+    """Start the launcher script detached, so it survives this process exiting."""
+    root = launcher.parent
+    if sys.platform == "win32":
+        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        subprocess.Popen([str(launcher)], cwd=str(root), close_fds=True, creationflags=flags, shell=True)
+    else:
+        subprocess.Popen(["/bin/bash", str(launcher)], cwd=str(root), start_new_session=True, close_fds=True)
+
+
+class UpdateDialog(QDialog):
+    """Non-blocking modal: opened with ``open()``, never ``exec()``.
+
+    ``check_now`` / ``list_releases`` / ``stage_update`` / ``launcher_path`` /
+    ``spawn_launcher`` are instance attributes on purpose — they are the test
+    seams, and replacing ``stage_update`` with the real one bound to a fake
+    ``requests`` session exercises the whole staging path offline.
+    """
+
     def __init__(
         self,
-        parent: tk.Misc,
+        parent: QWidget | None = None,
         *,
-        info: UpdateInfo | None,
-        app=None,
+        info: UpdateInfo | None = None,
+        app: Any = None,
         pending: PendingUpdate | None = None,
+        check_on_open: bool = False,
     ) -> None:
         super().__init__(parent)
-        self.title("Software Update")
-        # wm_transient's stub wants a Wm (Tk/Toplevel), not the broader
-        # Misc `parent` type; winfo_toplevel() resolves to the actual
-        # top-level window, which is what Tk already does internally.
-        self.transient(parent.winfo_toplevel())
-        self.resizable(True, True)
-        self.geometry("620x560")
-        self.minsize(520, 440)
-        self.configure(bg=PALETTE["bg_surface"])
-        self.protocol("WM_DELETE_WINDOW", self._close)
+        self.setWindowTitle("Software Update")
+        self.setMinimumSize(520, 440)
+        self.resize(640, 580)
 
         self._info = info
-        # What "Download & Install" actually targets. Defaults to the plain
-        # latest-stable check the caller already made; picking a release in
-        # the picker replaces it, including with something older than
-        # `_info` — that's the whole point of letting the user choose.
+        # What "Download & install" actually targets. Defaults to whatever check
+        # the caller already made; picking in the picker replaces it, including
+        # with something older — that is the point of letting the user choose.
         self._selected = info
         self._app = app
         self._pending = pending if pending is not None else updater.pending_update()
         self._cancelled = False
         self._downloading = False
-        self._events: queue.Queue[_DownloadEvent] = queue.Queue()
-        self._poll_id: str | None = None
-
+        self._loading_meta = False
+        self._checking = False
+        self._check_error = ""
         self._releases: list[UpdateInfo] = []
-        self._loading_releases = False
-        self._releases_events: queue.Queue[_ReleasesEvent] = queue.Queue()
-        self._releases_poll_id: str | None = None
 
-        # Buttons first with side=BOTTOM so the resizable notes area above
-        # can't squeeze them off-screen (same ordering trick as the PyTorch
-        # install dialog).
-        self._btns = ttk.Frame(self, padding=(12, 0, 12, 12))
-        self._btns.pack(side=tk.BOTTOM, fill=tk.X)
+        self.check_now: Callable[[], UpdateInfo | None] = updater.check_for_update
+        self.list_releases: Callable[..., list[UpdateInfo]] = updater.list_releases
+        self.stage_update: Callable[..., PendingUpdate] = updater.stage_update
+        self.launcher_path: Callable[[], Path | None] = updater.launcher_path
+        self.spawn_launcher: Callable[[Path], None] = spawn_launcher
 
-        wrap = ttk.Frame(self, padding=12)
-        wrap.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        self._build_header(wrap)
-        self._build_picker(wrap)
-        self._build_notes(wrap)
-        self._build_progress(wrap)
-        self._build_buttons()
+        self._events: queue.Queue[_DownloadEvent] = queue.Queue()
+        self._meta_events: queue.Queue[_MetaEvent] = queue.Queue()
+
+        self._build_ui()
+
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._drain)
+        self._meta_timer = QTimer(self)
+        self._meta_timer.timeout.connect(self._drain_meta)
+
         self._render()
+        if check_on_open and self._pending is None and self._info is None:
+            self.start_check()
 
     # ----- UI build -----------------------------------------------------------
 
-    def _build_header(self, parent: tk.Misc) -> None:
-        self._title_var = tk.StringVar()
-        ttk.Label(parent, textvariable=self._title_var, style="Header.TLabel").pack(anchor="w")
-        self._version_var = tk.StringVar()
-        ttk.Label(parent, textvariable=self._version_var, style="Accent.TLabel").pack(anchor="w", pady=(4, 0))
-        self._detail_var = tk.StringVar()
-        ttk.Label(parent, textvariable=self._detail_var, style="Muted.TLabel", wraplength=560, justify=tk.LEFT).pack(
-            anchor="w",
-            pady=(6, 8),
-            fill=tk.X,
-        )
+    def _build_ui(self) -> None:
+        column = QVBoxLayout(self)
 
-    def _build_picker(self, parent: tk.Misc) -> None:
-        # Collapsed to a single link-like button until the user asks for it —
-        # nothing here fires a request on its own.
-        self._picker_link_row = ttk.Frame(parent)
-        self._picker_link_row.pack(anchor="w", pady=(0, 8))
-        self._picker_button = ttk.Button(
-            self._picker_link_row, text="Choose a different version…", command=self._open_picker
-        )
-        self._picker_button.pack(side=tk.LEFT)
+        self.title_label = QLabel(self)
+        self.title_label.setObjectName("updateTitle")
+        title_font = QFont(self.title_label.font())
+        title_font.setBold(True)
+        self.title_label.setFont(title_font)
+        self.title_label.setWordWrap(True)
+        column.addWidget(self.title_label)
 
-        self._combo_row = ttk.Frame(parent)
-        # Not packed yet — _show_picker() reveals it once releases load.
-        ttk.Label(self._combo_row, text="Version:").pack(side=tk.LEFT)
-        self._version_combo_var = tk.StringVar()
-        self._version_combo = ttk.Combobox(
-            self._combo_row, textvariable=self._version_combo_var, state="readonly", width=42
-        )
-        self._version_combo.pack(side=tk.LEFT, padx=(6, 12))
-        self._version_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_pick_version())
-        self._show_prereleases_var = tk.BooleanVar(value=False)
-        self._prerelease_check = ttk.Checkbutton(
-            self._combo_row,
-            text="Show prereleases",
-            variable=self._show_prereleases_var,
-            command=self._on_toggle_prereleases,
-        )
-        self._prerelease_check.pack(side=tk.LEFT)
+        self.version_label = QLabel(self)
+        self.version_label.setObjectName("updateVersion")
+        column.addWidget(self.version_label)
 
-    def _build_notes(self, parent: tk.Misc) -> None:
-        self._notes_wrap = ttk.Frame(parent, style="Card.TFrame", padding=4)
-        self._notes_wrap.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        self._notes = tk.Text(
-            self._notes_wrap,
-            height=10,
-            wrap=tk.WORD,
-            state=tk.DISABLED,
-            bg=PALETTE["bg_input"],
-            fg=PALETTE["text"],
-            insertbackground=PALETTE["accent"],
-            highlightthickness=0,
-            borderwidth=0,
-            padx=8,
-            pady=6,
-        )
-        self._notes.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        ttk.Scrollbar(self._notes_wrap, orient=tk.VERTICAL, command=self._notes.yview).pack(side=tk.RIGHT, fill=tk.Y)
-        # Font choice doesn't change with the theme (it's a host-availability
-        # pick, not a palette value), so this is computed once per dialog and
-        # reused by every `_set_notes` call rather than re-probed each time.
-        self._fonts = get_fonts(self)
+        self.detail_label = QLabel(self)
+        self.detail_label.setObjectName("mutedLabel")
+        self.detail_label.setWordWrap(True)
+        column.addWidget(self.detail_label)
 
-    def _build_progress(self, parent: tk.Misc) -> None:
-        self._progress_row = ttk.Frame(parent)
-        self._progress = ttk.Progressbar(self._progress_row, mode="determinate", maximum=100)
-        self._progress.pack(side=tk.TOP, fill=tk.X)
-        self._progress_var = tk.StringVar(value="")
-        ttk.Label(self._progress_row, textvariable=self._progress_var, style="Muted.TLabel").pack(
-            anchor="w", pady=(4, 0)
-        )
+        # Collapsed to one button until the user asks: nothing here fires a
+        # request on its own.
+        picker_row = QHBoxLayout()
+        self.picker_button = QPushButton(PICKER_LABEL, self)
+        self.picker_button.clicked.connect(self.open_picker)
+        picker_row.addWidget(self.picker_button)
+        picker_row.addStretch(1)
+        column.addLayout(picker_row)
 
-    def _build_buttons(self) -> None:
-        self._secondary = ttk.Button(self._btns, text="Later", command=self._close)
-        self._secondary.pack(side=tk.RIGHT)
-        # Blue "update" hue: refreshing something already installed.
-        self._primary = ttk.Button(
-            self._btns, text="Download & Install", style="Update.TButton", command=self._on_primary
-        )
-        self._primary.pack(side=tk.RIGHT, padx=(0, 8))
+        self.combo_row = QWidget(self)
+        combo_layout = QHBoxLayout(self.combo_row)
+        combo_layout.setContentsMargins(0, 0, 0, 0)
+        combo_layout.addWidget(QLabel("Version:", self.combo_row))
+        self.version_combo = QComboBox(self.combo_row)
+        self.version_combo.setMinimumWidth(260)
+        self.version_combo.currentIndexChanged.connect(self._on_pick_version)
+        combo_layout.addWidget(self.version_combo)
+        self.prerelease_check = QCheckBox(PRERELEASE_LABEL, self.combo_row)
+        self.prerelease_check.toggled.connect(self._on_toggle_prereleases)
+        combo_layout.addWidget(self.prerelease_check)
+        combo_layout.addStretch(1)
+        self.combo_row.setVisible(False)
+        column.addWidget(self.combo_row)
 
-        self._auto_var = tk.BooleanVar(value=self._read_auto_check())
-        self._auto_check = ttk.Checkbutton(
-            self._btns,
-            text="Check for updates on startup",
-            variable=self._auto_var,
-            command=self._on_toggle_auto,
-        )
-        self._auto_check.pack(side=tk.LEFT)
+        self.notes = QTextBrowser(self)
+        self.notes.setObjectName("releaseNotes")
+        # Links are opened by hand so the scheme can be checked first.
+        self.notes.setOpenLinks(False)
+        self.notes.setOpenExternalLinks(False)
+        self.notes.anchorClicked.connect(self._open_link)
+        column.addWidget(self.notes, 1)
+
+        self.progress = QProgressBar(self)
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setVisible(False)
+        column.addWidget(self.progress)
+        self.progress_label = QLabel(self)
+        self.progress_label.setObjectName("mutedLabel")
+        self.progress_label.setVisible(False)
+        column.addWidget(self.progress_label)
+
+        button_row = QHBoxLayout()
+        self.auto_check = QCheckBox(AUTO_CHECK_LABEL, self)
+        self.auto_check.setChecked(self._read_auto_check())
+        self.auto_check.toggled.connect(self._on_toggle_auto)
+        button_row.addWidget(self.auto_check)
+        button_row.addStretch(1)
+        # Blue "update" hue per theme.py's colour rules: refreshing something
+        # already installed.
+        self.primary_button = QPushButton(PRIMARY_DOWNLOAD, self)
+        self.primary_button.setObjectName("update")
+        self.primary_button.setDefault(True)
+        self.primary_button.clicked.connect(self._on_primary)
+        button_row.addWidget(self.primary_button)
+        self.secondary_button = QPushButton(SECONDARY_LATER, self)
+        self.secondary_button.clicked.connect(self._on_secondary)
+        button_row.addWidget(self.secondary_button)
+        column.addLayout(button_row)
 
     # ----- settings -----------------------------------------------------------
 
-    def _settings(self):
+    def _settings(self) -> Any:
         db = getattr(self._app, "db", None)
         if db is None:
             return None
@@ -223,111 +343,165 @@ class UpdateDialog(tk.Toplevel):
         repo = self._settings()
         if repo is None:
             return True
-        return bool(repo.get(updater.SETTING_CHECK_ON_STARTUP, True))
+        try:
+            return bool(repo.get(updater.SETTING_CHECK_ON_STARTUP, True))
+        except Exception:
+            return True
 
-    def _on_toggle_auto(self) -> None:
+    def _on_toggle_auto(self, checked: bool) -> None:
         repo = self._settings()
         if repo is None:
             return
         try:
-            repo.set(updater.SETTING_CHECK_ON_STARTUP, bool(self._auto_var.get()))
+            repo.set(updater.SETTING_CHECK_ON_STARTUP, bool(checked))
         except Exception:
             pass
 
-    # ----- version picker -------------------------------------------------------
+    # ----- explicit check -------------------------------------------------------
 
-    def _release_label(self, info: UpdateInfo) -> str:
-        date = info.published_at.split("T", 1)[0] if info.published_at else ""
-        suffix = " (current)" if info.version == updater.current_version() else ""
-        return f"{info.tag}  {date}{suffix}".strip()
-
-    def _open_picker(self) -> None:
-        if self._loading_releases or self._pending is not None:
+    def start_check(self) -> None:
+        """Run the update check from inside the dialog (Help → Check for updates…)."""
+        if self._loading_meta or self._pending is not None:
             return
-        self._loading_releases = True
-        self._picker_button.config(state=tk.DISABLED, text="Loading releases…")
-        self._releases_events = queue.Queue()
-        include_prereleases = self._show_prereleases_var.get()
+        self._loading_meta = True
+        self._checking = True
+        self._check_error = ""
+        self.picker_button.setEnabled(False)
+        self._render()
 
         def _work() -> None:
             try:
-                releases = updater.list_releases(include_prereleases=include_prereleases)
+                found = self.check_now()
             except UpdateError as exc:
-                self._releases_events.put(("error", str(exc)))
+                self._meta_events.put(("error", str(exc)))
             except Exception as exc:
-                self._releases_events.put(("error", f"Unexpected error: {exc}"))
+                self._meta_events.put(("error", f"Unexpected error: {exc}"))
             else:
-                self._releases_events.put(("releases", releases))
+                self._meta_events.put(("checked", found))
 
         threading.Thread(target=_work, daemon=True).start()
-        self._poll_releases()
+        self._meta_timer.start(DRAIN_MS)
 
-    def _poll_releases(self) -> None:
-        self._releases_poll_id = None
-        terminal = False
-        try:
-            while True:
-                match self._releases_events.get_nowait():
-                    case ("releases", releases):
-                        self._show_picker(releases)
-                        terminal = True
-                        break
-                    case ("error", message):
-                        self._picker_load_failed(str(message))
-                        terminal = True
-                        break
-        except queue.Empty:
-            pass
-        except tk.TclError:
-            return  # dialog went away mid-drain
+    def _check_done(self, found: UpdateInfo | None) -> None:
+        self._loading_meta = False
+        self._checking = False
+        self.picker_button.setEnabled(True)
+        self._info = found
+        if found is not None:
+            self._selected = found
+        # Let the shell's status-bar affordance learn what this check found.
+        note = getattr(self._app, "note_update_info", None)
+        if callable(note):
+            note(found)
+        self._render()
 
-        if not terminal:
+    def _check_failed(self, message: str) -> None:
+        self._loading_meta = False
+        self._checking = False
+        self._check_error = message
+        self.picker_button.setEnabled(True)
+        self._render()
+
+    # ----- version picker -------------------------------------------------------
+
+    def release_label(self, info: UpdateInfo) -> str:
+        # OS-regional format, not the raw ISO date GitHub returns.
+        date = formatting.format_date(info.published_at) if info.published_at else ""
+        suffix = " (current)" if info.version == updater.current_version() else ""
+        return f"{info.tag}  {date}{suffix}".strip()
+
+    def open_picker(self) -> None:
+        if self._loading_meta or self._pending is not None:
+            return
+        self._loading_meta = True
+        self.picker_button.setEnabled(False)
+        self.picker_button.setText(PICKER_LOADING)
+        include_prereleases = self.prerelease_check.isChecked()
+
+        def _work() -> None:
             try:
-                self._releases_poll_id = self.after(50, self._poll_releases)
-            except tk.TclError:
-                pass
+                releases = self.list_releases(include_prereleases=include_prereleases)
+            except UpdateError as exc:
+                self._meta_events.put(("error", str(exc)))
+            except Exception as exc:
+                self._meta_events.put(("error", f"Unexpected error: {exc}"))
+            else:
+                self._meta_events.put(("releases", releases))
+
+        threading.Thread(target=_work, daemon=True).start()
+        self._meta_timer.start(DRAIN_MS)
+
+    def _drain_meta(self) -> None:
+        """Main thread: the only place the check/picker workers reach a widget."""
+        while True:
+            try:
+                event = self._meta_events.get_nowait()
+            except queue.Empty:
+                return
+            match event:
+                case ("releases", releases):
+                    self._meta_timer.stop()
+                    self._show_picker(releases)
+                    return
+                case ("checked", found):
+                    self._meta_timer.stop()
+                    self._check_done(found)
+                    return
+                case ("error", message):
+                    self._meta_timer.stop()
+                    if self._checking:
+                        self._check_failed(str(message))
+                    else:
+                        self._picker_load_failed(str(message))
+                    return
 
     def _picker_load_failed(self, message: str) -> None:
-        self._loading_releases = False
-        self._picker_button.config(state=tk.NORMAL, text="Choose a different version…")
-        self._detail_var.set(f"Could not load releases: {message}")
+        self._loading_meta = False
+        self.picker_button.setEnabled(True)
+        self.picker_button.setText(PICKER_LABEL)
+        self.detail_label.setText(f"Could not load releases: {message}")
 
     def _show_picker(self, releases: list[UpdateInfo]) -> None:
-        self._loading_releases = False
+        self._loading_meta = False
         self._releases = releases
-        self._picker_button.config(state=tk.NORMAL, text="Choose a different version…")
+        self.picker_button.setEnabled(True)
+        self.picker_button.setText(PICKER_LABEL)
         if not releases:
-            self._detail_var.set("No published releases were found.")
+            self.detail_label.setText(NO_RELEASES)
             return
 
-        self._version_combo["values"] = [self._release_label(r) for r in releases]
+        # Repopulating fires currentIndexChanged for the intermediate states;
+        # only the final index is a user pick.
+        self.version_combo.blockSignals(True)
+        self.version_combo.clear()
+        self.version_combo.addItems([self.release_label(r) for r in releases])
 
-        # Keep the current selection if it's still in the (possibly
-        # re-fetched, e.g. after toggling prereleases) list; otherwise default
-        # to the newest one shown.
+        # Keep the current selection if it survived a re-fetch (e.g. the
+        # prerelease toggle); otherwise default to the newest one shown.
         idx = 0
         if self._selected is not None:
             for i, r in enumerate(releases):
                 if r.tag == self._selected.tag:
                     idx = i
                     break
-        self._version_combo.current(idx)
-        self._combo_row.pack(anchor="w", pady=(0, 8), after=self._picker_link_row)
+        self.version_combo.setCurrentIndex(idx)
+        self.version_combo.blockSignals(False)
+        self.combo_row.setVisible(True)
         self._on_pick_version()
 
     def _on_pick_version(self) -> None:
-        idx = self._version_combo.current()
+        idx = self.version_combo.currentIndex()
         if idx < 0 or idx >= len(self._releases):
             return
         self._selected = self._releases[idx]
+        self._check_error = ""
         self._apply_selected()
 
     def _on_toggle_prereleases(self) -> None:
-        # Re-fetch rather than filter client-side: the "current" combobox
-        # selection may itself be a prerelease that was never in a
-        # stable-only list, so a stale cached list can't answer this toggle
-        # on its own.
-        self._open_picker()
+        # Re-fetch rather than filter client-side: the current selection may
+        # itself be a prerelease that a stable-only list never carried, so a
+        # cached list can't answer the toggle on its own.
+        self.open_picker()
 
     def _apply_selected(self) -> None:
         info = self._selected
@@ -335,81 +509,100 @@ class UpdateDialog(tk.Toplevel):
             return
         current = updater.current_version()
         newer = updater.is_newer(info.version, current)
-        self._title_var.set("Update available" if newer else "Reinstall this version")
-        self._version_var.set(f"{current}  →  {info.version}")
-        size = f" ({info.size / 1_000_000:.1f} MB)" if info.size else ""
+        self.title_label.setText(TITLE_AVAILABLE if newer else TITLE_REINSTALL)
+        self.version_label.setText(f"{current}  →  {info.version}")
 
         newest = self._releases[0] if self._releases else self._info
         not_newest = ""
         if newest is not None and newest.tag != info.tag:
             not_newest = f" This is not the newest available release ({newest.tag} is newer)."
-
-        self._detail_var.set(
-            f"Release {info.tag}{size} is available. It downloads in the "
-            f"background and installs the next time you start the app.{not_newest}"
-        )
-        self._set_notes(info.notes or "No release notes were provided.")
-        self._progress_row.pack_forget()
-        self._primary.pack(side=tk.RIGHT, padx=(0, 8))
-        self._primary.config(text="Download & Install", state=tk.NORMAL)
-        self._secondary.config(text="Later", command=self._close)
+        self.detail_label.setText(self._available_detail(info) + not_newest)
+        self._set_notes(info.notes or NO_NOTES)
+        self._hide_progress()
+        self.primary_button.setVisible(True)
+        self.primary_button.setText(PRIMARY_DOWNLOAD)
+        self.primary_button.setEnabled(True)
+        self.secondary_button.setText(SECONDARY_LATER)
 
     # ----- rendering ----------------------------------------------------------
 
+    @staticmethod
+    def _available_detail(info: UpdateInfo) -> str:
+        size = f" ({info.size / 1_000_000:.1f} MB)" if info.size else ""
+        return (
+            f"Release {info.tag}{size} is available. It downloads in the "
+            "background and installs the next time you start the app."
+        )
+
     def _set_notes(self, text: str) -> None:
-        # Release bodies are Markdown (git-cliff generates them from
-        # cliff.toml); render the subset this project's own notes actually
-        # use instead of dumping the raw `### heading` / `- bullet` syntax at
-        # the user. See markdown_render.py's module docstring for exactly
-        # which shapes were pinned against real release bodies.
-        render_release_notes(self._notes, text, fonts=self._fonts, repo=updater.update_repo())
+        try:
+            self.notes.setMarkdown(linkify_notes(text, updater.update_repo()))
+        except Exception:
+            self.notes.setPlainText(text)
+
+    def _open_link(self, url: QUrl) -> None:
+        """Open a release-note link — http(s) only; the body is untrusted input."""
+        if url.scheme().lower() in ("http", "https"):
+            QDesktopServices.openUrl(url)
+
+    def _hide_progress(self) -> None:
+        self.progress.setVisible(False)
+        self.progress_label.setVisible(False)
 
     def _render(self) -> None:
         current = updater.current_version()
         if self._pending is not None:
-            self._title_var.set("Update ready to install")
-            self._version_var.set(f"{current}  →  {self._pending.version}")
-            self._detail_var.set(
-                "The update has been downloaded. It installs the next time the "
-                "app starts — restart now, or keep working and it will be "
-                "applied on your next launch."
-            )
-            self._set_notes(
-                "Nothing is changed until you restart.\n\n"
-                "Your models, training images, and settings are stored "
-                "separately from the app and are not affected by an update."
-            )
-            self._picker_link_row.pack_forget()
-            self._combo_row.pack_forget()
-            self._progress_row.pack_forget()
-            self._primary.config(text="Restart Now", state=tk.NORMAL)
-            self._secondary.config(text="Later", command=self._close)
+            self.title_label.setText(TITLE_PENDING)
+            self.version_label.setText(f"{current}  →  {self._pending.version}")
+            self.detail_label.setText(PENDING_DETAIL)
+            self._set_notes(PENDING_NOTES)
+            self.picker_button.setVisible(False)
+            self.combo_row.setVisible(False)
+            self._hide_progress()
+            self.primary_button.setVisible(True)
+            self.primary_button.setText(PRIMARY_RESTART)
+            self.primary_button.setEnabled(True)
+            self.secondary_button.setText(SECONDARY_LATER)
             return
 
-        info = self._info
-        if info is None:
-            self._title_var.set("You're up to date")
-            self._version_var.set(f"Version {current}")
-            self._detail_var.set(
-                "No newer release is available. Choose a different version below to install one anyway."
-            )
+        if self._checking:
+            self.title_label.setText(TITLE_CHECKING)
+            self.version_label.setText(f"Version {current}")
+            self.detail_label.setText("")
             self._set_notes("")
-            self._progress_row.pack_forget()
-            self._primary.pack_forget()
-            self._secondary.config(text="Close", command=self._close)
+            self._hide_progress()
+            self.primary_button.setVisible(False)
+            self.secondary_button.setText(SECONDARY_CLOSE)
             return
 
-        self._title_var.set("Update available")
-        self._version_var.set(f"{current}  →  {info.version}")
-        size = f" ({info.size / 1_000_000:.1f} MB)" if info.size else ""
-        self._detail_var.set(
-            f"Release {info.tag}{size} is available. It downloads in the "
-            "background and installs the next time you start the app."
-        )
-        self._set_notes(info.notes or "No release notes were provided.")
-        self._progress_row.pack_forget()
-        self._primary.config(text="Download & Install", state=tk.NORMAL)
-        self._secondary.config(text="Later", command=self._close)
+        if self._check_error:
+            self.title_label.setText(TITLE_CHECK_FAILED)
+            self.version_label.setText(f"Version {current}")
+            self.detail_label.setText(self._check_error)
+            self._set_notes("")
+            self._hide_progress()
+            self.primary_button.setVisible(False)
+            self.secondary_button.setText(SECONDARY_CLOSE)
+            return
+
+        info = self._selected or self._info
+        if info is None:
+            self.title_label.setText(TITLE_UP_TO_DATE)
+            self.version_label.setText(f"Version {current}")
+            self.detail_label.setText(UP_TO_DATE_DETAIL)
+            self._set_notes("")
+            self._hide_progress()
+            # No download target, but the picker below still reaches every
+            # published release — this is the "install one anyway" route.
+            self.primary_button.setVisible(False)
+            self.secondary_button.setText(SECONDARY_CLOSE)
+            return
+
+        # One renderer for both "what the check found" and "what the picker
+        # chose": with no picker interaction the two are the same release, and
+        # the "not the newest" line then resolves to nothing.
+        self._selected = info
+        self._apply_selected()
 
     # ----- actions ------------------------------------------------------------
 
@@ -417,33 +610,36 @@ class UpdateDialog(tk.Toplevel):
         if self._pending is not None:
             self._restart()
         else:
-            self._start_download()
+            self.start_download()
 
-    def _start_download(self) -> None:
+    def _on_secondary(self) -> None:
+        if self._downloading:
+            self.cancel_download()
+            return
+        self.close()
+
+    def start_download(self) -> None:
         target = self._selected or self._info
         if self._downloading or target is None:
             return
         self._downloading = True
         self._cancelled = False
-        self._primary.config(state=tk.DISABLED, text="Downloading…")
-        self._secondary.config(text="Cancel", command=self._cancel_download)
+        self.primary_button.setEnabled(False)
+        self.primary_button.setText(PRIMARY_DOWNLOADING)
+        self.secondary_button.setText(SECONDARY_CANCEL)
+        self.secondary_button.setEnabled(True)
         self._set_picker_enabled(False)
-        self._progress_row.pack(side=tk.TOP, fill=tk.X, pady=(10, 0))
-        self._progress.config(value=0)
-        self._progress_var.set("Starting download…")
+        self.progress.setValue(0)
+        self.progress.setVisible(True)
+        self.progress_label.setText("Starting download…")
+        self.progress_label.setVisible(True)
 
         info = target
-
-        # Tkinter is not thread-safe and `after()` is not an exception to
-        # that — calling it from a worker thread registers a Tcl command off
-        # the main thread. So the worker only ever touches this queue, and a
-        # main-thread poller below turns its messages into widget updates.
-        # Same shape as the app-wide EventBus, scoped to one dialog.
-        self._events: queue.Queue[_DownloadEvent] = queue.Queue()
+        self._events = queue.Queue()
 
         def _work() -> None:
             try:
-                pending = updater.stage_update(info, progress=self._on_progress)
+                pending = self.stage_update(info, progress=self._on_progress)
             except UpdateError as exc:
                 self._events.put(("error", str(exc)))
             except Exception as exc:
@@ -452,51 +648,31 @@ class UpdateDialog(tk.Toplevel):
                 self._events.put(("done", pending))
 
         threading.Thread(target=_work, daemon=True).start()
-        self._poll_events()
+        self._timer.start(DRAIN_MS)
 
     def _set_picker_enabled(self, enabled: bool) -> None:
-        state = tk.NORMAL if enabled else tk.DISABLED
-        try:
-            self._picker_button.config(state=state)
-        except tk.TclError:
-            pass
-        try:
-            if self._combo_row.winfo_manager():
-                self._version_combo.config(state="readonly" if enabled else tk.DISABLED)
-                self._prerelease_check.config(state=state)
-        except tk.TclError:
-            pass
+        self.picker_button.setEnabled(enabled)
+        self.version_combo.setEnabled(enabled)
+        self.prerelease_check.setEnabled(enabled)
 
-    def _poll_events(self) -> None:
-        """Drain worker messages on the main thread. Rescheduled while active."""
-        self._poll_id = None
-        terminal = False
-        try:
-            while True:
-                # match/case (rather than an if/elif on `kind` with a
-                # separately-unpacked `payload`) is what lets the checker
-                # narrow the payload's type per branch of this tagged union.
-                match self._events.get_nowait():
-                    case ("progress", (done, total)):
-                        self._show_progress(done, total)
-                    case ("done", pending):
-                        self._download_done(pending)
-                        terminal = True
-                        break
-                    case ("error", message):
-                        self._download_failed(str(message))
-                        terminal = True
-                        break
-        except queue.Empty:
-            pass
-        except tk.TclError:
-            return  # dialog went away mid-drain
-
-        if not terminal and self._downloading:
+    def _drain(self) -> None:
+        """Main thread: the only place the download worker reaches a widget."""
+        while True:
             try:
-                self._poll_id = self.after(50, self._poll_events)
-            except tk.TclError:
-                pass
+                event = self._events.get_nowait()
+            except queue.Empty:
+                return
+            match event:
+                case ("progress", (done, total)):
+                    self._show_progress(done, total)
+                case ("done", pending):
+                    self._timer.stop()
+                    self._download_done(pending)
+                    return
+                case ("error", message):
+                    self._timer.stop()
+                    self._download_failed(str(message))
+                    return
 
     def _on_progress(self, done: int, total: int | None) -> None:
         """Called on the download thread — hand off, never touch a widget."""
@@ -507,97 +683,81 @@ class UpdateDialog(tk.Toplevel):
     def _show_progress(self, done: int, total: int | None) -> None:
         mb = done / 1_000_000
         if total:
-            pct = min(100.0, done * 100.0 / total)
-            self._progress.config(mode="determinate", value=pct)
-            self._progress_var.set(f"{mb:.1f} MB of {total / 1_000_000:.1f} MB")
+            self.progress.setValue(int(min(100.0, done * 100.0 / total)))
+            self.progress_label.setText(f"{mb:.1f} MB of {total / 1_000_000:.1f} MB")
         else:
-            self._progress.config(mode="determinate", value=0)
-            self._progress_var.set(f"{mb:.1f} MB downloaded")
+            self.progress.setValue(0)
+            self.progress_label.setText(f"{mb:.1f} MB downloaded")
 
-    def _cancel_download(self) -> None:
+    def cancel_download(self) -> None:
         self._cancelled = True
-        self._progress_var.set("Cancelling…")
-        self._secondary.config(state=tk.DISABLED)
+        self.progress_label.setText("Cancelling…")
+        self.secondary_button.setEnabled(False)
 
     def _download_failed(self, message: str) -> None:
         self._downloading = False
         self._set_picker_enabled(True)
-        self._progress.config(value=0)
+        self.progress.setValue(0)
+        self.secondary_button.setEnabled(True)
         if self._cancelled:
-            self._progress_row.pack_forget()
-            self._progress_var.set("")
-            self._primary.config(state=tk.NORMAL, text="Download & Install")
-            self._secondary.config(text="Later", state=tk.NORMAL, command=self._close)
+            self._hide_progress()
+            self.progress_label.setText("")
+            self.primary_button.setEnabled(True)
+            self.primary_button.setText(PRIMARY_DOWNLOAD)
+            self.secondary_button.setText(SECONDARY_LATER)
             return
-        self._progress_var.set(message)
-        self._primary.config(state=tk.NORMAL, text="Try Again")
-        self._secondary.config(text="Close", state=tk.NORMAL, command=self._close)
+        self.progress_label.setText(message)
+        self.primary_button.setEnabled(True)
+        self.primary_button.setText(PRIMARY_RETRY)
+        self.secondary_button.setText(SECONDARY_CLOSE)
 
     def _download_done(self, pending: PendingUpdate) -> None:
         self._downloading = False
         self._pending = pending
-        self._progress_var.set("")
-        self._secondary.config(state=tk.NORMAL)
+        self.progress_label.setText("")
+        self.secondary_button.setEnabled(True)
         self._render()
-        if self._app is not None and hasattr(self._app, "note_pending_update"):
-            self._app.note_pending_update(pending)
+        note = getattr(self._app, "note_pending_update", None)
+        if callable(note):
+            note(pending)
 
     def _restart(self) -> None:
         """Re-exec the launcher, then shut the app down so the swap can happen."""
-        launcher = updater.launcher_path()
+        launcher = self.launcher_path()
         if launcher is None:
-            self._detail_var.set("Close the app and start it again to finish installing the update.")
-            self._primary.config(state=tk.DISABLED)
+            self.detail_label.setText(NO_LAUNCHER_DETAIL)
+            self.primary_button.setEnabled(False)
             return
-
-        root = launcher.parent
         try:
-            if sys.platform == "win32":
-                flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                subprocess.Popen(
-                    [str(launcher)],
-                    cwd=str(root),
-                    close_fds=True,
-                    creationflags=flags,
-                    shell=True,
-                )
-            else:
-                subprocess.Popen(
-                    ["/bin/bash", str(launcher)],
-                    cwd=str(root),
-                    start_new_session=True,
-                    close_fds=True,
-                )
+            self.spawn_launcher(launcher)
         except OSError as exc:
-            self._detail_var.set(
+            self.detail_label.setText(
                 f"Could not relaunch automatically ({exc}). Close the app and "
                 "start it again to finish installing the update."
             )
             return
 
-        self._close()
-        if self._app is not None and hasattr(self._app, "_on_close"):
-            self._app._on_close()
+        self.close()
+        close_app = getattr(self._app, "close", None)
+        if callable(close_app):
+            close_app()
 
-    def _close(self) -> None:
-        # Stop the pollers before the widgets go away. The worker threads are
-        # daemons and their queue writes are harmless once nothing drains them.
+    # ----- lifecycle ----------------------------------------------------------
+
+    def _stop(self) -> None:
+        # Stop the pollers before the widgets go away. The workers are daemons
+        # and their queue writes are harmless once nothing drains them.
         self._cancelled = True
         self._downloading = False
-        self._loading_releases = False
-        if self._poll_id is not None:
-            try:
-                self.after_cancel(self._poll_id)
-            except tk.TclError:
-                pass
-            self._poll_id = None
-        if self._releases_poll_id is not None:
-            try:
-                self.after_cancel(self._releases_poll_id)
-            except tk.TclError:
-                pass
-            self._releases_poll_id = None
-        try:
-            self.destroy()
-        except tk.TclError:
-            pass
+        self._loading_meta = False
+        self._timer.stop()
+        self._meta_timer.stop()
+
+    def closeEvent(self, event: Any) -> None:
+        self._stop()
+        super().closeEvent(event)
+
+    def reject(self) -> None:
+        """Esc and the window's close button both land here."""
+        self._stop()
+        super().reject()

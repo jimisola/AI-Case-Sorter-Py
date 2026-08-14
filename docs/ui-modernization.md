@@ -1,10 +1,13 @@
 # UI modernization — research & decisions
 
 Working document tracking the investigation into replacing or refreshing the
-Tkinter UI. Audience: Seth + contributors. Status: **research plus a built,
-opt-in Qt UI** — the branch carries a full-parity `sorter/qtui/` behind
-`--qt` (see "Current state" below); whether it *replaces* `sorter/ui/` is
-still Seth's call, and nothing here retires the Tk UI.
+Tkinter UI, and the port that came out of it. Audience: Seth + contributors.
+Status: **decided and done** — as of 2026-08-14 the Tk UI is deleted, the Qt
+package has taken the `sorter/ui/` name, and PySide6 is a core dependency
+(see the decision log's last two entries). Everything below the "Current
+state" section is the record of how that was reached, written while the Qt
+package was still called `qtui`; it is deliberately not rewritten to match
+the outcome.
 
 ## Problem
 
@@ -139,7 +142,7 @@ Status: implemented on this branch. Design goals: prove the risky parts
   `SerialBroker`/`EmulatorBroker`, `Config`/`SettingsRepo`.
 - **One source of truth for colors:** the palettes and the custom-theme
   registry live in `qtui/palettes.py` — a copy of `ui/theme.py`'s palette
-  half, byte-compared by `test_qt_drift_pins.py` — rendered as QSS by
+  half, byte-compared by `test_drift_pins.py` — rendered as QSS by
   `qtui/theme.py::build_stylesheet`. (It *imported* `sorter.ui.theme` until
   2026-08-13; `ui/theme.py` imports tkinter at module level, so a
   PySide6-only install couldn't launch. Both UIs still read the same
@@ -403,7 +406,9 @@ backend) and in increments that need look-and-feel rounds. The user-paced
 parts (bench validation against the physical machine) still sit outside
 these hours and set the calendar time regardless.
 
-## What retiring `ui/` would remove (beyond the directory itself)
+## What retiring `ui/` removed (beyond the directory itself)
+
+**Done 2026-08-14** — the list below was the plan, and it is what happened.
 
 Audited 2026-08-12: outside `src/sorter/ui/` and `tests/unit/ui/`, nothing in
 `src/` imports tkinter or `sorter.ui` except the one launch line in
@@ -742,7 +747,7 @@ candidate work item; per-item agent tasks in a future increment.
 | 2026-08-12 | Cost estimate re-baselined from spike 3's measurement: ~8–12 h session time to parity (was 15–25 h; the "dense chunks are slower" assumption measured false). |
 | 2026-08-12 | **Windows validated**: the showcase build runs on a real Windows machine from a plain `uv sync --extra qt` — sidebar, dashboard and all; only runtime noise is OpenCV's DSHOW "no camera" warning. Requirement 2 now confirmed empirically on Linux + Windows. |
 | 2026-08-12 | Spike 2 built and verified (28 offscreen tests, full unit suite green, ruff/ty clean). New gotchas: `QAction.menu()` deletes the menu it returns; dock title-bar buttons aren't themable without icons. Sidebar glyphs stay emoji until real `QIcon`s exist. |
-| 2026-08-13 | **Palettes copied, not imported** (`qtui/palettes.py`, drift-pinned by `test_qt_drift_pins.py`): `ui/theme.py` imports tkinter at module level, so importing it made a PySide6-only install unlaunchable. Custom themes register into the running UI's registry; the shared `ui.custom_themes` row is what still crosses between them. |
+| 2026-08-13 | **Palettes copied, not imported** (`qtui/palettes.py`, drift-pinned by `test_drift_pins.py`): `ui/theme.py` imports tkinter at module level, so importing it made a PySide6-only install unlaunchable. Custom themes register into the running UI's registry; the shared `ui.custom_themes` row is what still crosses between them. |
 | 2026-08-13 | **Sort page grounded on the crop, not the feed** (Seth, the Windows app's layout): the cropped headstamp and the call made on it are the primary panel, the live camera an off-by-default toggle (no frame is fetched or painted while off; the grab thread keeps running). History moved wholly into its panel. |
 | 2026-08-13 | **Vector icons replace the emoji glyphs** — one stroke-only SVG per motif, inked from the live palette at render time (Seth's concept art; Sort/Train carry the machine's own identity). The app/taskbar mark is the one fixed-neutral exception. |
 | 2026-08-13 | **Model-scoped image processing** (Seth): crop and primer settings follow the active model — the model row has carried them since the WinForms port and nothing read them. Mirrored into `config.image_proc`, which stays the live copy the run reads; a pristine model row inherits the global rather than resetting it. LED brightness stays global (it is a board setting). |
@@ -757,3 +762,5 @@ candidate work item; per-item agent tasks in a future increment.
 | 2026-08-14 | **AI Config leaves Settings and becomes an activity page** (JL, live-testing): it was a Settings section that `open_activity` special-cased, so a sidebar click landed the user on *Settings* with the entry unchecked. It is now `qtui/ai_page.py` — a `QStackedWidget` mirroring Train's exactly: the server form when it is the backend, otherwise a full-page explainer naming the model classifying instead plus a jump to Models (the greyed-form-with-a-notice is gone; a form you can't use is noise). `SETTINGS_SECTIONS` no longer lists AI Config, `open_activity` has no special case left, and the guide's AI Config section moved out from under Settings. |
 | 2026-08-14 | **The Models table's "● ACTIVE" marker is inked in the action colour** (JL, live-testing): activity should read by colour, not only by text. An item foreground brush is baked in and no stylesheet reaches it, so `models_page.apply_palette()` joins the serial log and history cards in `_apply_theme`'s hand re-render list. |
 | 2026-08-14 | **Row actions reverted; both tables act from a selection-scoped bar** (JL, after living with the experiment above). Models is Delete … Activate with "● ACTIVE" back as the Active column's marker; Community is Remove plus one state-driven primary whose label and role follow the selected row's `installed_state` and the download queue. Only the trigger surface moved: the queue, the `models/changed` state sync, the Includes column and full column sorting all stayed. Net simplification — no item widgets in either table, so nothing has to be rebuilt after a sort or `_pin_ai_row`. |
+| 2026-08-14 | **The Tk UI is retired.** `src/sorter/ui/` (30 modules) and `tests/unit/ui/` (21) are deleted, `--qt`/`CASESORTER_QT` are gone, and `python -m sorter` launches `qtui` unconditionally. PySide6-Essentials + pyside6-qtads move from the `[qt]` extra into the core `dependencies`; the extra is removed. Why now: JL live-tested the Qt UI to parity and Seth approved, and carrying two UIs was costing a drift-pin test, a duplicated palette module, a second CI job and a per-file ty override, none of which buy anything once one of the two is the only one anyone launches. Consequences worth knowing: ty now really type-checks `sorter/qtui/` (it could not resolve PySide6 while the extra was absent from CI — the tree came out at **zero** new diagnostics), the UI tests fold into the normal matrix on `QT_QPA_PLATFORM=offscreen` with **no Xvfb anywhere**, and every matrix leg now downloads the ~80 MB abi3 PySide6 wheel. The `qtui` package is **not** renamed to `ui` in this step; that lands separately so the rename stays reviewable as pure churn. |
+| 2026-08-14 | **`sorter/qtui/` → `sorter/ui/`, `tests/unit/qtui/` → `tests/unit/ui/`** — a separate commit from the retirement above, so the rename reads as pure churn and the substantive change reads on its own. `git mv` for both, so it records as a rename. Two follow-ons were not mechanical: `tests/unit/ui/conftest.py`'s `no_cover` filter matched a hardcoded `"tests/unit/qtui"` and now derives the directory from `__file__` (a stale literal there puts the whole UI suite back under the tracer that segfaults it, silently); and the debugging skill's advice to "confirm with `--no-cov`" turned out to be wrong — that flag leaves pytest-cov loaded with no session and every marked test dies on `AttributeError: 'NoneType' object has no attribute 'pause'`. `pytest -p no:cov -o addopts=-ra` is the working form. |

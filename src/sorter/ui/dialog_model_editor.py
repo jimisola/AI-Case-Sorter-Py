@@ -1,15 +1,37 @@
-"""Modal dialog for creating or editing a Model.
+"""Create / edit a model.
 
-Minimal field set this round — name, cartridge, model mode, primer-mask
-settings. Advanced training hyperparameters live in a separate dialog
-(``dialog_training_config``).
+Name, cartridge, model type (the ConvNeXt variant) and the two primer-mask
+settings, persisted through ``ModelRepo.create``/``update``. Training
+hyperparameters live in their own dialog (increment 6).
+
+The **Community feedback loop** box is built only for a model that is community-linked — a UID stamped on it, or an install
+marked ``CommunityManaged`` — which by construction means an *existing* model.
+The confidence floor is the publisher's and is shown read-only; the user owns
+the opt-in and the upload mode.
+
+``notify`` is an instance attribute so a test can drive ``save()`` without a
+modal opening.
 """
 
 from __future__ import annotations
 
-import tkinter as tk
 from collections.abc import Callable
-from tkinter import messagebox, ttk
+from typing import Any
+
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QGroupBox,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..data.db import Database
 from ..data.models import (
@@ -22,221 +44,184 @@ from ..data.models import (
 )
 from ..data.repository import CartridgeRepo, ModelRepo
 
-# Upload-mode value (persisted) <-> display label (shown in the combobox).
-_FEEDBACK_MODE_LABELS = {
+# Persisted value <-> label shown in the combo box.
+FEEDBACK_MODE_LABELS = {
     "Instant": "Instant",
-    "OnRunComplete": "On Run Complete",
+    "OnRunComplete": "On run complete",
     "Manual": "Manual",
 }
-_FEEDBACK_MODE_BY_LABEL = {label: value for value, label in _FEEDBACK_MODE_LABELS.items()}
+_FEEDBACK_MODE_BY_LABEL = {label: value for value, label in FEEDBACK_MODE_LABELS.items()}
+
+DEFAULT_PRIMER_SIZE = 135
 
 
-def _is_community_model(model: Model | None) -> bool:
+def is_community_model(model: Model | None) -> bool:
+    """Community-*linked*, which is not the same as foreign (see CLAUDE.md §5).
+
+    Sharing your own model stamps a UID onto your copy, so this is true for
+    models you still own — which is right here: the feedback-loop box is about
+    a model that exists in the community, not about who may train it.
+    """
     return bool(model is not None and (model.community_model_uid or model.model_type == "CommunityManaged"))
 
 
-class ModelEditorDialog(tk.Toplevel):
-    """Returns the saved Model id via the ``on_saved`` callback."""
+class ModelEditorDialog(QDialog):
+    """``saved_id`` holds the model id once ``save()`` succeeds."""
 
     def __init__(
         self,
-        parent: tk.Misc,
         db: Database,
         *,
         existing: Model | None = None,
-        on_saved: Callable[[int], None] | None = None,
+        parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.db = db
         self.existing = existing
-        self.on_saved = on_saved
+        self.saved_id: int | None = None
         self.cartridge_repo = CartridgeRepo(db)
         self.model_repo = ModelRepo(db)
+        # Attribute, not method: a test replaces it so nothing modal opens.
+        self.notify: Callable[[str, str], None] = self._warn
 
-        self.title("Edit Model" if existing else "New Model")
-        # wm_transient's stub wants a Wm (Tk/Toplevel), not the broader
-        # Misc `parent` type; winfo_toplevel() resolves to the actual
-        # top-level window, which is what Tk already does internally.
-        self.transient(parent.winfo_toplevel())
-        self.resizable(False, False)
+        self.setWindowTitle("Edit Model" if existing else "New Model")
+        self.setMinimumWidth(400)
+        column = QVBoxLayout(self)
 
-        frm = ttk.Frame(self, padding=12)
-        frm.pack(fill=tk.BOTH, expand=True)
+        form = QFormLayout()
+        self.name_edit = QLineEdit(existing.name if existing else "", self)
+        form.addRow("Name", self.name_edit)
 
-        row = 0
-        ttk.Label(frm, text="Name:", anchor=tk.W).grid(row=row, column=0, sticky="w", pady=4)
-        self.name_var = tk.StringVar(value=(existing.name if existing else ""))
-        ttk.Entry(frm, textvariable=self.name_var, width=32).grid(row=row, column=1, sticky="ew", pady=4)
-
-        row += 1
-        ttk.Label(frm, text="Cartridge:", anchor=tk.W).grid(row=row, column=0, sticky="w", pady=4)
-        self.cartridge_combo = ttk.Combobox(frm, state="readonly", width=30)
-        self.cartridge_combo.grid(row=row, column=1, sticky="ew", pady=4)
+        self.cartridge_combo = QComboBox(self)
         self._cartridges = self.cartridge_repo.list()
-        self.cartridge_combo["values"] = [c.name for c in self._cartridges]
-        if existing:
-            for i, c in enumerate(self._cartridges):
-                if c.id == existing.cartridge_id:
-                    self.cartridge_combo.current(i)
-                    break
-        elif self._cartridges:
-            self.cartridge_combo.current(0)
+        for cartridge in self._cartridges:
+            self.cartridge_combo.addItem(cartridge.name, cartridge.id)
+        if existing is not None:
+            index = self.cartridge_combo.findData(existing.cartridge_id)
+            if index >= 0:
+                self.cartridge_combo.setCurrentIndex(index)
+        form.addRow("Cartridge", self.cartridge_combo)
 
-        row += 1
-        ttk.Label(frm, text="Model type:", anchor=tk.W).grid(row=row, column=0, sticky="w", pady=4)
-        self.mode_combo = ttk.Combobox(frm, state="readonly", width=30, values=list(SUPPORTED_MODEL_MODES))
-        if existing and existing.model_mode in SUPPORTED_MODEL_MODES:
-            self.mode_combo.set(existing.model_mode)
-        else:
-            self.mode_combo.current(0)  # convnext_tiny
-        self.mode_combo.grid(row=row, column=1, sticky="ew", pady=4)
+        self.mode_combo = QComboBox(self)
+        self.mode_combo.addItems(list(SUPPORTED_MODEL_MODES))
+        if existing is not None and existing.model_mode in SUPPORTED_MODEL_MODES:
+            self.mode_combo.setCurrentText(existing.model_mode)
+        form.addRow("Model type", self.mode_combo)
 
-        row += 1
-        self.hide_primer_var = tk.BooleanVar(value=bool(existing.hide_primer) if existing else True)
-        ttk.Checkbutton(frm, text="Hide primer in cropped image", variable=self.hide_primer_var).grid(
-            row=row,
-            column=0,
-            columnspan=2,
-            sticky="w",
-            pady=4,
+        self.primer_spin = QSpinBox(self)
+        self.primer_spin.setRange(0, 512)
+        self.primer_spin.setValue(int(existing.primer_mask_size) if existing else DEFAULT_PRIMER_SIZE)
+        form.addRow("Primer mask size (px)", self.primer_spin)
+        column.addLayout(form)
+
+        self.hide_primer_check = QCheckBox("Hide primer in cropped image", self)
+        self.hide_primer_check.setChecked(bool(existing.hide_primer) if existing else True)
+        column.addWidget(self.hide_primer_check)
+
+        self.is_community = is_community_model(existing)
+        # `is_community` implies `existing is not None`; the re-check narrows
+        # the type as well, rather than asserting it.
+        if self.is_community and existing is not None:
+            column.addWidget(self._build_feedback_group(existing))
+
+        buttons = QDialogButtonBox(self)
+        save = buttons.addButton("Save", QDialogButtonBox.ButtonRole.AcceptRole)
+        save.setObjectName("action")
+        buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
+        save.clicked.connect(self.save)
+        buttons.rejected.connect(self.reject)
+        column.addWidget(buttons)
+        self.name_edit.returnPressed.connect(self.save)
+
+    # ----- feedback loop ------------------------------------------------------
+
+    def _build_feedback_group(self, model: Model) -> QGroupBox:
+        box = QGroupBox("Community feedback loop", self)
+        column = QVBoxLayout(box)
+
+        self.fb_enabled_check = QCheckBox("Participate in feedback loop", box)
+        self.fb_enabled_check.setChecked(bool(model.feedback_loop_enabled))
+        self.fb_enabled_check.toggled.connect(self._on_feedback_toggled)
+        column.addWidget(self.fb_enabled_check)
+
+        form = QFormLayout()
+        self.fb_mode_combo = QComboBox(box)
+        self.fb_mode_combo.addItems([FEEDBACK_MODE_LABELS[m] for m in FEEDBACK_UPLOAD_MODES])
+        self.fb_mode_combo.setCurrentText(
+            FEEDBACK_MODE_LABELS.get(model.feedback_loop_upload_mode, FEEDBACK_MODE_LABELS["Instant"])
         )
+        form.addRow("Upload mode", self.fb_mode_combo)
 
-        row += 1
-        ttk.Label(frm, text="Primer mask size (px):", anchor=tk.W).grid(row=row, column=0, sticky="w", pady=4)
-        self.primer_size_var = tk.IntVar(value=int(existing.primer_mask_size) if existing else 135)
-        ttk.Spinbox(frm, from_=0, to=512, textvariable=self.primer_size_var, width=8).grid(
-            row=row, column=1, sticky="w", pady=4
-        )
+        floor = QLabel(f"{int(model.feedback_loop_confidence_floor)}%  (set by publisher)", box)
+        floor.setObjectName("rowHint")
+        form.addRow("Confidence floor", floor)
+        column.addLayout(form)
 
-        # Community Feedback Loop — only for community models. The publisher's
-        # confidence floor is shown read-only; the user may opt out or change
-        # the upload mode but never the threshold.
-        self._is_community = _is_community_model(existing)
-        # `_is_community` implies `existing is not None` (see
-        # `_is_community_model`), but re-checking here narrows the type for
-        # the checker too, instead of asserting it blindly.
-        if self._is_community and existing is not None:
-            row += 1
-            self._build_feedback_section(frm, existing).grid(
-                row=row,
-                column=0,
-                columnspan=2,
-                sticky="ew",
-                pady=(10, 2),
-            )
-
-        frm.columnconfigure(1, weight=1)
-
-        # Buttons
-        btn = ttk.Frame(self, padding=(12, 0, 12, 12))
-        btn.pack(fill=tk.X)
-        ttk.Button(btn, text="Cancel", command=self.destroy).pack(side=tk.RIGHT, padx=(8, 0))
-        ttk.Button(btn, text="Save", command=self._save, style="Accent.TButton").pack(side=tk.RIGHT)
-
-        self.bind("<Return>", lambda _e: self._save())
-        self.bind("<Escape>", lambda _e: self.destroy())
-
-    def _build_feedback_section(self, parent: tk.Misc, model: Model) -> ttk.LabelFrame:
-        box = ttk.LabelFrame(parent, text="Community Feedback Loop", padding=8)
-
-        # Opt-out lives here (and only here): unchecking stops uploads.
-        self.fb_enabled_var = tk.BooleanVar(value=bool(model.feedback_loop_enabled))
-        ttk.Checkbutton(
-            box,
-            text="Participate in feedback loop",
-            variable=self.fb_enabled_var,
-            command=self._on_fb_toggle,
-        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
-
-        ttk.Label(box, text="Upload mode:", anchor=tk.W).grid(
-            row=1,
-            column=0,
-            sticky="w",
-            pady=2,
-        )
-        current_label = _FEEDBACK_MODE_LABELS.get(
-            model.feedback_loop_upload_mode,
-            _FEEDBACK_MODE_LABELS["Instant"],
-        )
-        self.fb_mode_var = tk.StringVar(value=current_label)
-        self.fb_mode_combo = ttk.Combobox(
-            box,
-            state="readonly",
-            width=22,
-            textvariable=self.fb_mode_var,
-            values=[_FEEDBACK_MODE_LABELS[m] for m in FEEDBACK_UPLOAD_MODES],
-        )
-        self.fb_mode_combo.grid(row=1, column=1, sticky="w", pady=2)
-
-        # Confidence floor is publisher-controlled: shown, never editable.
-        ttk.Label(box, text="Confidence floor:", anchor=tk.W).grid(
-            row=2,
-            column=0,
-            sticky="w",
-            pady=2,
-        )
-        ttk.Label(
-            box,
-            text=f"{int(model.feedback_loop_confidence_floor)}%  (set by publisher)",
-            style="Muted.TLabel",
-        ).grid(row=2, column=1, sticky="w", pady=2)
-
-        box.columnconfigure(1, weight=1)
-        self._on_fb_toggle()  # sync the combobox enabled state with the checkbox
+        self._on_feedback_toggled(self.fb_enabled_check.isChecked())
         return box
 
-    def _on_fb_toggle(self) -> None:
-        self.fb_mode_combo.configure(state="readonly" if self.fb_enabled_var.get() else "disabled")
+    def _on_feedback_toggled(self, enabled: bool) -> None:
+        self.fb_mode_combo.setEnabled(bool(enabled))
 
-    def _save(self) -> None:
-        name = self.name_var.get().strip()
+    # ----- persistence --------------------------------------------------------
+
+    def _warn(self, title: str, text: str) -> None:
+        QMessageBox.warning(self, title, text)
+
+    def save(self) -> None:
+        name = self.name_edit.text().strip()
         if not name:
-            messagebox.showwarning("Missing name", "Please enter a model name.", parent=self)
+            self.notify("Missing name", "Please enter a model name.")
             return
-        idx = self.cartridge_combo.current()
-        if idx < 0:
-            messagebox.showwarning("Missing cartridge", "Pick a cartridge first.", parent=self)
+        cartridge_id = self.cartridge_combo.currentData()
+        if cartridge_id is None:
+            self.notify("Missing cartridge", "Pick a cartridge first.")
             return
-        cartridge = self._cartridges[idx]
-        mode = self.mode_combo.get()
+        mode = self.mode_combo.currentText()
         if mode not in SUPPORTED_MODEL_MODES:
-            messagebox.showerror("Invalid model type", f"Unknown model: {mode}", parent=self)
+            self.notify("Invalid model type", f"Unknown model: {mode}")
             return
 
         try:
-            if self.existing is None:
-                model = Model(
-                    name=name,
-                    cartridge_id=cartridge.id,
-                    model_mode=mode,
-                    hide_primer=self.hide_primer_var.get(),
-                    primer_mask_size=int(self.primer_size_var.get()),
-                    image_processing=ImageProcessingConfig(),
-                    training_config=TrainingConfig(model_name=mode),
-                    ai_model_config=AIModelConfig(),
-                )
-                saved = self.model_repo.create(model)
-                saved_id = saved.id
-            else:
-                self.existing.name = name
-                self.existing.cartridge_id = cartridge.id
-                self.existing.model_mode = mode
-                self.existing.hide_primer = self.hide_primer_var.get()
-                self.existing.primer_mask_size = int(self.primer_size_var.get())
-                self.existing.training_config.model_name = mode
-                if self._is_community:
-                    # Editable: opt-out flag + upload mode. Never the floor.
-                    self.existing.feedback_loop_enabled = bool(self.fb_enabled_var.get())
-                    self.existing.feedback_loop_upload_mode = _FEEDBACK_MODE_BY_LABEL.get(
-                        self.fb_mode_var.get(),
-                        self.existing.feedback_loop_upload_mode,
-                    )
-                self.model_repo.update(self.existing)
-                saved_id = self.existing.id
+            self.saved_id = self._persist(name, int(cartridge_id), mode)
         except Exception as exc:
-            messagebox.showerror("Save failed", str(exc), parent=self)
+            self.notify("Save failed", str(exc))
             return
+        self.accept()
 
-        if self.on_saved is not None:
-            self.on_saved(saved_id)
-        self.destroy()
+    def _persist(self, name: str, cartridge_id: int, mode: str) -> int:
+        if self.existing is None:
+            model = Model(
+                name=name,
+                cartridge_id=cartridge_id,
+                model_mode=mode,
+                hide_primer=self.hide_primer_check.isChecked(),
+                primer_mask_size=int(self.primer_spin.value()),
+                image_processing=ImageProcessingConfig(),
+                training_config=TrainingConfig(model_name=mode),
+                ai_model_config=AIModelConfig(),
+            )
+            with self.db.transaction():
+                return self.model_repo.create(model).id
+
+        existing = self.existing
+        existing.name = name
+        existing.cartridge_id = cartridge_id
+        existing.model_mode = mode
+        existing.hide_primer = self.hide_primer_check.isChecked()
+        existing.primer_mask_size = int(self.primer_spin.value())
+        existing.training_config.model_name = mode
+        if self.is_community:
+            # Editable: the opt-in and the upload mode. Never the floor.
+            existing.feedback_loop_enabled = self.fb_enabled_check.isChecked()
+            existing.feedback_loop_upload_mode = _FEEDBACK_MODE_BY_LABEL.get(
+                self.fb_mode_combo.currentText(),
+                existing.feedback_loop_upload_mode,
+            )
+        with self.db.transaction():
+            self.model_repo.update(existing)
+        return existing.id
+
+
+def build_model_editor(db: Database, *, existing: Any = None, parent: QWidget | None = None) -> ModelEditorDialog:
+    return ModelEditorDialog(db, existing=existing, parent=parent)

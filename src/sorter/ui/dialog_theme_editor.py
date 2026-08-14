@@ -1,51 +1,70 @@
 """Theme editor — build your own palette from one of the shipped themes.
 
-Opened by the gear beside the title-bar theme picker. It starts from the
-active theme, so a user only has to change the handful of colours they care
-about; everything else keeps working because a theme is always a *full*
-palette (see ``theme.normalize_palette``).
+Themes persist to the ``ui.custom_themes`` settings row. The editor starts
+from the theme the window is currently showing, because a theme is always a
+*full* palette (``palettes.normalize_palette``) and a user only wants to
+change a few roles.
 
-On a saved theme, **Save & apply** writes back to it — renaming included.
-**Create new…** always makes a separate theme, so a built-in is never the
-thing being written to.
+On a saved theme, **Save & apply** writes back to it — renaming included, which
+moves the theme rather than copying it — and leaves the dialog open (Seth):
+saving is the iteration step, not the exit. **Create new…** always makes a
+separate theme, so a built-in is never the thing being written to.
 
-Saved themes live in the ``ui.custom_themes`` setting and are registered into
-``theme.THEMES`` at startup, which is all it takes for them to appear in the
-picker — nothing downstream knows a palette was made by a user. The same
-payload is what Export writes and Import reads, so a theme travels as one
-small JSON file.
+The comic-ink and halftone options are edited and stored faithfully but render
+flat (known gap): nothing paints them yet.
 """
 
 from __future__ import annotations
 
 import json
-import tkinter as tk
+from collections.abc import Callable
 from pathlib import Path
-from tkinter import colorchooser, filedialog, messagebox, ttk
+from typing import Any
 
-from .theme import (
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QFont
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QColorDialog,
+    QDialog,
+    QFileDialog,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
+
+from .palettes import (
     BUILTIN_THEMES,
     CUSTOM_THEME_VERSION,
+    DERIVED_ROLES,
     HALFTONE_INK,
     INK_OUTLINE,
     MAX_THEME_NAME,
-    PALETTE,
+    SETTING_CUSTOM_THEMES,
     THEMES,
-    current_theme,
     custom_theme_payload,
+    custom_themes_payload,
     editable_roles,
     is_custom_theme,
     normalize_palette,
-    paint_gradient,
-    paint_halftone,
     register_custom_theme,
     rename_custom_theme,
+    resolve_theme,
+    theme_names,
     unique_theme_name,
     unregister_custom_theme,
 )
-from .widgets import ScrollableFrame
+from .theme import build_stylesheet
 
-# Role → the words a user thinks in. Grouped the way the UI reads: surfaces
+# Role → the words a user thinks in, grouped the way the UI reads: surfaces
 # first, then the ink on them, then the things that mean something.
 _GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     (
@@ -120,224 +139,400 @@ _GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ),
 ]
 
-_FILE_TYPES = [("Case Sorter theme", "*.json"), ("All files", "*.*")]
+# Written with the pattern repeated outside the parentheses: GNOME's file
+# chooser strips the "(*.json)" part, leaving an unreadable label otherwise.
+FILE_FILTER = "Case Sorter theme — *.json (*.json)"
 
-PREVIEW_W = 300
-PREVIEW_H = 330
-# The colour list scrolls; this is how much of it is on screen at once.
-LIST_W = 360
-LIST_H = 470
+DERIVED_NOTE = "Success mirrors Primary and Error mirrors Danger — they follow along, so they aren't listed."
+OPTIONS_NOTE = "Ink outlines and halftone dots are saved with the theme but render in the classic UI only."
+
+PREVIEW_WIDTH = 300
+LIST_MIN_WIDTH = 380
 
 
-def _grouped_roles() -> list[tuple[str, list[tuple[str, str]]]]:
+def grouped_roles() -> list[tuple[str, list[tuple[str, str]]]]:
     """The groups above, plus any palette role they forgot to mention.
 
-    A new key in the palette should show up in the editor even if whoever
-    added it didn't come here — better an ugly "Other" row than a colour the
-    user can't reach.
+    A new key in the palette should show up in the editor even if whoever added
+    it didn't come here — better an ugly "Other" row than an unreachable colour.
     """
     listed = {role for _, rows in _GROUPS for role, _ in rows}
     extra = [(role, role.replace("_", " ").capitalize()) for role in editable_roles() if role not in listed]
     return _GROUPS + ([("Other", extra)] if extra else [])
 
 
-class ThemeEditorDialog(tk.Toplevel):
+def describe_bad_theme(payload: Any) -> str | None:
+    """Why this file can't be a theme, or None if it can."""
+    if not isinstance(payload, dict):
+        return "That file doesn't contain a theme."
+    if not isinstance(payload.get("palette"), dict):
+        return "That file has no theme colours in it."
+    try:
+        version = int(payload.get("version", CUSTOM_THEME_VERSION))
+    except (TypeError, ValueError):
+        return "That theme file's version isn't readable."
+    if version > CUSTOM_THEME_VERSION:
+        return "That theme was made by a newer version of the app. Update, then import it again."
+    return None
+
+
+def preview_stylesheet(values: dict[str, str]) -> str:
+    """QSS for the miniature app: the real stylesheet plus the roles it omits.
+
+    ``build_stylesheet`` is the app's own sheet, so the preview shows what the
+    theme will actually look like. The extra block below carries the handful of
+    roles no Qt widget currently uses (the title-bar gradient, the accent
+    hover/press pair, the status colours) — without it those swatches would edit
+    something the user can't see.
+    """
+    # Normalized so a gap can't KeyError mid-sheet, and so the preview shows
+    # the derived roles as they will actually be stored.
+    v = normalize_palette(values)
+    extra = f"""
+QLabel#themePreviewTitle {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 {v["bg_gradient_a"]}, stop:1 {v["bg_gradient_b"]});
+    color: {v["text_highlight"]};
+    padding: 6px 8px;
+    font-weight: bold;
+}}
+QFrame#themePreviewPanel {{
+    background-color: {v["bg_surface"]};
+    border: 1px solid {v["border"]};
+    border-radius: 4px;
+}}
+QFrame#themePreviewCardSel {{
+    background-color: {v["bg_card_sel"]};
+    border: 1px solid {v["border"]};
+    border-radius: 6px;
+}}
+QFrame#themePreviewCardSel QLabel {{ background: transparent; }}
+QLabel#themePreviewAccent {{ color: {v["accent"]}; font-weight: bold; }}
+QLabel#themePreviewWarning {{ color: {v["warning"]}; }}
+QLabel#themePreviewOk {{ color: {v["success"]}; }}
+QLabel#themePreviewBad {{ color: {v["error"]}; }}
+QLabel#themePreviewFill {{
+    background-color: {v["success_dim"]};
+    color: {v["text"]};
+    padding: 2px 6px;
+    border-radius: 3px;
+}}
+QPushButton#themePreviewSecondary:hover {{ background-color: {v["accent_hover"]}; color: {v["text_inverse"]}; }}
+QPushButton#themePreviewSecondary:pressed {{ background-color: {v["accent_press"]}; color: {v["text_inverse"]}; }}
+"""
+    return build_stylesheet(values) + extra
+
+
+class _PreviewPane(QFrame):
+    """A miniature of the app, restyled from the working palette on every edit."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedWidth(PREVIEW_WIDTH)
+        column = QVBoxLayout(self)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(0)
+
+        title = QLabel("AI Case Sorter", self)
+        title.setObjectName("themePreviewTitle")
+        column.addWidget(title)
+
+        panel = QFrame(self)
+        panel.setObjectName("themePreviewPanel")
+        body = QVBoxLayout(panel)
+        body.setContentsMargins(10, 8, 10, 10)
+        body.setSpacing(8)
+        heading = QLabel("Slots", panel)
+        heading.setObjectName("themePreviewAccent")
+        body.addWidget(heading)
+
+        cards = QHBoxLayout()
+        cards.setSpacing(8)
+        cards.addWidget(self._card(panel, "Slot #1", "slotCard"))
+        cards.addWidget(self._card(panel, "Slot #2", "themePreviewCardSel"))
+        body.addLayout(cards)
+
+        field = QLineEdit("Confidence floor", panel)
+        field.setReadOnly(True)
+        body.addWidget(field)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(6)
+        for name, text in (("action", "Start"), ("update", "Update"), ("danger", "Stop")):
+            button = QPushButton(text, panel)
+            button.setObjectName(name)
+            buttons.addWidget(button)
+        body.addLayout(buttons)
+
+        secondary = QHBoxLayout()
+        secondary.setSpacing(6)
+        plain = QPushButton("Secondary", panel)
+        plain.setObjectName("themePreviewSecondary")
+        secondary.addWidget(plain)
+        warning = QLabel("Warning", panel)
+        warning.setObjectName("themePreviewWarning")
+        secondary.addWidget(warning)
+        fill = QLabel("Applied", panel)
+        fill.setObjectName("themePreviewFill")
+        secondary.addWidget(fill)
+        secondary.addStretch(1)
+        body.addLayout(secondary)
+
+        for object_name, text in (
+            ("themePreviewOk", "●  connected"),
+            ("themePreviewBad", "●  disconnected"),
+        ):
+            dot = QLabel(text, panel)
+            dot.setObjectName(object_name)
+            body.addWidget(dot)
+
+        self.name_label = QLabel("", panel)
+        self.name_label.setObjectName("mutedLabel")
+        body.addWidget(self.name_label)
+        body.addStretch(1)
+        column.addWidget(panel, 1)
+
+    def _card(self, parent: QWidget, title: str, object_name: str) -> QFrame:
+        card = QFrame(parent)
+        card.setObjectName(object_name)
+        column = QVBoxLayout(card)
+        column.setContentsMargins(8, 6, 8, 6)
+        column.setSpacing(2)
+        name = QLabel(title, card)
+        name.setObjectName("slotTitle")
+        count = QLabel("128", card)
+        count.setObjectName("slotCount")
+        names = QLabel("(no headstamps)", card)
+        names.setObjectName("slotNames")
+        for label in (name, count, names):
+            column.addWidget(label)
+        return card
+
+    def apply_values(self, values: dict[str, str], theme_name: str) -> None:
+        self.name_label.setText(theme_name or "Untitled")
+        self.setStyleSheet(preview_stylesheet(values))
+
+
+class ThemeEditorDialog(QDialog):
     """Create or edit a user theme, with a live preview of the result."""
 
-    def __init__(self, parent: tk.Misc, *, app) -> None:
+    def __init__(self, parent: QWidget | None, win: Any) -> None:
         super().__init__(parent)
-        self.app = app
-        self.base = current_theme()
+        self._win = win
+        # Qt never calls ``theme.set_palette``, so ``current_theme()`` would
+        # report Dark whatever the window is showing — the window's own name is
+        # the authority here.
+        self.base = resolve_theme(getattr(win, "theme_name", None))
         self.editing = is_custom_theme(self.base)
 
-        self.title("Edit Theme" if self.editing else "New Theme")
-        # wm_transient's stub wants a Wm (Tk/Toplevel), not the broader
-        # Misc `parent` type; winfo_toplevel() resolves to the actual
-        # top-level window, which is what Tk already does internally.
-        self.transient(parent.winfo_toplevel())
-        self.resizable(True, True)
-        self.minsize(LIST_W + PREVIEW_W + 70, 420)
-        self.configure(bg=PALETTE["bg_surface"])
-
-        # Working copy — nothing here touches the live palette until Save.
+        # Working copy — nothing here touches the live registry until Save.
         self.values: dict[str, str] = dict(THEMES[self.base])
-        # A new theme gets a short, free name rather than "<base> copy" —
-        # names are capped for the picker's sake, and the header line below
-        # already says which theme this started from.
-        self.name_var = tk.StringVar(value=self.base if self.editing else unique_theme_name("My theme"))
-        self.outline_var = tk.BooleanVar(value=bool(INK_OUTLINE.get(self.base)))
-        self.halftone_var = tk.BooleanVar(value=bool(HALFTONE_INK.get(self.base)))
-        self.halftone_ink = HALFTONE_INK.get(self.base) or self.values["border"]
-        self._swatches: dict[str, tk.Label] = {}
-        self._hex_vars: dict[str, tk.StringVar] = {}
+        self.halftone_ink: str = HALFTONE_INK.get(self.base) or self.values["border"]
 
-        wrap = ttk.Frame(self, padding=(12, 10, 12, 8))
-        wrap.pack(fill=tk.BOTH, expand=True)
-        self._build_header(wrap)
+        self.setWindowTitle("Edit Theme" if self.editing else "New Theme")
+        self.setMinimumSize(LIST_MIN_WIDTH + PREVIEW_WIDTH + 60, 520)
 
-        columns = ttk.Frame(wrap)
-        columns.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
-        self._build_color_list(columns)
-        self._build_preview(columns)
+        # Attributes, not methods: a test drives every path without a modal.
+        self.notify: Callable[[str, str], None] = self._warn
+        self.confirm: Callable[[str, str], bool] = self._ask
+        self.pick_color: Callable[[str, str], str | None] = self._pick_color
+        self.ask_name: Callable[[str], str | None] = self._ask_name
+        self.ask_open_path: Callable[[], str | None] = self._ask_open_path
+        self.ask_save_path: Callable[[str], str | None] = self._ask_save_path
 
-        self._build_buttons(ttk.Frame(self, padding=(12, 0, 12, 12)))
-        self.name_var.trace_add("write", lambda *_a: self._render_preview())
-        self.bind("<Escape>", lambda _e: self.destroy())
-        self._render_preview()
+        self._swatches: dict[str, QPushButton] = {}
+        self._hex_edits: dict[str, QLineEdit] = {}
+        # Set while a hex field is being written to from code, so the edit
+        # signal doesn't bounce back as a user edit.
+        self._syncing = False
+
+        column = QVBoxLayout(self)
+        column.setContentsMargins(12, 10, 12, 10)
+        column.setSpacing(8)
+        self._build_header(column)
+        columns = QHBoxLayout()
+        columns.setSpacing(12)
+        columns.addWidget(self._build_color_list(), 1)
+        columns.addWidget(self._build_preview(), 0)
+        column.addLayout(columns, 1)
+        self._build_buttons(column)
+        self.render_preview()
 
     # ----- construction -------------------------------------------------------
 
-    def _build_header(self, parent: tk.Misc) -> None:
-        row = ttk.Frame(parent)
-        row.pack(fill=tk.X)
-        ttk.Label(row, text="Name", style="Subtitle.TLabel").pack(side=tk.LEFT)
-        entry = ttk.Entry(
-            row,
-            textvariable=self.name_var,
-            width=MAX_THEME_NAME + 2,
-            validate="key",
-            validatecommand=(self.register(_within_limit), "%P"),
+    def _build_header(self, column: QVBoxLayout) -> None:
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        row.addWidget(QLabel("Name", self))
+        self.name_edit = QLineEdit(self.base if self.editing else unique_theme_name("My theme"), self)
+        self.name_edit.setMaxLength(MAX_THEME_NAME)
+        self.name_edit.setMaximumWidth(200)
+        self.name_edit.textChanged.connect(lambda _text: self.render_preview())
+        row.addWidget(self.name_edit)
+
+        self.outline_check = QCheckBox("Comic ink outlines", self)
+        self.outline_check.setChecked(bool(INK_OUTLINE.get(self.base)))
+        row.addWidget(self.outline_check)
+        self.halftone_check = QCheckBox("Halftone dots", self)
+        self.halftone_check.setChecked(bool(HALFTONE_INK.get(self.base)))
+        row.addWidget(self.halftone_check)
+        self.halftone_swatch = self._swatch(self.halftone_ink, "Halftone dot colour")
+        self.halftone_swatch.clicked.connect(self.pick_halftone)
+        row.addWidget(self.halftone_swatch)
+        row.addStretch(1)
+        column.addLayout(row)
+
+        self.mode_hint = self._hint(
+            f"Editing “{self.base}” — Save & apply writes back to it, including a rename."
+            if self.editing
+            else f"Starting from the built-in “{self.base}”, which can't be changed. "
+            "Save & apply keeps this as a new theme."
         )
-        entry.pack(side=tk.LEFT, padx=(8, 16))
-        entry.focus_set()
+        column.addWidget(self.mode_hint)
+        column.addWidget(self._hint(OPTIONS_NOTE))
 
-        ttk.Checkbutton(
-            row,
-            text="Comic ink outlines",
-            variable=self.outline_var,
-            command=self._render_preview,
-        ).pack(side=tk.LEFT)
-        ttk.Checkbutton(
-            row,
-            text="Halftone dots",
-            variable=self.halftone_var,
-            command=self._render_preview,
-        ).pack(side=tk.LEFT, padx=(12, 4))
-        self._halftone_swatch = self._swatch(row, self.halftone_ink)
-        self._halftone_swatch.pack(side=tk.LEFT)
-        self._halftone_swatch.bind("<Button-1>", lambda _e: self._pick_halftone())
+    def _build_color_list(self) -> QWidget:
+        area = QScrollArea(self)
+        area.setWidgetResizable(True)
+        area.setMinimumWidth(LIST_MIN_WIDTH)
+        holder = QWidget(area)
+        column = QVBoxLayout(holder)
+        column.setContentsMargins(2, 2, 8, 2)
+        column.setSpacing(4)
+        for title, rows in grouped_roles():
+            heading = QLabel(title, holder)
+            # Bold in code rather than by objectName: the group headings are
+            # local to this dialog, not a palette role the app-wide QSS knows.
+            font = QFont(heading.font())
+            font.setBold(True)
+            heading.setFont(font)
+            column.addWidget(heading)
+            grid = QGridLayout()
+            grid.setContentsMargins(0, 0, 0, 0)
+            grid.setHorizontalSpacing(8)
+            grid.setVerticalSpacing(2)
+            for index, (role, label) in enumerate(rows):
+                self._build_color_row(holder, grid, role, label, index)
+            grid.setColumnStretch(1, 1)
+            column.addLayout(grid)
+        column.addWidget(self._hint(DERIVED_NOTE))
+        column.addStretch(1)
+        area.setWidget(holder)
+        return area
 
-        ttk.Label(
-            parent,
-            text=(
-                f"Editing “{self.base}” — Save & apply writes back to it, including a rename."
-                if self.editing
-                else f"Starting from the built-in “{self.base}”, which can't be "
-                "changed. Save & apply keeps this as a new theme."
-            ),
-            style="Subtle.TLabel",
-        ).pack(anchor=tk.W, pady=(6, 0))
-
-    def _build_color_list(self, parent: tk.Misc) -> None:
-        holder = ScrollableFrame(parent, viewport=(LIST_W, LIST_H))
-        holder.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        body = holder.body
-
-        for title, rows in _grouped_roles():
-            ttk.Label(body, text=title, style="Header.TLabel").pack(anchor=tk.W, pady=(8, 2))
-            grid = ttk.Frame(body)
-            grid.pack(fill=tk.X)
-            for i, (role, label) in enumerate(rows):
-                self._build_color_row(grid, role, label, i)
-
-    def _build_color_row(self, parent: tk.Misc, role: str, label: str, row: int) -> None:
-        swatch = self._swatch(parent, self.values[role])
-        swatch.grid(row=row, column=0, sticky="w", pady=1)
-        swatch.bind("<Button-1>", lambda _e, r=role: self._pick(r))
+    def _build_color_row(self, parent: QWidget, grid: QGridLayout, role: str, label: str, row: int) -> None:
+        swatch = self._swatch(self.values[role], role)
+        swatch.clicked.connect(lambda _checked=False, r=role: self.pick(r))
         self._swatches[role] = swatch
+        grid.addWidget(swatch, row, 0)
+        grid.addWidget(QLabel(label, parent), row, 1)
 
-        ttk.Label(parent, text=label).grid(row=row, column=1, sticky="w", padx=8)
-        parent.columnconfigure(1, minsize=150)
+        edit = QLineEdit(self.values[role], parent)
+        edit.setMaxLength(7)
+        edit.setFixedWidth(84)
+        edit.textChanged.connect(lambda _text, r=role: self._on_hex_typed(r))
+        self._hex_edits[role] = edit
+        grid.addWidget(edit, row, 2)
 
-        var = tk.StringVar(value=self.values[role])
-        var.trace_add("write", lambda *_a, r=role: self._on_hex_typed(r))
-        self._hex_vars[role] = var
-        ttk.Entry(parent, textvariable=var, width=9).grid(row=row, column=2, sticky="w", padx=(8, 0))
+    def _swatch(self, color: str, tooltip: str) -> QPushButton:
+        button = QPushButton(self)
+        button.setFixedSize(30, 20)
+        button.setToolTip(tooltip)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._paint_swatch(button, color)
+        return button
 
-    def _swatch(self, parent: tk.Misc, color: str) -> tk.Label:
-        return tk.Label(
-            parent,
-            background=color,
-            width=4,
-            cursor="hand2",
-            relief="flat",
-            borderwidth=0,
-            highlightthickness=1,
-            highlightbackground=PALETTE["border"],
-        )
+    @staticmethod
+    def _paint_swatch(button: QPushButton, color: str) -> None:
+        button.setStyleSheet(f"background-color: {color}; border: 1px solid palette(mid); border-radius: 2px;")
 
-    def _build_preview(self, parent: tk.Misc) -> None:
-        side = ttk.Frame(parent)
-        side.pack(side=tk.LEFT, fill=tk.Y, anchor=tk.N, padx=(12, 0))
-        ttk.Label(side, text="Preview", style="Subtitle.TLabel").pack(anchor=tk.W)
-        self.preview = tk.Canvas(
-            side,
-            width=PREVIEW_W,
-            height=PREVIEW_H,
-            highlightthickness=1,
-            highlightbackground=PALETTE["border"],
-            borderwidth=0,
-        )
-        self.preview.pack(pady=(3, 0))
-        # The gradient helper measures the canvas, so the first useful paint
-        # can only happen once Tk has laid it out.
-        self.preview.bind("<Configure>", lambda _e: self._render_preview())
+    def _build_preview(self) -> QWidget:
+        side = QWidget(self)
+        column = QVBoxLayout(side)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(4)
+        column.addWidget(QLabel("Preview", side))
+        self.preview = _PreviewPane(side)
+        column.addWidget(self.preview)
+        column.addStretch(1)
+        return side
 
-    def _build_buttons(self, bar: ttk.Frame) -> None:
-        bar.pack(fill=tk.X)
+    def _build_buttons(self, column: QVBoxLayout) -> None:
+        row = QHBoxLayout()
+        row.setSpacing(8)
         if self.editing:
-            ttk.Button(
-                bar,
-                text="Delete",
-                style="Danger.TButton",
-                command=self._delete,
-            ).pack(side=tk.LEFT)
-        ttk.Button(bar, text="Import…", command=self._import).pack(side=tk.LEFT, padx=(12 if self.editing else 0, 6))
-        ttk.Button(bar, text="Export…", command=self._export).pack(side=tk.LEFT)
+            delete = QPushButton("Delete", self)
+            delete.setObjectName("danger")
+            delete.clicked.connect(self.delete_theme)
+            row.addWidget(delete)
+            self.delete_button: QPushButton | None = delete
+        else:
+            self.delete_button = None
+        for text, slot in (("Import…", self.import_theme), ("Export…", self.export_theme)):
+            button = QPushButton(text, self)
+            button.clicked.connect(slot)
+            row.addWidget(button)
+        row.addStretch(1)
 
-        ttk.Button(bar, text="Cancel", command=self.destroy).pack(side=tk.RIGHT, padx=(8, 0))
-        ttk.Button(
-            bar,
-            text="Save & apply",
-            style="Accent.TButton",
-            command=self._save,
-        ).pack(side=tk.RIGHT)
-        ttk.Button(bar, text="Create new…", command=self._create_new).pack(side=tk.RIGHT, padx=(0, 8))
+        create = QPushButton("Create new…", self)
+        create.clicked.connect(self.create_new)
+        row.addWidget(create)
+        save = QPushButton("Save & apply", self)
+        save.setObjectName("action")
+        save.clicked.connect(self.save)
+        row.addWidget(save)
+        # "Close", not "Cancel": Save & apply keeps the dialog open (Seth) and
+        # applies immediately, so by the time this is clicked there may be
+        # nothing left to cancel.
+        cancel = QPushButton("Close", self)
+        cancel.clicked.connect(self.reject)
+        row.addWidget(cancel)
+        column.addLayout(row)
+
+    def _hint(self, text: str) -> QLabel:
+        label = QLabel(text, self)
+        label.setObjectName("dialogHint")
+        label.setWordWrap(True)
+        return label
 
     # ----- editing ------------------------------------------------------------
 
-    def _pick(self, role: str) -> None:
-        chosen = colorchooser.askcolor(
-            color=self.values[role],
-            parent=self,
-            title=f"Colour — {role}",
-        )
-        if chosen and chosen[1]:
-            self._set_color(role, chosen[1])
+    def pick(self, role: str) -> None:
+        chosen = self.pick_color(f"Colour — {role}", self.values[role])
+        if chosen:
+            self.set_color(role, chosen)
 
-    def _pick_halftone(self) -> None:
-        chosen = colorchooser.askcolor(
-            color=self.halftone_ink,
-            parent=self,
-            title="Colour — halftone dots",
-        )
-        if chosen and chosen[1]:
-            self.halftone_ink = chosen[1].lower()
-            self._halftone_swatch.configure(background=self.halftone_ink)
-            self.halftone_var.set(True)
-            self._render_preview()
+    def pick_halftone(self) -> None:
+        chosen = self.pick_color("Colour — halftone dots", self.halftone_ink)
+        if not chosen:
+            return
+        self.halftone_ink = chosen.lower()
+        self._paint_swatch(self.halftone_swatch, self.halftone_ink)
+        self.halftone_check.setChecked(True)
 
-    def _set_color(self, role: str, color: str) -> None:
+    def set_color(self, role: str, color: str) -> None:
+        """Set one role, keeping the derived roles in step with it.
+
+        ``normalize_palette`` owns that invariant at the boundary; applying it
+        here as well is what keeps the preview honest mid-edit.
+        """
         color = color.lower()
         self.values[role] = color
-        self._swatches[role].configure(background=color)
-        if self._hex_vars[role].get().lower() != color:
-            self._hex_vars[role].set(color)
-        self._render_preview()
+        for derived, source in DERIVED_ROLES.items():
+            self.values[derived] = self.values[source]
+        self._paint_swatch(self._swatches[role], color)
+        edit = self._hex_edits[role]
+        if edit.text().lower() != color:
+            self._syncing = True
+            edit.setText(color)
+            self._syncing = False
+        self.render_preview()
 
     def _on_hex_typed(self, role: str) -> None:
         """Accept a hand-typed colour once it's complete, ignore it until then."""
-        text = self._hex_vars[role].get().strip()
+        if self._syncing:
+            return
+        text = self._hex_edits[role].text().strip()
         if not text.startswith("#"):
             text = "#" + text
         if len(text) != 7:
@@ -347,290 +542,90 @@ class ThemeEditorDialog(tk.Toplevel):
         except ValueError:
             return
         if text.lower() != self.values[role]:
-            self._set_color(role, text)
+            self.set_color(role, text)
 
-    # ----- preview ------------------------------------------------------------
-
-    def _render_preview(self) -> None:
-        """Draw a miniature of the app from the working palette.
-
-        Canvas shapes rather than real widgets: the preview has to show a
-        palette that isn't loaded, and ttk styles are global.
-        """
+    def render_preview(self) -> None:
+        # The colour rows are built before the preview is; a hex field typed
+        # into during construction would otherwise reach a missing widget.
         if not hasattr(self, "preview"):
             return
-        c, v = self.preview, self.values
-        c.delete("all")
-        c.configure(background=v["bg_window"])
-        ink = v["border"] if self.outline_var.get() else ""
-        outline_w = 2 if self.outline_var.get() else 1
-
-        # Title bar, with the halftone screening in from the right.
-        c.create_rectangle(0, 0, PREVIEW_W, 34, fill=v["bg_gradient_a"], outline="")
-        paint_gradient(
-            c,
-            color_a=v["bg_gradient_a"],
-            color_b=v["bg_gradient_b"],
-            direction="horizontal",
-        )
-        c.create_rectangle(0, 34, PREVIEW_W, PREVIEW_H, fill=v["bg_window"], outline="")
-        if self.halftone_var.get():
-            paint_halftone(
-                c,
-                color=self.halftone_ink,
-                box=(0, 0, PREVIEW_W, 34),
-                fade_from="right",
-                fade_span=PREVIEW_W * 0.55,
-                spacing=6,
-                radius=1.7,
-            )
-        c.create_text(
-            10,
-            17,
-            anchor=tk.W,
-            text="AI Case Sorter",
-            fill=v["text"],
-            font=("TkDefaultFont", 11, "bold"),
-        )
-
-        # Panel with a section heading.
-        c.create_rectangle(
-            8,
-            44,
-            PREVIEW_W - 8,
-            PREVIEW_H - 40,
-            fill=v["bg_surface"],
-            outline=ink,
-            width=outline_w,
-        )
-        c.create_text(
-            18,
-            58,
-            anchor=tk.W,
-            text="Slots",
-            fill=v["accent"],
-            font=("TkDefaultFont", 9, "bold"),
-        )
-
-        # A plain card and a selected one.
-        for x0, fill, title in (
-            (18, v["bg_card"], "Slot #1"),
-            (160, v["bg_card_sel"], "Slot #2"),
-        ):
-            c.create_rectangle(
-                x0,
-                70,
-                x0 + 122,
-                128,
-                fill=fill,
-                outline=ink,
-                width=outline_w,
-            )
-            c.create_text(
-                x0 + 10,
-                84,
-                anchor=tk.W,
-                text=title,
-                fill=v["text"],
-                font=("TkDefaultFont", 9, "bold"),
-            )
-            c.create_text(
-                x0 + 10,
-                102,
-                anchor=tk.W,
-                text="(no headstamps)",
-                fill=v["text_muted"],
-                font=("TkDefaultFont", 8),
-            )
-
-        # An input field.
-        c.create_rectangle(
-            18,
-            140,
-            PREVIEW_W - 18,
-            164,
-            fill=v["bg_input"],
-            outline=v["border"],
-            width=outline_w,
-        )
-        c.create_text(
-            26,
-            152,
-            anchor=tk.W,
-            text="Confidence floor",
-            fill=v["text_subtle"],
-            font=("TkDefaultFont", 8),
-        )
-
-        # The three coloured buttons and the secondary one.
-        buttons = (
-            (v["action"], "Start"),
-            (v["update"], "Update"),
-            (v["danger"], "Stop"),
-        )
-        x = 18
-        for fill, label in buttons:
-            c.create_rectangle(
-                x,
-                176,
-                x + 84,
-                202,
-                fill=fill,
-                outline=ink,
-                width=outline_w,
-            )
-            c.create_text(
-                x + 42,
-                189,
-                text=label,
-                fill=v["text_inverse"],
-                font=("TkDefaultFont", 8, "bold"),
-            )
-            x += 89
-        c.create_rectangle(
-            18,
-            210,
-            102,
-            236,
-            fill=v["accent_dim"],
-            outline=ink,
-            width=outline_w,
-        )
-        c.create_text(
-            60,
-            223,
-            text="Secondary",
-            fill=v["text"],
-            font=("TkDefaultFont", 8),
-        )
-
-        # Status text and the two connection dots.
-        c.create_text(
-            116,
-            223,
-            anchor=tk.W,
-            text="Warning",
-            fill=v["warning"],
-            font=("TkDefaultFont", 8),
-        )
-        c.create_text(
-            18,
-            252,
-            anchor=tk.W,
-            text="●  connected",
-            fill=v["action"],
-            font=("TkDefaultFont", 8),
-        )
-        c.create_text(
-            18,
-            268,
-            anchor=tk.W,
-            text="●  disconnected",
-            fill=v["danger"],
-            font=("TkDefaultFont", 8),
-        )
-        c.create_text(
-            18,
-            PREVIEW_H - 22,
-            anchor=tk.W,
-            text=self.name_var.get() or "Untitled",
-            fill=v["text_muted"],
-            font=("TkDefaultFont", 8),
-        )
+        self.preview.apply_values(self.values, self.name_edit.text().strip())
 
     # ----- save / delete ------------------------------------------------------
 
-    def _payload_named(self, name: str) -> dict:
-        payload = self._payload()
-        payload["name"] = name
-        return payload
-
-    def _payload(self) -> dict:
+    def payload(self, name: str | None = None) -> dict:
         return {
             "version": CUSTOM_THEME_VERSION,
-            "name": self.name_var.get().strip(),
+            "name": (name if name is not None else self.name_edit.text()).strip(),
             "based_on": self.base,
-            "halftone": self.halftone_ink if self.halftone_var.get() else None,
-            "outline": 2 if self.outline_var.get() else 0,
+            "halftone": self.halftone_ink if self.halftone_check.isChecked() else None,
+            "outline": 2 if self.outline_check.isChecked() else 0,
             "palette": normalize_palette(self.values),
         }
 
-    def _save(self) -> None:
+    def save(self) -> None:
         """Write the edits back to the theme being edited, or create it.
 
-        On a built-in there is nothing to write back to, so this creates a
-        theme under the name in the box (that's what the box is prefilled
-        with). On a saved theme it updates it in place — including a rename,
-        which keeps the theme rather than leaving the old name behind.
+        On a built-in there is nothing to write back to, so this creates a theme
+        under the name in the box (that's what the box is prefilled with). On a
+        saved theme it updates it in place — a rename included, which keeps the
+        theme rather than leaving the old name behind.
         """
-        name = self.name_var.get().strip()
+        name = self.name_edit.text().strip()
         if not self._name_is_usable(name):
             return
+        # A saved theme keeps the origin it already records: writing back to it
+        # (a rename above all) must not restate it as having been made from
+        # itself, which is what the delete fallback would then land on.
+        origin = custom_theme_payload(self.base).get("based_on") if self.editing else self.base
         if self.editing and name != self.base:
             try:
                 rename_custom_theme(self.base, name)
             except ValueError as exc:
-                messagebox.showwarning("Can't rename", str(exc), parent=self)
+                self.notify("Can't rename", str(exc))
                 return
             self.base = name
-        elif (
-            not self.editing
-            and name in THEMES
-            and not messagebox.askyesno(
-                "Replace theme",
-                f"Replace the saved theme “{name}”?",
-                parent=self,
-            )
-        ):
+        elif not self.editing and name in THEMES and not self._confirm_replace(name):
             return
-        self._register_and_apply(self._payload_named(name))
-        self.destroy()
+        payload = self.payload(name)
+        payload["based_on"] = origin or self.base
+        self._register_and_apply(payload)
+        # Stay open (Seth): iterating on a theme is the editor's whole point,
+        # and Save & apply is the iteration step. A first save of a
+        # built-in-based theme turns the session into an edit of the new one.
+        self.editing = True
+        self.base = name
+        self.setWindowTitle("Edit Theme")
+        self.mode_hint.setText(f"Saved — editing “{self.base}”. Save & apply writes back to it, including a rename.")
 
-    def _create_new(self) -> None:
+    def create_new(self) -> None:
         """Save these colours as a separate theme, under a name of its own."""
-        name = self._prompt_name()
-        if name is None:
+        asked = self.ask_name(unique_theme_name(self.name_edit.text() or self.base))
+        if asked is None:
             return
-        name = name.strip()
-        if not self._name_is_usable(name) or (
-            name in THEMES
-            and not messagebox.askyesno(
-                "Replace theme",
-                f"Replace the saved theme “{name}”?",
-                parent=self,
-            )
-        ):
+        name = asked.strip()
+        if not self._name_is_usable(name):
             return
-        self._register_and_apply(self._payload_named(name))
-        self.destroy()
+        if name in THEMES and not self._confirm_replace(name):
+            return
+        self._register_and_apply(self.payload(name))
+        self.accept()
+
+    def _confirm_replace(self, name: str) -> bool:
+        return self.confirm("Replace theme", f"Replace the saved theme “{name}”?")
 
     def _name_is_usable(self, name: str) -> bool:
         """Complain (and return False) if `name` can't be a theme."""
         if not name:
-            messagebox.showwarning("Name needed", "Give the theme a name.", parent=self)
+            self.notify("Name needed", "Give the theme a name.")
             return False
         if len(name) > MAX_THEME_NAME:
-            messagebox.showwarning(
-                "Name too long",
-                f"Theme names are at most {MAX_THEME_NAME} characters.",
-                parent=self,
-            )
+            self.notify("Name too long", f"Theme names are at most {MAX_THEME_NAME} characters.")
             return False
         if name in BUILTIN_THEMES:
-            messagebox.showwarning(
-                "Built-in theme",
-                f"“{name}” is a built-in theme. Pick a different name.",
-                parent=self,
-            )
+            self.notify("Built-in theme", f"“{name}” is a built-in theme. Pick a different name.")
             return False
         return True
-
-    def _prompt_name(self) -> str | None:
-        """Ask for a name for a new theme. None if the user backs out."""
-        return _NameDialog(
-            self,
-            initial=unique_theme_name(self.name_var.get() or self.base),
-        ).result
 
     def _register_and_apply(self, payload: dict) -> None:
         register_custom_theme(
@@ -640,85 +635,94 @@ class ThemeEditorDialog(tk.Toplevel):
             outline=payload.get("outline", 0),
             base=payload.get("based_on"),
         )
-        self.app.save_custom_themes()
-        self.app.set_theme(payload["name"])
-        self.app.refresh_theme_picker()
+        self._persist()
+        self._win.set_theme(payload["name"])
+        self._refresh_picker()
 
-    def _delete(self) -> None:
-        if messagebox.askyesno(
-            "Delete theme",
-            f"Delete the theme “{self.base}”?",
-            parent=self,
-        ):
-            self._delete_confirmed()
+    def delete_theme(self) -> None:
+        if self.confirm("Delete theme", f"Delete the theme “{self.base}”?"):
+            self.delete_confirmed()
 
-    def _delete_confirmed(self) -> None:
+    def delete_confirmed(self) -> None:
         # Fall back to whatever this theme was made from; that may itself have
         # been deleted since, in which case `set_theme` resolves to the default.
-        fallback = self.app.theme_name
+        fallback = getattr(self._win, "theme_name", "")
         if fallback == self.base:
             fallback = custom_theme_payload(self.base).get("based_on") or ""
         unregister_custom_theme(self.base)
-        self.app.save_custom_themes()
-        self.app.set_theme(fallback)
-        self.app.refresh_theme_picker()
-        self.destroy()
+        self._persist()
+        self._win.set_theme(fallback)
+        self._refresh_picker()
+        self.accept()
+
+    def _persist(self) -> None:
+        """Store every custom theme to the settings row."""
+        saver = getattr(self._win, "save_custom_themes", None)
+        if callable(saver):
+            saver()
+            return
+        save_setting = getattr(self._win, "_save_setting", None)
+        if callable(save_setting):
+            save_setting(SETTING_CUSTOM_THEMES, custom_themes_payload())
+
+    def _refresh_picker(self) -> None:
+        """Re-read the theme list into Settings → Theme's combo."""
+        refresh = getattr(self._win, "refresh_theme_picker", None)
+        if callable(refresh):
+            refresh()
+            return
+        combo = getattr(self._win, "theme_combo", None)
+        if combo is None:
+            return
+        # Repopulating fires currentTextChanged, which is wired to set_theme.
+        blocked = combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(theme_names())
+        combo.setCurrentText(getattr(self._win, "theme_name", "") or "")
+        combo.blockSignals(blocked)
 
     # ----- files --------------------------------------------------------------
 
-    def _export(self) -> None:
-        if not self.name_var.get().strip():
-            messagebox.showwarning(
-                "Name needed",
-                "Give the theme a name before exporting.",
-                parent=self,
-            )
+    def export_theme(self) -> None:
+        name = self.name_edit.text().strip()
+        if not name:
+            self.notify("Name needed", "Give the theme a name before exporting.")
             return
-        path = filedialog.asksaveasfilename(
-            parent=self,
-            title="Export theme",
-            defaultextension=".json",
-            initialfile=f"{self.name_var.get().strip()}.json",
-            filetypes=_FILE_TYPES,
-        )
+        path = self.ask_save_path(f"{name}.json")
         if not path:
             return
         try:
-            self._write_theme_file(Path(path))
+            self.write_theme_file(Path(path))
         except OSError as exc:
-            messagebox.showerror("Export failed", str(exc), parent=self)
+            self.notify("Export failed", str(exc))
             return
-        messagebox.showinfo("Theme exported", f"Saved to {path}", parent=self)
+        self.notify("Theme exported", f"Saved to {path}")
 
-    def _write_theme_file(self, path: Path) -> dict:
+    def write_theme_file(self, path: Path) -> dict:
         """Write the theme as it stands in the editor — unsaved edits included."""
-        payload = self._payload()
+        payload = self.payload()
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return payload
 
-    def _import(self) -> None:
-        path = filedialog.askopenfilename(
-            parent=self,
-            title="Import theme",
-            filetypes=_FILE_TYPES,
-        )
+    def import_theme(self) -> None:
+        path = self.ask_open_path()
         if not path:
             return
         try:
-            self._read_theme_file(Path(path))
-        except (OSError, ValueError) as exc:
-            messagebox.showerror("Import failed", str(exc), parent=self)
+            self.read_theme_file(Path(path))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            self.notify("Import failed", str(exc))
             return
-        self.destroy()
+        self.accept()
 
-    def _read_theme_file(self, path: Path) -> None:
+    def read_theme_file(self, path: Path) -> None:
         """Register and apply the theme in `path`; raises ValueError if it isn't one.
 
         An imported theme never replaces an existing one — it comes in under a
         free name, so importing the file you exported leaves you with both.
         """
         payload = json.loads(path.read_text(encoding="utf-8"))
-        problem = _describe_bad_theme(payload)
+        problem = describe_bad_theme(payload)
         if problem:
             raise ValueError(problem)
         self._register_and_apply(
@@ -732,76 +736,32 @@ class ThemeEditorDialog(tk.Toplevel):
             }
         )
 
+    # ----- dialog hooks -------------------------------------------------------
 
-def _within_limit(proposed: str) -> bool:
-    """Entry validator: keep theme names inside the picker's width."""
-    return len(proposed) <= MAX_THEME_NAME
+    def _warn(self, title: str, text: str) -> None:
+        QMessageBox.warning(self, title, text)
 
+    def _ask(self, title: str, text: str) -> bool:
+        return QMessageBox.question(self, title, text) == QMessageBox.StandardButton.Yes
 
-class _NameDialog(tk.Toplevel):
-    """Ask for a new theme's name. `result` is None if the user backs out."""
+    def _pick_color(self, title: str, initial: str) -> str | None:
+        chosen = QColorDialog.getColor(QColor(initial), self, title)
+        return chosen.name() if chosen.isValid() else None
 
-    def __init__(self, parent: tk.Misc, *, initial: str) -> None:
-        super().__init__(parent)
-        self.result: str | None = None
-        self.title("New Theme")
-        # wm_transient's stub wants a Wm (Tk/Toplevel), not the broader
-        # Misc `parent` type; winfo_toplevel() resolves to the actual
-        # top-level window, which is what Tk already does internally.
-        self.transient(parent.winfo_toplevel())
-        self.resizable(False, False)
-
-        body = ttk.Frame(self, padding=(14, 12, 14, 8))
-        body.pack(fill=tk.BOTH, expand=True)
-        ttk.Label(body, text="Name for the new theme", style="Muted.TLabel").pack(anchor=tk.W)
-        self._var = tk.StringVar(value=initial)
-        entry = ttk.Entry(
-            body,
-            textvariable=self._var,
-            width=MAX_THEME_NAME + 4,
-            validate="key",
-            validatecommand=(self.register(_within_limit), "%P"),
+    def _ask_name(self, initial: str) -> str | None:
+        text, ok = QInputDialog.getText(
+            self,
+            "New Theme",
+            f"Name for the new theme (up to {MAX_THEME_NAME} characters)",
+            QLineEdit.EchoMode.Normal,
+            initial,
         )
-        entry.pack(fill=tk.X, pady=(3, 0))
-        entry.selection_range(0, tk.END)
-        entry.focus_set()
-        ttk.Label(
-            body,
-            text=f"Up to {MAX_THEME_NAME} characters.",
-            style="Subtle.TLabel",
-        ).pack(anchor=tk.W, pady=(4, 0))
+        return text if ok else None
 
-        buttons = ttk.Frame(self, padding=(14, 0, 14, 12))
-        buttons.pack(fill=tk.X)
-        ttk.Button(buttons, text="Cancel", command=self.destroy).pack(side=tk.RIGHT, padx=(8, 0))
-        ttk.Button(
-            buttons,
-            text="Create",
-            style="Accent.TButton",
-            command=self._accept,
-        ).pack(side=tk.RIGHT)
+    def _ask_open_path(self) -> str | None:
+        path, _filter = QFileDialog.getOpenFileName(self, "Import theme", "", f"{FILE_FILTER};;All files (*)")
+        return path or None
 
-        entry.bind("<Return>", lambda _e: self._accept())
-        self.bind("<Escape>", lambda _e: self.destroy())
-        # Modal: the caller reads `result` as soon as this returns.
-        self.grab_set()
-        self.wait_window(self)
-
-    def _accept(self) -> None:
-        self.result = self._var.get()
-        self.destroy()
-
-
-def _describe_bad_theme(payload) -> str | None:
-    """Why this file can't be a theme, or None if it can."""
-    if not isinstance(payload, dict):
-        return "That file doesn't contain a theme."
-    if not isinstance(payload.get("palette"), dict):
-        return "That file has no theme colours in it."
-    try:
-        version = int(payload.get("version", CUSTOM_THEME_VERSION))
-    except (TypeError, ValueError):
-        return "That theme file's version isn't readable."
-    if version > CUSTOM_THEME_VERSION:
-        return "That theme was made by a newer version of the app. Update, then import it again."
-    return None
+    def _ask_save_path(self, default_name: str) -> str | None:
+        path, _filter = QFileDialog.getSaveFileName(self, "Export theme", default_name, FILE_FILTER)
+        return path or None

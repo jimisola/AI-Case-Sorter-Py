@@ -1,369 +1,435 @@
-"""Share-a-Model dialog — export a local model and upload it to the community.
+"""Share a model — export a local model and publish it to the community.
 
-Collapses the legacy pick → upload-info → upload-status flow into one dialog:
+Behavior reference: ``ui/dialog_share_model.py``: one dialog that picks a
+local model, collects the share metadata, then packages and runs the upload
+sequence (FileUploadRequest → PUT zip → CompleteUpload → ManifestUploadRequest
+→ PUT manifest) and stamps the returned UID / version back onto the local row.
 
-  * pick a local model,
-  * fill the share metadata (name, description, community cartridge, what to
-    include, optional feedback loop),
-  * Share → export the ZIP (+ standalone manifest) and run the upload sequence
-    (FileUploadRequest → PUT zip → CompleteUpload → ManifestUploadRequest →
-    PUT manifest), reporting progress, then stamp the returned community UID /
-    version onto the local model.
+**Sharing your own model does not make it foreign.** The stamp is the community
+UID and the version, nothing else: ``model_type`` is untouched, so
+``is_trainable`` stays true and the Train activity keeps working on it. A UID
+means "exists in the community", not "isn't yours" (CLAUDE.md §5).
+
+Packaging and uploading run on an ``ApiWorker``; progress crosses back as a
+queued signal, so the status line updates without the UI thread ever waiting on
+the network. ``notify`` / ``confirm`` are attributes so a test drives the flow
+with nothing modal opening.
 """
 
 from __future__ import annotations
 
 import shutil
 import tempfile
-import tkinter as tk
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from tkinter import messagebox, ttk
 from typing import Any
 from uuid import uuid4
 
-from .. import paths
-from ..community.community_api import CartridgeInfo, CommunityApi
-from ..data.model_io import ExportMode, export_for_share
-from ..data.repository import CartridgeRepo, HeadstampRepo, ModelRepo
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
 
-# Display label <-> ExportMode. ManifestOnly is intentionally omitted — there
-# is nothing useful to share without either a model or images.
-_EXPORT_LABELS = {
+from .. import paths
+from ..community.community_api import CartridgeInfo
+from ..data.model_io import ExportMode, export_for_share
+from ..data.models import Model
+from ..data.repository import CartridgeRepo, HeadstampRepo, ModelRepo
+from .community_page import ApiWorker, start_worker
+
+# Display label <-> ExportMode. ManifestOnly is deliberately absent — there is
+# nothing useful to share without either a model or images.
+EXPORT_LABELS: dict[str, ExportMode] = {
     "Model and images": ExportMode.MODEL_AND_IMAGES,
     "Model only": ExportMode.MODEL_ONLY,
     "Images only": ExportMode.IMAGES_ONLY,
 }
 
-# Server-side ModelExportMode is a numeric enum. Send the matching integer so
-# the endpoint binds it (ModelOnly=0, ModelAndImages=1, ImagesOnly=2,
-# ManifestOnly=3).
-_EXPORT_MODE_INT = {
+# Server-side ModelExportMode is a numeric enum; send the integer it binds
+# (ModelOnly=0, ModelAndImages=1, ImagesOnly=2, ManifestOnly=3).
+EXPORT_MODE_INT: dict[ExportMode, int] = {
     ExportMode.MODEL_ONLY: 0,
     ExportMode.MODEL_AND_IMAGES: 1,
     ExportMode.IMAGES_ONLY: 2,
 }
 
+DEFAULT_FLOOR = 95
+NO_MODEL_TITLE = "Pick a model"
+MISSING_NAME_TITLE = "Missing name"
+NO_CHECKPOINT_TITLE = "No trained model"
+NO_CHECKPOINT_TEXT = 'This model has no trained file yet. Choose "Images only", or train the model first.'
 
-def _image_count(images_dir: Path) -> int:
+
+def image_count(images_dir: Path) -> int:
     if not images_dir.exists():
         return 0
     return sum(1 for p in images_dir.iterdir() if p.is_file())
 
 
-class ShareModelDialog(tk.Toplevel):
-    def __init__(self, parent: tk.Misc, *, app: Any, username: str = "") -> None:
-        super().__init__(parent)
-        self.app = app
-        self.db = app.db
-        self.bus = app.bus
-        self.username = username or ""
-        self.model_repo = ModelRepo(self.db)
-        self.cartridge_repo = CartridgeRepo(self.db)
-        self.headstamp_repo = HeadstampRepo(self.db)
+class ShareModelDialog(QDialog):
+    """Metadata form + the packaging/upload run, in one window."""
 
-        self._models = self.model_repo.list()
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        db: Any,
+        api_factory: Callable[[], Any],
+        username: str = "",
+    ) -> None:
+        super().__init__(parent)
+        self.db = db
+        self.api_factory = api_factory
+        self.username = username or ""
+        self.models_repo = ModelRepo(db)
+        self.cartridges_repo = CartridgeRepo(db)
+        self.headstamps_repo = HeadstampRepo(db)
+
+        self._models: list[Model] = self.models_repo.list()
         self._community_cartridges: list[CartridgeInfo] = []
         self._in_flight = False
+        # The UID the server accepted, once a share has completed.
+        self.shared_uid: str | None = None
+        # Replaceable hooks — a test never opens a native dialog.
+        self.notify: Callable[[str, str], None] = self._show_message
+        self.confirm: Callable[[str, str], bool] = self._ask
 
-        self.title("Share a Model")
-        # wm_transient's stub wants a Wm (Tk/Toplevel), not the broader
-        # Misc `parent` type; winfo_toplevel() resolves to the actual
-        # top-level window, which is what Tk already does internally.
-        self.transient(parent.winfo_toplevel())
-        self.resizable(False, False)
+        self.setWindowTitle("Share a model")
+        self.setModal(True)
 
-        frm = ttk.Frame(self, padding=12)
-        frm.pack(fill=tk.BOTH, expand=True)
-
-        row = 0
-        ttk.Label(frm, text="Model:", anchor=tk.W).grid(row=row, column=0, sticky="w", pady=4)
-        self.model_combo = ttk.Combobox(frm, state="readonly", width=34, values=[m.name for m in self._models])
-        self.model_combo.grid(row=row, column=1, sticky="ew", pady=4)
-        self.model_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_model_selected())
-        if self._models:
-            self.model_combo.current(0)
-
-        row += 1
-        ttk.Label(frm, text="Share name:", anchor=tk.W).grid(row=row, column=0, sticky="w", pady=4)
-        self.name_var = tk.StringVar()
-        ttk.Entry(frm, textvariable=self.name_var, width=36).grid(row=row, column=1, sticky="ew", pady=4)
-
-        row += 1
-        ttk.Label(frm, text="Description:", anchor=tk.NW).grid(row=row, column=0, sticky="nw", pady=4)
-        self.desc_text = tk.Text(frm, width=36, height=3, wrap=tk.WORD)
-        self.desc_text.grid(row=row, column=1, sticky="ew", pady=4)
-
-        row += 1
-        ttk.Label(frm, text="Cartridge:", anchor=tk.W).grid(row=row, column=0, sticky="w", pady=4)
-        self.cartridge_combo = ttk.Combobox(frm, state="readonly", width=34)
-        self.cartridge_combo.grid(row=row, column=1, sticky="ew", pady=4)
-
-        row += 1
-        ttk.Label(frm, text="Include:", anchor=tk.W).grid(row=row, column=0, sticky="w", pady=4)
-        self.export_combo = ttk.Combobox(frm, state="readonly", width=34, values=list(_EXPORT_LABELS.keys()))
-        self.export_combo.current(0)
-        self.export_combo.grid(row=row, column=1, sticky="ew", pady=4)
-
-        row += 1
-        fb_box = ttk.LabelFrame(frm, text="Community Feedback Loop", padding=8)
-        fb_box.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(8, 2))
-        self.fb_enabled_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            fb_box,
-            text="Enable feedback loop",
-            variable=self.fb_enabled_var,
-            command=self._on_fb_toggle,
-        ).pack(anchor=tk.W)
-        floor_row = ttk.Frame(fb_box)
-        floor_row.pack(fill=tk.X, pady=(4, 0))
-        ttk.Label(floor_row, text="Confidence floor", style="Muted.TLabel").pack(side=tk.LEFT)
-        self.fb_floor_var = tk.IntVar(value=95)
-        self.fb_floor_spin = ttk.Spinbox(
-            floor_row,
-            from_=0,
-            to=100,
-            width=6,
-            textvariable=self.fb_floor_var,
-            state="disabled",
-        )
-        self.fb_floor_spin.pack(side=tk.LEFT, padx=(6, 0))
-        ttk.Label(floor_row, text="%", style="Muted.TLabel").pack(side=tk.LEFT, padx=(2, 0))
-
-        frm.columnconfigure(1, weight=1)
-
-        self.status_var = tk.StringVar(value="")
-        ttk.Label(frm, textvariable=self.status_var, style="Muted.TLabel", wraplength=360, justify=tk.LEFT).grid(
-            row=row + 1,
-            column=0,
-            columnspan=2,
-            sticky="ew",
-            pady=(6, 0),
-        )
-
-        btn = ttk.Frame(self, padding=(12, 0, 12, 12))
-        btn.pack(fill=tk.X)
-        self.cancel_btn = ttk.Button(btn, text="Close", command=self._on_close)
-        self.cancel_btn.pack(side=tk.RIGHT, padx=(8, 0))
-        self.share_btn = ttk.Button(btn, text="Share", command=self._share, style="Accent.TButton")
-        self.share_btn.pack(side=tk.RIGHT)
-
-        self.bus.subscribe("share/progress", self._on_progress)
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.bind("<Escape>", lambda _e: self._on_close())
+        column = QVBoxLayout(self)
+        column.setContentsMargins(14, 14, 14, 14)
+        column.setSpacing(10)
+        column.addLayout(self._build_form())
+        column.addWidget(self._build_feedback_box())
+        self.status_label = QLabel("", self)
+        self.status_label.setObjectName("dialogHint")
+        self.status_label.setWordWrap(True)
+        column.addWidget(self.status_label)
+        column.addLayout(self._build_buttons())
 
         self._on_model_selected()
-        self._load_community_cartridges()
+        self.load_community_cartridges()
 
-    # ----- helpers ------------------------------------------------------------
+    # ----- construction -------------------------------------------------------
 
-    def _selected_model(self):
-        idx = self.model_combo.current()
-        if idx < 0 or idx >= len(self._models):
+    def _build_form(self) -> QFormLayout:
+        form = QFormLayout()
+        self.model_combo = QComboBox(self)
+        self.model_combo.addItems([m.name for m in self._models])
+        self.model_combo.currentIndexChanged.connect(lambda _i: self._on_model_selected())
+        form.addRow("Model", self.model_combo)
+
+        self.name_edit = QLineEdit(self)
+        form.addRow("Share name", self.name_edit)
+
+        self.description_edit = QPlainTextEdit(self)
+        self.description_edit.setFixedHeight(72)
+        form.addRow("Description", self.description_edit)
+
+        self.cartridge_combo = QComboBox(self)
+        self.cartridge_combo.setMinimumWidth(240)
+        form.addRow("Cartridge", self.cartridge_combo)
+
+        self.export_combo = QComboBox(self)
+        self.export_combo.addItems(list(EXPORT_LABELS))
+        form.addRow("Include", self.export_combo)
+        return form
+
+    def _build_feedback_box(self) -> QGroupBox:
+        box = QGroupBox("Community feedback loop", self)
+        row = QHBoxLayout(box)
+        self.fb_enabled_check = QCheckBox("Enable feedback loop", box)
+        self.fb_enabled_check.toggled.connect(self._on_feedback_toggled)
+        row.addWidget(self.fb_enabled_check)
+        caption = QLabel("Confidence floor", box)
+        caption.setObjectName("mutedLabel")
+        row.addWidget(caption)
+        self.fb_floor_spin = QSpinBox(box)
+        self.fb_floor_spin.setRange(0, 100)
+        self.fb_floor_spin.setValue(DEFAULT_FLOOR)
+        self.fb_floor_spin.setSuffix(" %")
+        self.fb_floor_spin.setEnabled(False)
+        row.addWidget(self.fb_floor_spin)
+        row.addStretch(1)
+        return box
+
+    def _build_buttons(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.share_button = QPushButton("Share", self)
+        self.share_button.setObjectName("action")
+        self.share_button.setDefault(True)
+        self.share_button.clicked.connect(self.share)
+        row.addWidget(self.share_button)
+        self.close_button = QPushButton("Close", self)
+        self.close_button.clicked.connect(self.close)
+        row.addWidget(self.close_button)
+        return row
+
+    # ----- form state ---------------------------------------------------------
+
+    def selected_model(self) -> Model | None:
+        index = self.model_combo.currentIndex()
+        if index < 0 or index >= len(self._models):
             return None
-        return self._models[idx]
+        return self._models[index]
 
-    def _local_cartridge_name(self, model) -> str:
-        cart = self.cartridge_repo.get(model.cartridge_id) if model else None
-        return cart.name if cart else ""
+    def _local_cartridge_name(self, model: Model | None) -> str:
+        cartridge = self.cartridges_repo.get(model.cartridge_id) if model is not None else None
+        return cartridge.name if cartridge else ""
 
     def _on_model_selected(self) -> None:
-        model = self._selected_model()
+        model = self.selected_model()
         if model is None:
             return
-        self.name_var.set(model.name)
+        self.name_edit.setText(model.name)
         self._sync_cartridge_default(model)
 
-    def _sync_cartridge_default(self, model) -> None:
+    def _sync_cartridge_default(self, model: Model) -> None:
         """Preselect the community cartridge matching the model's local one."""
         target = self._local_cartridge_name(model).casefold()
-        for i, c in enumerate(self._community_cartridges):
-            if c.name.casefold() == target:
-                self.cartridge_combo.current(i)
+        for index, cartridge in enumerate(self._community_cartridges):
+            if cartridge.name.casefold() == target:
+                self.cartridge_combo.setCurrentIndex(index)
                 return
 
-    def _on_fb_toggle(self) -> None:
-        self.fb_floor_spin.config(state="normal" if self.fb_enabled_var.get() else "disabled")
+    def _on_feedback_toggled(self, enabled: bool) -> None:
+        self.fb_floor_spin.setEnabled(bool(enabled))
 
-    def _load_community_cartridges(self) -> None:
-        def _work():
-            return CommunityApi(auth=self.app.auth).get_available_cartridges()
+    def load_community_cartridges(self) -> None:
+        def work(_report: Callable[[str], None]) -> Any:
+            return self.api_factory().get_available_cartridges()
 
-        def _ok(carts: list[CartridgeInfo]):
-            self._community_cartridges = list(carts)
-            self.cartridge_combo["values"] = [c.name for c in carts]
-            if carts:
-                self.cartridge_combo.current(0)
-                model = self._selected_model()
-                if model is not None:
-                    self._sync_cartridge_default(model)
+        worker = ApiWorker(None, work)
+        # Bound methods, never lambdas/closures: a lambda's connection lives
+        # as long as the WORKER, so a queued emission arriving after this
+        # dialog is destroyed would run it against freed widgets (the access
+        # violations Windows CI kept taking at event pumps). Qt drops a
+        # bound-method connection — queued deliveries included — when its
+        # receiver dies.
+        worker.done.connect(self._on_cartridges_loaded)
+        worker.failed.connect(self._on_cartridges_failed)
+        start_worker(worker)
 
-        def _fail(exc: Exception):
-            self.status_var.set(f"Could not load cartridges: {exc}")
+    def _on_cartridges_loaded(self, cartridges: Any) -> None:
+        self._community_cartridges = list(cartridges or [])
+        self.cartridge_combo.clear()
+        self.cartridge_combo.addItems([c.name for c in self._community_cartridges])
+        model = self.selected_model()
+        if self._community_cartridges and model is not None:
+            self.cartridge_combo.setCurrentIndex(0)
+            self._sync_cartridge_default(model)
 
-        self.app.run_worker(_work, on_done=_ok, on_error=_fail)
+    def _on_cartridges_failed(self, exc: Any) -> None:
+        self.status_label.setText(f"Could not load cartridges: {exc}")
 
-    def _on_progress(self, message: str) -> None:
-        try:
-            self.status_var.set(str(message))
-        except tk.TclError:
-            pass
+    def selected_cartridge(self, model: Model) -> tuple[int, str]:
+        """The community cartridge to publish under, else the local name with id 0."""
+        index = self.cartridge_combo.currentIndex()
+        if 0 <= index < len(self._community_cartridges):
+            cartridge = self._community_cartridges[index]
+            return cartridge.id, cartridge.name
+        return 0, self._local_cartridge_name(model)
 
     # ----- share --------------------------------------------------------------
 
-    def _share(self) -> None:
+    def share(self) -> None:
         if self._in_flight:
             return
-        model = self._selected_model()
+        model = self.selected_model()
         if model is None:
-            messagebox.showinfo("Pick a model", "Select a model to share.", parent=self)
+            self.notify(NO_MODEL_TITLE, "Select a model to share.")
             return
-        name = self.name_var.get().strip()
+        name = self.name_edit.text().strip()
         if not name:
-            messagebox.showwarning("Missing name", "Enter a share name.", parent=self)
+            self.notify(MISSING_NAME_TITLE, "Enter a share name.")
             return
-        mode = _EXPORT_LABELS[self.export_combo.get()]
-        wants_model = mode in (ExportMode.MODEL_ONLY, ExportMode.MODEL_AND_IMAGES)
-        model_file = model.model_path if (model.model_path and Path(model.model_path).exists()) else None
-        if wants_model and model_file is None:
-            messagebox.showwarning(
-                "No trained model",
-                'This model has no trained file yet. Choose "Images only" or train the model first.',
-                parent=self,
-            )
+        mode = EXPORT_LABELS[self.export_combo.currentText()]
+        model_file = Path(model.model_path) if model.model_path and Path(model.model_path).exists() else None
+        if mode in (ExportMode.MODEL_ONLY, ExportMode.MODEL_AND_IMAGES) and model_file is None:
+            self.notify(NO_CHECKPOINT_TITLE, NO_CHECKPOINT_TEXT)
             return
 
-        cart_idx = self.cartridge_combo.current()
-        if 0 <= cart_idx < len(self._community_cartridges):
-            cart = self._community_cartridges[cart_idx]
-            cart_id, cart_name = cart.id, cart.name
-        else:
-            cart_id, cart_name = 0, self._local_cartridge_name(model)
-
-        desc = self.desc_text.get("1.0", tk.END).strip()
-        fb_enabled = bool(self.fb_enabled_var.get())
-        fb_floor = int(self.fb_floor_var.get()) if fb_enabled else 0
-        hs_names = [h.name for h in self.headstamp_repo.list_for_model(model.id)]
+        cartridge_id, cartridge_name = self.selected_cartridge(model)
+        description = self.description_edit.toPlainText().strip()
+        feedback_enabled = self.fb_enabled_check.isChecked()
+        feedback_floor = int(self.fb_floor_spin.value()) if feedback_enabled else 0
+        headstamps = [h.name for h in self.headstamps_repo.list_for_model(model.id)]
         images_dir = paths.model_images_dir(model.id)
-        image_count = _image_count(images_dir)
-        # Reuse an existing community UID (re-publish/update) or mint a new one.
-        # Standard GUID *with* dashes.
+        # Re-publishing keeps the UID and bumps the version; a first share mints
+        # a UID (a standard GUID, with dashes) and publishes at the current one.
         uid = model.community_model_uid or str(uuid4())
         version = model.model_version + 1 if model.community_model_uid else model.model_version
 
+        model_info = {
+            "ModelName": name,
+            "PublishDate": datetime.now(UTC).isoformat(),
+            "CartridgeId": cartridge_id,
+            "CartridgeName": cartridge_name,
+            "HeadstampCount": len(headstamps),
+            "ImageCount": image_count(images_dir),
+            "ModelDescription": description,
+            "Author": self.username,
+            "ModelExportMode": EXPORT_MODE_INT.get(mode, 1),
+            "FeedbackLoopEnabled": feedback_enabled,
+            "FeedbackLoopConfidenceFloor": feedback_floor,
+            "ModelVersion": version,
+            "CommunityModelUID": uid,
+        }
+
         self._set_in_flight(True)
-        self.status_var.set("Packaging…")
+        self.status_label.setText("Packaging…")
 
-        def _work():
-            api = CommunityApi(auth=self.app.auth)
-            # Export into the app's own temp folder, not the OS temp dir, which
-            # on Windows can be locked or cleaned mid-write. Created fresh and
-            # cleaned up afterwards regardless of success.
-            scratch_root = paths.export_temp_dir()
-            scratch_root.mkdir(parents=True, exist_ok=True)
-            tmpdir = tempfile.mkdtemp(dir=str(scratch_root))
-            try:
-                zip_out = Path(tmpdir) / f"{uid}.zip"
-
-                def _exp_prog(step: int, total: int) -> None:
-                    self.bus.post("share/progress", f"Packaging {step}/{total} files…")
-
-                zip_path, manifest_path = export_for_share(
-                    zip_out,
-                    model,
-                    cart_name,
-                    hs_names,
-                    mode=mode,
-                    model_file=model_file,
-                    images_dir=images_dir,
-                    community_uid=uid,
-                    feedback_enabled=fb_enabled,
-                    feedback_floor=fb_floor,
-                    progress=_exp_prog,
-                )
-                model_info = {
-                    "ModelName": name,
-                    "PublishDate": datetime.now(UTC).isoformat(),
-                    "CartridgeId": cart_id,
-                    "CartridgeName": cart_name,
-                    "HeadstampCount": len(hs_names),
-                    "ImageCount": image_count,
-                    "ModelDescription": desc,
-                    "Author": self.username,
-                    "ModelExportMode": _EXPORT_MODE_INT.get(mode, 1),
-                    "FeedbackLoopEnabled": fb_enabled,
-                    "FeedbackLoopConfidenceFloor": fb_floor,
-                    "ModelVersion": version,
-                    "CommunityModelUID": uid,
-                }
-
-                last_pct = [-1]
-
-                def _up_prog(sent: int, total: int) -> None:
-                    pct = int(sent * 100 / total) if total else 0
-                    if pct != last_pct[0]:
-                        last_pct[0] = pct
-                        mb_done = sent / (1024 * 1024)
-                        mb_total = total / (1024 * 1024)
-                        self.bus.post(
-                            "share/progress",
-                            f"Uploading {pct}% ({mb_done:.1f} / {mb_total:.1f} MB)",
-                        )
-
-                final_uid = api.share_model(
-                    zip_path=zip_path,
-                    manifest_path=manifest_path,
-                    model_info=model_info,
-                    progress=_up_prog,
-                )
-                return final_uid or uid, version
-            finally:
-                shutil.rmtree(tmpdir, ignore_errors=True)
-
-        def _ok(result):
-            final_uid, final_version = result
-            # Stamp the community identity onto the local model so it shows as
-            # installed/up-to-date in the Community browser.
-            model.community_model_uid = final_uid
-            model.model_version = final_version
-            try:
-                self.model_repo.update(model)
-            except Exception:
-                pass
-            self._set_in_flight(False)
-            self.status_var.set("Shared successfully.")
-            messagebox.showinfo(
-                "Model shared",
-                f"“{name}” has been uploaded to the community.",
-                parent=self,
+        def work(report: Callable[[str], None]) -> tuple[str, int]:
+            return self._package_and_upload(
+                report,
+                model=model,
+                model_info=model_info,
+                mode=mode,
+                model_file=model_file,
+                images_dir=images_dir,
+                headstamps=headstamps,
+                cartridge_name=cartridge_name,
+                uid=uid,
+                version=version,
+                feedback_enabled=feedback_enabled,
+                feedback_floor=feedback_floor,
             )
-            self._on_close()
 
-        def _fail(exc: Exception):
+        worker = ApiWorker(None, work)
+        worker.progress.connect(self.status_label.setText)
+        # Receiver-bound, not a lambda — see _on_cartridges_loaded's note.
+        # The share context rides on the dialog so the slot signature stays
+        # a plain bound method Qt can drop with its receiver.
+        self._pending_share = (model, name)
+        worker.done.connect(self._on_share_done)
+        worker.failed.connect(self._on_failed)
+        start_worker(worker)
+
+    def _on_share_done(self, result: Any) -> None:
+        model, name = self._pending_share
+        self._on_shared(model, name, result)
+
+    def _package_and_upload(
+        self,
+        report: Callable[[str], None],
+        *,
+        model: Model,
+        model_info: dict[str, Any],
+        mode: ExportMode,
+        model_file: Path | None,
+        images_dir: Path,
+        headstamps: list[str],
+        cartridge_name: str,
+        uid: str,
+        version: int,
+        feedback_enabled: bool,
+        feedback_floor: int,
+    ) -> tuple[str, int]:
+        """Worker body: build the archive, run the upload sequence, return (uid, version)."""
+        # Scratch in the app's own data dir, not the OS temp dir, which on
+        # Windows can be locked or cleaned mid-write. Removed either way.
+        scratch_root = paths.export_temp_dir()
+        scratch_root.mkdir(parents=True, exist_ok=True)
+        tmpdir = tempfile.mkdtemp(dir=str(scratch_root))
+        try:
+            zip_path, manifest_path = export_for_share(
+                Path(tmpdir) / f"{uid}.zip",
+                model,
+                cartridge_name,
+                headstamps,
+                mode=mode,
+                model_file=model_file,
+                images_dir=images_dir,
+                community_uid=uid,
+                feedback_enabled=feedback_enabled,
+                feedback_floor=feedback_floor,
+                progress=lambda step, total: report(f"Packaging {step}/{total} files…"),
+            )
+            last_pct = [-1]
+
+            def upload_progress(sent: int, total: int) -> None:
+                pct = int(sent * 100 / total) if total else 0
+                if pct == last_pct[0]:
+                    return
+                last_pct[0] = pct
+                report(f"Uploading {pct}% ({sent / (1024 * 1024):.1f} / {total / (1024 * 1024):.1f} MB)")
+
+            final_uid = self.api_factory().share_model(
+                zip_path=zip_path,
+                manifest_path=manifest_path,
+                model_info=model_info,
+                progress=upload_progress,
+            )
+            return final_uid or uid, version
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def _on_shared(self, model: Model, name: str, result: tuple[str, int]) -> None:
+        """Stamp the community identity onto the local row — and nothing else.
+
+        The row keeps its ``model_type``, so a model you published is still
+        yours to train; only the browser's installed/up-to-date check reads
+        what is written here.
+        """
+        final_uid, final_version = result
+        self.shared_uid = final_uid
+        fresh = self.models_repo.get(model.id) or model
+        fresh.community_model_uid = final_uid
+        fresh.model_version = final_version
+        try:
+            self.models_repo.update(fresh)
+        except Exception as exc:
+            # The upload succeeded; only the local bookkeeping failed.
+            self.status_label.setText(f"Shared, but the local model could not be updated: {exc}")
             self._set_in_flight(False)
-            self.status_var.set(f"Share failed: {exc}")
-            messagebox.showerror("Share failed", str(exc), parent=self)
+            return
+        self._set_in_flight(False)
+        self.status_label.setText("Shared successfully.")
+        self.notify("Model shared", f"“{name}” has been uploaded to the community.")
+        self.accept()
 
-        self.app.run_worker(_work, on_done=_ok, on_error=_fail)
+    def _on_failed(self, exc: Any) -> None:
+        self._set_in_flight(False)
+        self.status_label.setText(f"Share failed: {exc}")
+        self.notify("Share failed", str(exc))
 
     def _set_in_flight(self, busy: bool) -> None:
         self._in_flight = busy
-        state = "disabled" if busy else "normal"
-        try:
-            self.share_btn.config(state=state)
-        except tk.TclError:
-            pass
+        self.share_button.setEnabled(not busy)
+        self.share_button.setText("Sharing…" if busy else "Share")
 
-    def _on_close(self) -> None:
-        if self._in_flight:
-            if not messagebox.askyesno(
-                "Upload in progress",
-                "An upload is still running. Close anyway?",
-                parent=self,
-            ):
-                return
-        try:
-            self.bus.unsubscribe("share/progress", self._on_progress)
-        except Exception:
-            pass
-        self.destroy()
+    # ----- lifecycle ----------------------------------------------------------
+
+    def closeEvent(self, event: Any) -> None:
+        if self._in_flight and not self.confirm("Upload in progress", "An upload is still running. Close anyway?"):
+            event.ignore()
+            return
+        super().closeEvent(event)
+
+    def reject(self) -> None:
+        if self._in_flight and not self.confirm("Upload in progress", "An upload is still running. Close anyway?"):
+            return
+        super().reject()
+
+    # ----- dialog hooks -------------------------------------------------------
+
+    def _show_message(self, title: str, text: str) -> None:
+        QMessageBox.information(self, title, text)
+
+    def _ask(self, title: str, text: str) -> bool:
+        return QMessageBox.question(self, title, text) == QMessageBox.StandardButton.Yes

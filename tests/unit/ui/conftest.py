@@ -1,75 +1,140 @@
-"""Shared fakes for the serial console/monitor UI tests.
+"""Shared offscreen fixtures for the UI tests.
 
-The console is embedded twice (Serial Config tab, detached monitor), so both
-test modules drive it against the same stand-in app.
+Every window here is built against a REAL SQLite-backed ``Config`` on a temp
+dir — the Sort dashboard reads slot assignments straight out of it, so a stub
+config would only test the stub.
 """
 
 from __future__ import annotations
 
+import os
+import time
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-pytest.importorskip("tkinter")
+# Must be set before anything constructs a QApplication.
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+# A non-root conftest's collection hook still sees the whole item list, so the
+# filter below is what scopes it. Derived from __file__, never spelled out: a
+# stale path literal here silently puts the whole suite back under coverage.
+_THIS_DIR = Path(__file__).resolve().parent
 
 
-class FakeBroker:
-    def __init__(self, *, connected: bool = True) -> None:
-        self.port = "/dev/ttyFAKE"
-        self.baud = 9600
-        self.firmware_version = "7.2.1"
-        self.is_connected = connected
-        self.raw: list[str] = []
+def pytest_collection_modifyitems(config: Any, items: list) -> None:
+    """Run every test in this directory outside coverage measurement.
 
-    def send_raw(self, text: str) -> None:
-        self.raw.append(text)
-
-
-class FakeConfig:
-    def __init__(self) -> None:
-        self.serial: dict[str, Any] = {"port": "/dev/ttyFAKE", "baud": 9600}
-        self.saved = 0
-
-    def save(self) -> None:
-        self.saved += 1
+    The full suite under pytest-cov's tracer segfaults, and which test dies
+    is decided by allocation noise, not by any line of ours: bisected to the
+    point where adding or removing a single unrelated QAction flips the
+    crash, on both CI runners and locally, on every coverage core and with
+    branch coverage on or off. Uninstrumented, the suite has never crashed.
+    pytest-cov's ``no_cover`` marker is the supported per-test off switch.
+    """
+    for item in items:
+        if Path(item.path).resolve().is_relative_to(_THIS_DIR):
+            item.add_marker(pytest.mark.no_cover)
 
 
-class FakeApp:
-    def __init__(self, *, broker: Any = None, backlog: list | None = None) -> None:
-        from sorter.control.events import EventBus
+@pytest.fixture(scope="session")
+def qapp():
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
 
-        self.bus = EventBus()
-        self.config = FakeConfig()
-        self.broker = broker
-        self.serial_backlog = backlog or []
-        self.reconnects: list[str] = []
-        self.disconnects = 0
-        self.monitors_opened = 0
+    return QApplication.instance() or QApplication([])
 
-    def connect_serial(self, port: str | None = None) -> None:
-        self.reconnects.append(port or "")
 
-    def disconnect_serial(self) -> None:
-        self.disconnects += 1
+@pytest.fixture(autouse=True)
+def _collect_between_tests():
+    """Flush deferred deletions between tests — and nothing else.
 
-    def open_serial_monitor(self) -> None:
-        self.monitors_opened += 1
+    Almost no test pumps Qt's event loop (``drain_until`` drains only the
+    bus), so deleteLater work from every test otherwise piles up until the
+    suite's rare ``processEvents()`` call flushes hundreds of tests' worth at
+    once — which is where the Windows runner took a deterministic access
+    violation. Flushing per test keeps that backlog at one test's worth.
 
-    def set_status(self, message: str) -> None:
-        pass
+    Deliberately NOT a generic ``processEvents()``: delivering arbitrary
+    queued events into half-torn windows is what segfaulted Linux when that
+    was tried. And deliberately no forced ``gc.collect()``: shiboken wrappers
+    finalizing against C++ objects mid-teardown reproducibly corrupted the
+    heap on the Windows CI runner (0xc0000374). Qt test suites (pytest-qt
+    included) run without forced collection; so do these.
+    """
+    yield
+    from PySide6.QtCore import QEvent
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is not None:
+        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 @pytest.fixture
-def root():
-    import tkinter as tk
+def config(tmp_path: Path):
+    from sorter.data.config import Config
+    from sorter.data.db import Database
 
-    from sorter.ui.theme import apply_theme
+    db = Database(tmp_path / "casesorter.db")
+    db.ensure_initialized()
+    yield Config(db).load()
+    # Explicit close, or every window teardown surfaces a ResourceWarning
+    # once the finalizer actually runs (window_factory deleteLater's).
+    db.close()
 
-    try:
-        r = tk.Tk()
-    except tk.TclError:
-        pytest.skip("no display")
-    r.withdraw()
-    apply_theme(r)
-    yield r
-    r.destroy()
+
+@pytest.fixture
+def window_factory(qapp) -> Any:
+    """Build a window on a given config; every one is closed at teardown."""
+    from sorter.ui.app import QtMainWindow
+
+    windows = []
+
+    def _make(cfg: Any) -> Any:
+        # auto_connect=False: constructing the shell must not open a camera or a port.
+        window = QtMainWindow(cfg, auto_connect=False)
+        windows.append(window)
+        return window
+
+    yield _make
+    for window in windows:
+        window.close()
+        window.deleteLater()
+
+
+@pytest.fixture
+def window(window_factory, config):
+    return window_factory(config)
+
+
+def seed_model(config: Any, assignments: dict[str, int], *, name: str = "Test model") -> int:
+    """Create a model, activate it, and assign headstamps to slots."""
+    from sorter.data.models import Model
+    from sorter.data.repository import CartridgeRepo, HeadstampRepo, ModelRepo, SettingsRepo
+
+    cartridge = CartridgeRepo(config.db).list()[0]
+    model = ModelRepo(config.db).create(Model(name=name, cartridge_id=cartridge.id))
+    headstamps = HeadstampRepo(config.db)
+    for headstamp, slot in assignments.items():
+        headstamps.add(model.id, headstamp, slot)
+    SettingsRepo(config.db).set_active_model_id(model.id)
+    return model.id
+
+
+def drain_until(window: Any, predicate: Callable[[], bool], timeout_s: float = 5.0) -> bool:
+    """Pump the bus on this thread until ``predicate`` holds (or time runs out).
+
+    The worker/broker threads post; only the main thread may dispatch, so this
+    is the test-side stand-in for the drain QTimer.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        window.bus.drain()
+        if predicate():
+            return True
+        time.sleep(0.01)
+    window.bus.drain()
+    return predicate()

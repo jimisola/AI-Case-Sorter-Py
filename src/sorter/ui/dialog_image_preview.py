@@ -1,119 +1,214 @@
-"""Shared single-image preview popup with reclassify + delete actions.
+"""Zoomed single-image preview with prev/next navigation, reclassify and delete.
 
-Used by both the model image manager and the evaluator's results table. The
-dialog performs the file operation itself (via :mod:`sorter.data.image_store`) and
-notifies the caller through ``on_changed`` so each caller refreshes its own
-view.
+Prev/next walks the caller's current page. Reclassify and delete keep the
+dialog open afterward so browsing continues instead of forcing a reopen from
+the grid.
 
-``on_changed`` payloads:
+``on_changed`` fires after every mutation so the caller (the grid) can resync:
     {"action": "reclassified", "old_path", "new_path", "new_headstamp"}
     {"action": "deleted", "old_path"}
+
+``notify``/``confirm`` are attributes, not direct ``QMessageBox`` calls, so a
+test can drive Reclassify/Delete without a modal.
 """
 
 from __future__ import annotations
 
-import tkinter as tk
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from tkinter import messagebox, ttk
 from typing import Any
 
+import numpy as np
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtWidgets import (
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
+
 from ..data import image_store
-from .theme import PALETTE
-from .widgets import ImagePanel
+
+_PREVIEW = 480
 
 
-class ImagePreviewDialog(tk.Toplevel):
+def bgr_to_pixmap(frame: np.ndarray | None, size: int = _PREVIEW) -> QPixmap:
+    """A BGR numpy frame as a square QPixmap; ``None`` (failed decode) renders blank.
+
+    ``QImage`` borrows the buffer it is handed, so ``.copy()`` is what cuts the
+    result loose — same technique as ``ui.app.frame_to_image``, duplicated
+    rather than imported: this module must not reach for the main window.
+    """
+    if frame is None:
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.black)
+        return pixmap
+    buffer = np.ascontiguousarray(frame)
+    height, width = buffer.shape[:2]
+    image = QImage(buffer.data, width, height, buffer.strides[0], QImage.Format.Format_BGR888).copy()
+    return QPixmap.fromImage(image).scaled(
+        size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+    )
+
+
+class ImagePreviewDialog(QDialog):
+    """One image at a time, with prev/next through ``paths`` and reclassify/delete."""
+
     def __init__(
         self,
-        parent: tk.Misc,
-        image_path: Path | str,
-        headstamps: list[str],
-        current_headstamp: str | None = None,
+        parent: QWidget | None,
+        paths: Sequence[Path | str],
+        index: int,
+        headstamp_names: Sequence[str],
         *,
         on_changed: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         super().__init__(parent)
-        self._path = Path(image_path)
-        self._current = current_headstamp or image_store.parse_headstamp(self._path)
-        self._headstamps = headstamps
+        self._paths: list[Path] = [Path(p) for p in paths]
+        self._index = index
+        self._headstamp_names = list(headstamp_names)
         self._on_changed = on_changed
+        # Attributes, not methods: a test replaces them so nothing modal opens.
+        self.notify: Callable[[str, str], None] = self._warn
+        self.confirm: Callable[[str, str], bool] = self._ask
 
-        self.title("Image preview")
-        # wm_transient's stub wants a Wm (Tk/Toplevel), not the broader
-        # Misc `parent` type; winfo_toplevel() resolves to the actual
-        # top-level window, which is what Tk already does internally.
-        self.transient(parent.winfo_toplevel())
-        self.resizable(False, False)
-        self.configure(bg=PALETTE["bg_window"])
+        self.setWindowTitle("Image preview")
+        column = QVBoxLayout(self)
 
-        wrap = ttk.Frame(self, padding=12, style="Window.TFrame")
-        wrap.pack(fill=tk.BOTH, expand=True)
+        self.image_label = QLabel(self)
+        self.image_label.setObjectName("imagePreview")
+        self.image_label.setFixedSize(_PREVIEW, _PREVIEW)
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        column.addWidget(self.image_label)
 
-        self._panel = ImagePanel(wrap, width=480, height=480)
-        self._panel.pack()
-        try:
-            import cv2
+        self.info_label = QLabel(self)
+        self.info_label.setObjectName("mutedLabel")
+        column.addWidget(self.info_label)
 
-            self._panel.show_bgr(cv2.imread(str(self._path)))
-        except Exception:
-            self._panel.show_bgr(None)
+        nav = QHBoxLayout()
+        self.prev_button = QPushButton("◀ Prev", self)
+        self.next_button = QPushButton("Next ▶", self)
+        self.prev_button.clicked.connect(self.show_prev)
+        self.next_button.clicked.connect(self.show_next)
+        nav.addWidget(self.prev_button)
+        nav.addStretch(1)
+        nav.addWidget(self.next_button)
+        column.addLayout(nav)
 
-        ttk.Label(
-            wrap,
-            text=f"Classification: {self._current}    File: {self._path.name}",
-            style="Subtitle.TLabel",
-        ).pack(anchor=tk.W, pady=(8, 6))
+        actions = QHBoxLayout()
+        actions.addWidget(QLabel("Reclassify to", self))
+        self.target_combo = QComboBox(self)
+        self.target_combo.addItems(self._headstamp_names)
+        actions.addWidget(self.target_combo)
+        self.reclassify_button = QPushButton("Reclassify", self)
+        self.reclassify_button.setObjectName("action")
+        self.reclassify_button.clicked.connect(self.reclassify)
+        actions.addWidget(self.reclassify_button)
+        self.delete_button = QPushButton("Delete", self)
+        self.delete_button.setObjectName("danger")
+        self.delete_button.clicked.connect(self.delete_current)
+        actions.addWidget(self.delete_button)
+        actions.addStretch(1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
+        buttons.rejected.connect(self.reject)
+        actions.addWidget(buttons)
+        column.addLayout(actions)
 
-        row = ttk.Frame(wrap, style="Window.TFrame")
-        row.pack(fill=tk.X)
-        ttk.Label(row, text="Reclassify to", style="Muted.TLabel").pack(side=tk.LEFT)
-        self._combo = ttk.Combobox(row, state="readonly", width=26, values=headstamps)
-        if self._current in headstamps:
-            self._combo.set(self._current)
-        elif headstamps:
-            self._combo.current(0)
-        self._combo.pack(side=tk.LEFT, padx=(6, 6))
-        ttk.Button(row, text="Reclassify", command=self._reclassify, style="Accent.TButton").pack(side=tk.LEFT)
-        ttk.Button(row, text="Delete", command=self._delete, style="Danger.TButton").pack(side=tk.LEFT, padx=(6, 0))
-        ttk.Button(row, text="Close", command=self.destroy).pack(side=tk.RIGHT)
+        self._render()
 
-        self.bind("<Escape>", lambda _e: self.destroy())
+    def _warn(self, title: str, text: str) -> None:
+        QMessageBox.warning(self, title, text)
 
-    def _reclassify(self) -> None:
-        target = self._combo.get()
-        if not target or target == self._current:
-            self.destroy()
+    def _ask(self, title: str, text: str) -> bool:
+        return QMessageBox.question(self, title, text) == QMessageBox.StandardButton.Yes
+
+    @property
+    def current_path(self) -> Path:
+        return self._paths[self._index]
+
+    @property
+    def index(self) -> int:
+        return self._index
+
+    def _render(self) -> None:
+        path = self.current_path
+        import cv2
+
+        self.image_label.setPixmap(bgr_to_pixmap(cv2.imread(str(path))))
+        headstamp = image_store.parse_headstamp(path)
+        self.info_label.setText(
+            f"Classification: {headstamp}    File: {path.name}    ({self._index + 1} of {len(self._paths)})"
+        )
+        combo_index = self.target_combo.findText(headstamp)
+        if combo_index >= 0:
+            self.target_combo.setCurrentIndex(combo_index)
+        elif self.target_combo.count():
+            self.target_combo.setCurrentIndex(0)
+        self.prev_button.setEnabled(self._index > 0)
+        self.next_button.setEnabled(self._index < len(self._paths) - 1)
+        self.reclassify_button.setEnabled(bool(self._headstamp_names))
+
+    def show_prev(self) -> None:
+        if self._index > 0:
+            self._index -= 1
+            self._render()
+
+    def show_next(self) -> None:
+        if self._index < len(self._paths) - 1:
+            self._index += 1
+            self._render()
+
+    def keyPressEvent(self, event: Any) -> None:
+        if event.key() == Qt.Key.Key_Left:
+            self.show_prev()
+        elif event.key() == Qt.Key.Key_Right:
+            self.show_next()
+        elif event.key() == Qt.Key.Key_Escape:
+            self.reject()
+        else:
+            super().keyPressEvent(event)
+
+    def reclassify(self) -> None:
+        target = self.target_combo.currentText()
+        current = image_store.parse_headstamp(self.current_path)
+        if not target or target == current:
             return
-        new_path = image_store.reclassify(self._path, target)
+        new_path = image_store.reclassify(self.current_path, target)
         if new_path is None:
-            messagebox.showwarning(
-                "Reclassify failed",
-                "Could not reclassify — a file for that headstamp may already exist.",
-                parent=self,
-            )
+            self.notify("Reclassify failed", "Could not reclassify — a file for that headstamp may already exist.")
             return
+        old_path = self._paths[self._index]
+        self._paths[self._index] = new_path
         if self._on_changed:
             self._on_changed(
                 {
                     "action": "reclassified",
-                    "old_path": str(self._path),
+                    "old_path": str(old_path),
                     "new_path": str(new_path),
                     "new_headstamp": target,
                 }
             )
-        self.destroy()
+        self._render()
 
-    def _delete(self) -> None:
-        if not messagebox.askyesno(
-            "Delete image",
-            f"Delete this image?\n\n{self._path.name}",
-            parent=self,
-        ):
+    def delete_current(self) -> None:
+        path = self.current_path
+        if not self.confirm("Delete image", f"Delete this image?\n\n{path.name}"):
             return
-        if not image_store.delete(self._path):
-            messagebox.showerror("Delete failed", "Could not delete the file.", parent=self)
+        if not image_store.delete(path):
+            self.notify("Delete failed", "Could not delete the file.")
             return
+        del self._paths[self._index]
         if self._on_changed:
-            self._on_changed({"action": "deleted", "old_path": str(self._path)})
-        self.destroy()
+            self._on_changed({"action": "deleted", "old_path": str(path)})
+        if not self._paths:
+            self.accept()
+            return
+        if self._index >= len(self._paths):
+            self._index = len(self._paths) - 1
+        self._render()

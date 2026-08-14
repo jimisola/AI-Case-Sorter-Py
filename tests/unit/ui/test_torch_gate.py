@@ -1,351 +1,423 @@
-"""The PyTorch install gate: who gets prompted, and who never does.
+"""The Qt PyTorch install gate: who gets prompted, what gets installed, and how
+the subprocess output reaches the console.
 
-The rule under test is that torch is installed the first time something
-actually needs it and never before — so an AI Config user is never prompted,
-and a local-model user is prompted *before* the machine feeds a case rather
-than after the run dies on it.
+Three properties are pinned here, and each has cost real breakage before:
+
+* an AI Config user is never prompted (the gate short-circuits on
+  ``local_inference.is_installed`` — a ``find_spec`` probe, never an import);
+* every argv the dialog can build is assembled from pyproject's ``[ml]`` extra,
+  read at install time (CLAUDE.md §8), so a version bump can't drift the
+  runtime install away from the declared one;
+* worker output crosses to the widgets through a queue drained by a main-thread
+  timer, never from the worker thread itself (CLAUDE.md §8).
+
+No real install and no real modal runs here: ``build_command`` points the
+streaming path at a throwaway ``python -c`` process, and nothing is ``exec()``ed.
 """
 
 from __future__ import annotations
 
+import subprocess
+import sys
+import time
+import tomllib
+from collections.abc import Callable
 from pathlib import Path
-from typing import cast
+from typing import Any
 
 import pytest
 
-from sorter.data.db import Database
-from sorter.data.models import Model
-from sorter.data.repository import CartridgeRepo, ModelRepo, SettingsRepo
-from sorter.ml import classifier, local_inference
+pytest.importorskip("PySide6")
+
+from sorter import paths
+from sorter.ml import local_inference
+from sorter.ml.gpu_detect import GpuInfo
+from sorter.ui import torch_gate
+from sorter.ui.dialog_install_torch import (
+    _CUDA_INDEX,
+    _CUDA_INDEX_BY_OS,
+    TorchInstallDialog,
+    build_install_command,
+    ml_pin_targets,
+)
+from sorter.ui.torch_gate import TorchGate
+
+# A loop that keeps printing until it is killed — the stand-in for a long pip.
+LOOP_SCRIPT = "import time\nfor i in range(10000):\n    print('line', i, flush=True)\n    time.sleep(0.01)\n"
 
 
-def _seed_db(tmp_path: Path) -> Database:
-    db = Database(tmp_path / "gate.db")
-    db.ensure_initialized()
-    return db
+def pump_until(qapp: Any, predicate: Callable[[], bool], timeout_s: float = 5.0) -> bool:
+    """Bounded poll on the Qt event loop — the stand-in for a mainloop.
 
-
-def _local_model(db: Database, tmp_path: Path) -> Model:
-    """An active model with a checkpoint on disk — i.e. one that needs torch."""
-    cart = CartridgeRepo(db).create("9mm-gate")
-    ckpt = tmp_path / "m.pth"
-    ckpt.write_bytes(b"NOTAREALCHECKPOINT")
-    model = ModelRepo(db).create(Model(name="Local", cartridge_id=cart.id))
-    model.model_path = str(ckpt)
-    ModelRepo(db).update(model)
-    SettingsRepo(db).set_active_model_id(model.id)
-    return model
-
-
-# ----- the routing predicate ------------------------------------------------
-# These guard the property that makes the gate correct: it must fire in
-# exactly the cases where classify_active would reach local_inference.
-
-
-def test_ai_config_mode_does_not_use_local_inference(tmp_path: Path) -> None:
-    db = _seed_db(tmp_path)
-    SettingsRepo(db).clear_active_model()
-    assert classifier.uses_local_inference(db) is False
-
-
-def test_active_model_with_checkpoint_uses_local_inference(tmp_path: Path) -> None:
-    db = _seed_db(tmp_path)
-    _local_model(db, tmp_path)
-    assert classifier.uses_local_inference(db) is True
-
-
-def test_an_active_model_routes_locally_even_without_a_checkpoint(
-    tmp_path: Path,
-) -> None:
-    """Routing follows the active model, not the checkpoint.
-
-    A missing checkpoint is a failure to report, not a reason to switch to
-    HTTP — so this still counts as local, and `checkpoint_problem` is what
-    tells the user it won't work.
+    The drain timer only fires while events are processed, so a test that wants
+    worker output must pump for it. No unconditional sleeps: the loop exits the
+    moment the predicate holds.
     """
-    db = _seed_db(tmp_path)
-    seed = ModelRepo(db).list()[0]
-    SettingsRepo(db).set_active_model_id(seed.id)
-    assert seed.model_path in (None, "")
-    assert classifier.uses_local_inference(db) is True
-    assert classifier.has_local_checkpoint(seed) is False
-    assert classifier.checkpoint_problem(db) is not None
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        qapp.processEvents()
+        if predicate():
+            return True
+        time.sleep(0.005)
+    qapp.processEvents()
+    return predicate()
 
 
-def test_a_deleted_checkpoint_is_reported_not_routed_to_http(
-    tmp_path: Path,
-) -> None:
-    db = _seed_db(tmp_path)
-    model = _local_model(db, tmp_path)
-    assert model.model_path is not None  # _local_model always sets one
-    Path(model.model_path).unlink()
-    assert classifier.uses_local_inference(db) is True
-    assert classifier.checkpoint_problem(db) is not None
+class FakeDialog:
+    """Records what the gate asked for; opens nothing."""
 
+    instances: list[FakeDialog] = []
 
-def test_no_db_does_not_use_local_inference() -> None:
-    assert classifier.uses_local_inference(None) is False
-
-
-# ----- the cheap presence probe ---------------------------------------------
-
-
-def test_is_installed_does_not_import_torch(monkeypatch) -> None:
-    """`is_installed` must not pay the import — it runs on the UI thread.
-
-    Importing torch here would also run the device probe and the environment
-    dump's synthetic benchmarks, freezing the UI on every button press.
-    """
-    called = []
-
-    def _boom():
-        called.append(1)
-        raise AssertionError("is_installed must not import torch")
-
-    monkeypatch.setattr(local_inference, "_torch", _boom)
-    local_inference.is_installed()
-    assert not called
-
-
-def test_is_installed_reports_false_when_torch_absent(monkeypatch) -> None:
-    import importlib.util
-
-    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
-    assert local_inference.is_installed() is False
-
-
-def test_is_installed_reports_true_when_both_present(monkeypatch) -> None:
-    import importlib.util
-
-    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
-    assert local_inference.is_installed() is True
-
-
-def test_is_installed_requires_torchvision_too(monkeypatch) -> None:
-    """torch alone isn't enough — local_inference imports torchvision.models."""
-    import importlib.util
-
-    monkeypatch.setattr(
-        importlib.util,
-        "find_spec",
-        lambda name: object() if name == "torch" else None,
-    )
-    assert local_inference.is_installed() is False
-
-
-def test_is_installed_survives_a_broken_module(monkeypatch) -> None:
-    """find_spec raises for a half-installed package; that means 'no', not a crash."""
-    import importlib.util
-
-    def _raise(name):
-        raise ValueError("__spec__ is None")
-
-    monkeypatch.setattr(importlib.util, "find_spec", _raise)
-    assert local_inference.is_installed() is False
-
-
-# ----- the gate itself ------------------------------------------------------
-
-pytest.importorskip("tkinter")
-
-import tkinter as tk  # noqa: E402
-
-from sorter.ui import torch_gate  # noqa: E402
-
-# ensure_torch's `parent` only ever needs to be a valid `after()`/dialog
-# anchor; these tests replace the dialog with `_FakeDialog`, which never
-# touches it, so a real Tk widget (and the display it would require) is
-# unnecessary — stand in with `None` typed as the `tk.Misc` it never uses.
-_NO_PARENT = cast(tk.Misc, None)
-
-
-class _FakeDialog:
-    """Stands in for TorchInstallDialog — constructing the real one shells out
-    to nvidia-smi and needs a display."""
-
-    instances: list[_FakeDialog] = []
-
-    def __init__(self, parent, *, on_success=None, on_cancel=None, reason=None):
+    def __init__(self, parent: Any = None, *, on_success=None, on_cancel=None, reason=None) -> None:
         self.parent = parent
         self.on_success = on_success
         self.on_cancel = on_cancel
         self.reason = reason
-        _FakeDialog.instances.append(self)
+        self.opened = False
+        FakeDialog.instances.append(self)
+
+    def open(self) -> None:
+        self.opened = True
 
 
 @pytest.fixture
-def fake_dialog(monkeypatch):
-    _FakeDialog.instances = []
-    monkeypatch.setattr(torch_gate, "TorchInstallDialog", _FakeDialog)
-    return _FakeDialog
+def fake_dialogs():
+    FakeDialog.instances = []
+    yield FakeDialog.instances
+    FakeDialog.instances = []
 
 
-def test_gate_passes_through_when_torch_is_installed(monkeypatch, fake_dialog) -> None:
-    monkeypatch.setattr(torch_gate.local_inference, "is_installed", lambda: True)
-    assert torch_gate.ensure_torch(_NO_PARENT, lambda: None) is True
-    assert fake_dialog.instances == []
+@pytest.fixture
+def no_torch(monkeypatch):
+    monkeypatch.setattr(local_inference, "is_installed", lambda: False)
 
 
-def test_gate_blocks_and_offers_install_when_torch_is_missing(
-    monkeypatch,
-    fake_dialog,
-) -> None:
-    monkeypatch.setattr(torch_gate.local_inference, "is_installed", lambda: False)
-    ran = []
-    assert (
-        torch_gate.ensure_torch(
-            _NO_PARENT,
-            lambda: ran.append("proceed"),
-            reason="Sorting needs PyTorch",
-        )
-        is False
+@pytest.fixture
+def dialog_factory(qapp):
+    """Build dialogs with a stubbed GPU probe; close them all at teardown."""
+    dialogs: list[TorchInstallDialog] = []
+
+    def _make(*, gpu: GpuInfo | None = None, **kwargs: Any) -> TorchInstallDialog:
+        dialog = TorchInstallDialog(detect=lambda: gpu, **kwargs)
+        dialogs.append(dialog)
+        return dialog
+
+    yield _make
+    for dialog in dialogs:
+        dialog.cancel()
+        dialog.deleteLater()
+    qapp.processEvents()
+
+
+# ----- the gate --------------------------------------------------------------
+
+
+def test_installed_torch_short_circuits_without_a_dialog(monkeypatch, fake_dialogs) -> None:
+    monkeypatch.setattr(local_inference, "is_installed", lambda: True)
+    calls: list[int] = []
+
+    gate = TorchGate(None, dialog_factory=FakeDialog)
+
+    assert gate(lambda: calls.append(1), reason="Sorting needs PyTorch") is True
+    assert fake_dialogs == []
+    # The gate itself never runs the action; its True says "carry on".
+    assert calls == []
+
+
+def test_missing_torch_opens_the_dialog_and_returns_false(no_torch, fake_dialogs) -> None:
+    gate = TorchGate("parent-window", dialog_factory=FakeDialog)
+    proceed = lambda: None  # noqa: E731
+
+    assert gate(proceed, reason="Sorting needs PyTorch") is False
+    (dialog,) = fake_dialogs
+    assert dialog.opened is True
+    assert dialog.parent == "parent-window"
+    assert dialog.on_success is proceed
+    assert dialog.reason == "Sorting needs PyTorch"
+
+
+def test_success_callback_is_the_gated_action(no_torch, fake_dialogs) -> None:
+    calls: list[int] = []
+    gate = TorchGate(None, dialog_factory=FakeDialog)
+    gate(lambda: calls.append(1))
+
+    fake_dialogs[0].on_success()
+    assert calls == [1]
+
+
+def test_offer_remembers_a_decline_for_the_session(no_torch, fake_dialogs) -> None:
+    """Train's Feed offers rather than gates, so "no thanks" must stick."""
+    resumed: list[str] = []
+    gate = TorchGate(None, dialog_factory=FakeDialog)
+
+    assert gate.offer(lambda: resumed.append("feed"), key="predictions") is False
+    assert len(fake_dialogs) == 1
+    # Declining re-enters the action — that is what makes the feed still happen.
+    fake_dialogs[0].on_cancel()
+    assert resumed == ["feed"]
+
+    assert gate.offer(lambda: resumed.append("feed"), key="predictions") is True
+    assert len(fake_dialogs) == 1
+
+
+def test_offer_is_remembered_per_gate_not_globally(no_torch, fake_dialogs) -> None:
+    TorchGate(None, dialog_factory=FakeDialog).offer(lambda: None)
+    TorchGate(None, dialog_factory=FakeDialog).offer(lambda: None)
+    assert len(fake_dialogs) == 2
+
+
+def test_hard_gate_asks_again_after_a_decline(no_torch, fake_dialogs) -> None:
+    """Start can't run without torch, so it re-asks every press."""
+    gate = TorchGate(None, dialog_factory=FakeDialog)
+    gate(lambda: None)
+    fake_dialogs[0].on_cancel = None
+    gate(lambda: None)
+    assert len(fake_dialogs) == 2
+
+
+def test_module_level_ensure_torch_is_the_documented_front_door(no_torch, monkeypatch, fake_dialogs) -> None:
+    monkeypatch.setattr(torch_gate, "TorchInstallDialog", FakeDialog)
+    assert torch_gate.ensure_torch("win", lambda: None, reason="Training needs PyTorch") is False
+    assert fake_dialogs[0].reason == "Training needs PyTorch"
+
+
+# ----- the install command ---------------------------------------------------
+
+
+def _pyproject_ml_pins() -> list[str]:
+    with (paths.app_root() / "pyproject.toml").open("rb") as handle:
+        data = tomllib.load(handle)
+    return list(data["project"]["optional-dependencies"]["ml"])
+
+
+def test_the_pin_reader_returns_the_pyproject_ml_extra() -> None:
+    """CLAUDE.md §8: the [ml] extra is the only place the torch version lives."""
+    targets = ml_pin_targets()
+    assert targets is not None
+    assert list(targets) == _pyproject_ml_pins()
+
+
+def test_the_cuda_index_table_covers_every_platform_the_gpu_flow_reaches() -> None:
+    """The GPU build only ever runs where nvidia-smi does, i.e. these two.
+
+    ``tests/integration/test_torch_wheel_index.py`` resolves each pin against
+    each index for real; this is the offline half — that the table has an
+    entry per platform and that the module-level pick comes out of it.
+    """
+    assert set(_CUDA_INDEX_BY_OS) == {"linux", "win32"}
+    assert _CUDA_INDEX in _CUDA_INDEX_BY_OS.values()
+
+
+def test_cpu_command_prefers_uv_over_bare_pip() -> None:
+    cmd = build_install_command(use_gpu=False, uv="/fake/.uv/bin/uv", pip_available=True)
+    assert cmd == ["/fake/.uv/bin/uv", "pip", "install", "--python", sys.executable, *_pyproject_ml_pins()]
+
+
+def test_cuda_command_appends_the_wheel_index() -> None:
+    cmd = build_install_command(use_gpu=True, uv="/fake/.uv/bin/uv", pip_available=True)
+    assert cmd == [
+        "/fake/.uv/bin/uv",
+        "pip",
+        "install",
+        "--python",
+        sys.executable,
+        *_pyproject_ml_pins(),
+        "--index-url",
+        _CUDA_INDEX,
+    ]
+
+
+def test_falls_back_to_pip_when_uv_is_absent() -> None:
+    cmd = build_install_command(use_gpu=False, uv=None, pip_available=True)
+    assert cmd == [sys.executable, "-u", "-m", "pip", "install", *_pyproject_ml_pins()]
+
+
+def test_no_installer_at_all_builds_no_command() -> None:
+    assert build_install_command(use_gpu=False, uv=None, pip_available=False) is None
+
+
+def test_an_unreadable_pin_builds_no_command(monkeypatch) -> None:
+    """A tree whose pyproject.toml is gone installs nothing rather than a guess."""
+    from sorter.ui import dialog_install_torch as qt_dialog
+
+    monkeypatch.setattr(qt_dialog, "ml_pin_targets", lambda: None)
+    assert build_install_command(use_gpu=False, uv="/fake/.uv/bin/uv", pip_available=True) is None
+
+
+def test_the_pin_reader_rejects_another_projects_pyproject(monkeypatch, tmp_path: Path) -> None:
+    """The guard is `project.name` — parents[3] could be anything on disk."""
+    from sorter.ui import dialog_install_torch as qt_dialog
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "something-else"\n[project.optional-dependencies]\nml = ["torch==1.0.0"]\n',
+        encoding="utf-8",
     )
-    # Blocked: the caller's action must NOT have run yet.
-    assert ran == []
-    assert len(fake_dialog.instances) == 1
-    assert fake_dialog.instances[0].reason == "Sorting needs PyTorch"
+    monkeypatch.setattr(qt_dialog, "__file__", str(tmp_path / "src" / "sorter" / "ui" / "dialog_install_torch.py"))
+    assert qt_dialog.ml_pin_targets() is None
 
 
-def test_gate_runs_the_action_only_after_a_successful_install(
-    monkeypatch,
-    fake_dialog,
-) -> None:
-    monkeypatch.setattr(torch_gate.local_inference, "is_installed", lambda: False)
-    ran = []
-    torch_gate.ensure_torch(_NO_PARENT, lambda: ran.append("proceed"))
-    assert ran == []
-    fake_dialog.instances[0].on_success()  # pip finished
-    assert ran == ["proceed"]
+# ----- the dialog ------------------------------------------------------------
 
 
-def test_cancelling_the_install_does_not_run_the_action(
-    monkeypatch,
-    fake_dialog,
-) -> None:
-    monkeypatch.setattr(torch_gate.local_inference, "is_installed", lambda: False)
-    ran = []
-    torch_gate.ensure_torch(_NO_PARENT, lambda: ran.append("proceed"))
-    dialog = fake_dialog.instances[0]
-    if dialog.on_cancel is not None:
-        dialog.on_cancel()
-    assert ran == []
+def test_gpu_probe_runs_off_the_main_thread_and_lands_through_the_queue(qapp, dialog_factory) -> None:
+    gpu = GpuInfo(name="NVIDIA GeForce RTX 4090", compute_capability=8.9)
+    dialog = dialog_factory(gpu=gpu)
+
+    # Nothing installable until the probe answers: what to offer depends on it.
+    assert dialog.gpu_known is False
+    assert dialog.cpu_button.isEnabled() is False
+
+    assert pump_until(qapp, lambda: dialog.gpu_known)
+    assert dialog.gpu == gpu
+    assert "RTX 4090" in dialog.gpu_label.text()
+    assert "8.9" in dialog.gpu_label.text()
+    assert dialog.gpu_button.isVisible() is False  # never shown; visibility follows the parent
+    assert dialog.gpu_button.isEnabled() is True
+    assert dialog.cpu_button.text() == "CPU only"
 
 
-# ----- the security floor ---------------------------------------------------
-# CVE-2026-24747: on torch < 2.10.0 a crafted .pth defeats the
-# weights_only=True unpickler that _load relies on, so a checkpoint from
-# someone else must not be loaded on an older wheel.
+def test_without_a_gpu_only_the_cpu_build_is_offered(qapp, dialog_factory) -> None:
+    dialog = dialog_factory(gpu=None)
+    assert pump_until(qapp, lambda: dialog.gpu_known)
+    assert dialog.cpu_button.text() == "Install PyTorch"
+    assert dialog.cpu_button.isEnabled() is True
+    assert dialog.gpu_button.isVisibleTo(dialog) is False
 
 
-@pytest.fixture(autouse=True)
-def _forget_declined_upgrade():
-    """The declined-offer memory is module state; isolate every test from it."""
-    torch_gate.reset_upgrade_prompt()
-    yield
-    torch_gate.reset_upgrade_prompt()
+def test_gpu_button_asks_for_the_cuda_build(qapp, dialog_factory) -> None:
+    dialog = dialog_factory(gpu=GpuInfo(name="RTX 3090", compute_capability=8.6))
+    assert pump_until(qapp, lambda: dialog.gpu_known)
+    asked: list[bool] = []
+    dialog.build_command = lambda use_gpu: asked.append(use_gpu) or None
+
+    dialog.gpu_button.click()
+    dialog.cpu_button.click()
+    assert asked == [True, False]
 
 
-@pytest.mark.parametrize(
-    ("installed", "expected"),
-    [
-        ("2.9.1", False),  # the version this repo shipped before the bump
-        ("2.2.0", False),
-        ("2.10.0", True),  # exactly the floor
-        ("2.13.0", True),
-        ("2.13.0+cu129", True),  # a wheel-index build carries a local version
-    ],
-)
-def test_meets_min_version(monkeypatch, installed: str, expected: bool) -> None:
-    monkeypatch.setattr(local_inference, "installed_version", lambda: installed)
-    assert local_inference.meets_min_version() is expected
+def test_output_streams_into_the_console_and_cancel_terminates(qapp, dialog_factory) -> None:
+    dialog = dialog_factory(gpu=None)
+    assert pump_until(qapp, lambda: dialog.gpu_known)
+    dialog.build_command = lambda use_gpu: [sys.executable, "-u", "-c", LOOP_SCRIPT]
+
+    dialog.start_install(use_gpu=False)
+    proc = dialog._proc
+    assert proc is not None
+
+    # Lines only reach the widget through the queue + drain timer, so pumping
+    # the event loop is what makes them appear.
+    assert pump_until(qapp, lambda: "line 1" in dialog.console.toPlainText())
+    assert dialog._installing is True
+
+    dialog.cancel()
+    assert pump_until(qapp, lambda: proc.poll() is not None)
+    assert proc.poll() is not None
+    assert dialog._installing is False
 
 
-def test_min_version_fails_open_when_the_version_is_unknowable(monkeypatch) -> None:
-    """A torch with no readable metadata is a source build far more often than
-    an attack, and hard-blocking it would break legitimate setups."""
-    monkeypatch.setattr(local_inference, "installed_version", lambda: None)
-    assert local_inference.meets_min_version() is True
-    monkeypatch.setattr(local_inference, "installed_version", lambda: "not-a-version")
-    assert local_inference.meets_min_version() is True
+def test_a_successful_install_re_enters_the_caller_exactly_once(qapp, dialog_factory) -> None:
+    calls: list[int] = []
+    dialog = dialog_factory(gpu=None, on_success=lambda: calls.append(1))
+    assert pump_until(qapp, lambda: dialog.gpu_known)
+    dialog.build_command = lambda use_gpu: [sys.executable, "-c", "print('ok')"]
+
+    dialog.start_install(use_gpu=False)
+    assert pump_until(qapp, lambda: calls == [1])
+    # Keep pumping: a second call would mean the exit event was handled twice.
+    pump_until(qapp, lambda: False, timeout_s=0.2)
+    assert calls == [1]
+    assert "ok" in dialog.console.toPlainText()
+    assert dialog.result() == int(dialog.DialogCode.Accepted)
 
 
-def _foreign() -> Model:
-    return Model(name="Community", model_type="CommunityManaged")
+def test_a_failed_install_leaves_the_dialog_open(qapp, dialog_factory) -> None:
+    calls: list[int] = []
+    dialog = dialog_factory(gpu=None, on_success=lambda: calls.append(1))
+    assert pump_until(qapp, lambda: dialog.gpu_known)
+    dialog.build_command = lambda use_gpu: [sys.executable, "-c", "import sys; print('boom'); sys.exit(3)"]
+
+    dialog.start_install(use_gpu=False)
+    assert pump_until(qapp, lambda: "Install failed" in dialog.console.toPlainText())
+    assert calls == []
+    assert "boom" in dialog.console.toPlainText()
+    assert dialog._installing is False
+    # Retryable: the buttons come back rather than the dialog closing.
+    assert dialog.cpu_button.isEnabled() is True
+    assert dialog.cpu_button.text() == "Install PyTorch"
 
 
-def _own() -> Model:
-    return Model(name="Mine", model_type="Standard")
+def test_cancel_before_installing_reports_the_decline(qapp, dialog_factory) -> None:
+    declined: list[int] = []
+    dialog = dialog_factory(gpu=None, on_cancel=lambda: declined.append(1))
+    assert pump_until(qapp, lambda: dialog.gpu_known)
+
+    dialog.cancel()
+    assert declined == [1]
+    # Idempotent: Esc after the button must not double-report.
+    dialog.cancel()
+    assert declined == [1]
 
 
-@pytest.fixture
-def _outdated_torch(monkeypatch):
-    monkeypatch.setattr(torch_gate.local_inference, "is_installed", lambda: True)
-    monkeypatch.setattr(torch_gate.local_inference, "meets_min_version", lambda: False)
-    monkeypatch.setattr(torch_gate.local_inference, "installed_version", lambda: "2.9.1")
+def test_cancel_during_an_install_is_not_a_decline_of_the_action(qapp, dialog_factory) -> None:
+    declined: list[int] = []
+    dialog = dialog_factory(gpu=None, on_cancel=lambda: declined.append(1))
+    assert pump_until(qapp, lambda: dialog.gpu_known)
+    dialog.build_command = lambda use_gpu: [sys.executable, "-u", "-c", LOOP_SCRIPT]
+
+    dialog.start_install(use_gpu=False)
+    proc = dialog._proc
+    assert proc is not None
+    dialog.cancel()
+    assert pump_until(qapp, lambda: proc.poll() is not None)
+    assert declined == []
 
 
-def test_foreign_model_on_an_outdated_torch_is_blocked(_outdated_torch, fake_dialog) -> None:
-    ran = []
-    assert torch_gate.ensure_torch(_NO_PARENT, lambda: ran.append("proceed"), model=_foreign()) is False
-    assert ran == []
-    assert len(fake_dialog.instances) == 1
-    # And declining does NOT let it through -- there is no "not now" here.
-    dialog = fake_dialog.instances[0]
-    if dialog.on_cancel is not None:
-        dialog.on_cancel()
-    assert ran == []
-    assert torch_gate.ensure_torch(_NO_PARENT, lambda: ran.append("proceed"), model=_foreign()) is False
-    assert ran == []
+def test_no_uv_and_no_pip_reports_instead_of_spawning(qapp, dialog_factory, monkeypatch) -> None:
+    import importlib.util
+
+    from sorter.ui import dialog_install_torch as qt_dialog
+
+    monkeypatch.setattr(qt_dialog, "find_uv", lambda: None)
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name, *a, **k: None if name == "pip" else real_find_spec(name, *a, **k),
+    )
+    spawned: list[Any] = []
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: spawned.append(a))
+
+    dialog = dialog_factory(gpu=None)
+    assert pump_until(qapp, lambda: dialog.gpu_known)
+    dialog.start_install(use_gpu=False)
+
+    assert spawned == []
+    assert dialog._installing is False
+    assert "Could not find uv or pip" in dialog.console.toPlainText()
 
 
-def test_unknown_provenance_is_treated_as_foreign(_outdated_torch, fake_dialog) -> None:
-    """Omitting `model` must take the conservative branch, not the lenient one."""
-    ran = []
-    assert torch_gate.ensure_torch(_NO_PARENT, lambda: ran.append("proceed")) is False
-    assert ran == []
+def test_an_unreadable_pin_reports_instead_of_spawning(qapp, dialog_factory, monkeypatch) -> None:
+    from sorter.ui import dialog_install_torch as qt_dialog
+
+    monkeypatch.setattr(qt_dialog, "ml_pin_targets", lambda: None)
+    spawned: list[Any] = []
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: spawned.append(a))
+
+    dialog = dialog_factory(gpu=None)
+    assert pump_until(qapp, lambda: dialog.gpu_known)
+    dialog.start_install(use_gpu=False)
+
+    assert spawned == []
+    assert dialog._installing is False
+    assert "Could not read the pinned PyTorch version" in dialog.console.toPlainText()
 
 
-def test_own_model_on_an_outdated_torch_is_offered_not_blocked(_outdated_torch, fake_dialog) -> None:
-    """The user's own checkpoint is not an attack: offer the upgrade, but let
-    them decline and carry on sorting."""
-    ran = []
-    assert torch_gate.ensure_torch(_NO_PARENT, lambda: ran.append("proceed"), model=_own()) is False
-    assert ran == []
-    fake_dialog.instances[0].on_cancel()
-    assert ran == ["proceed"]
+def test_a_command_that_cannot_spawn_fails_without_hanging(qapp, dialog_factory, tmp_path: Path) -> None:
+    dialog = dialog_factory(gpu=None)
+    assert pump_until(qapp, lambda: dialog.gpu_known)
+    dialog.build_command = lambda use_gpu: [str(tmp_path / "definitely-not-here")]
 
-
-def test_a_declined_upgrade_is_remembered_for_the_session(_outdated_torch, fake_dialog) -> None:
-    ran = []
-    torch_gate.ensure_torch(_NO_PARENT, lambda: ran.append("first"), model=_own())
-    fake_dialog.instances[0].on_cancel()
-    # Second action: straight through, no second prompt.
-    assert torch_gate.ensure_torch(_NO_PARENT, lambda: ran.append("second"), model=_own()) is True
-    assert len(fake_dialog.instances) == 1
-
-
-def test_declining_for_an_own_model_still_blocks_a_foreign_one(_outdated_torch, fake_dialog) -> None:
-    """The session-level 'not now' must not become a way to load community
-    models on a vulnerable torch."""
-    torch_gate.ensure_torch(_NO_PARENT, lambda: None, model=_own())
-    fake_dialog.instances[0].on_cancel()
-    ran = []
-    assert torch_gate.ensure_torch(_NO_PARENT, lambda: ran.append("proceed"), model=_foreign()) is False
-    assert ran == []
-
-
-def test_a_completed_upgrade_clears_the_declined_memory(_outdated_torch, fake_dialog) -> None:
-    ran = []
-    torch_gate.ensure_torch(_NO_PARENT, lambda: ran.append("proceed"), model=_own())
-    fake_dialog.instances[0].on_cancel()
-    assert torch_gate._upgrade_declined is True
-    torch_gate.ensure_torch(_NO_PARENT, lambda: None, model=_foreign())
-    fake_dialog.instances[-1].on_success()  # the install finished
-    assert torch_gate._upgrade_declined is False
-
-
-def test_a_current_torch_never_prompts(monkeypatch, fake_dialog) -> None:
-    monkeypatch.setattr(torch_gate.local_inference, "is_installed", lambda: True)
-    monkeypatch.setattr(torch_gate.local_inference, "meets_min_version", lambda: True)
-    assert torch_gate.ensure_torch(_NO_PARENT, lambda: None, model=_foreign()) is True
-    assert fake_dialog.instances == []
+    dialog.start_install(use_gpu=False)
+    assert "Failed to spawn" in dialog.console.toPlainText()
+    assert "Install failed" in dialog.console.toPlainText()
+    assert dialog._installing is False

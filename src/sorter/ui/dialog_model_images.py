@@ -1,214 +1,279 @@
-"""Model image manager.
+"""Training-image browser: filter/count, thumbnail grid, reclassify/delete.
 
-A paged, filterable thumbnail browser for a model's training images with
-per-image preview, bulk reclassify/delete, and a right-click context menu.
-Thumbnails are decoded on a worker thread and handed back to the UI thread via
-the event bus (PhotoImage must be created on the main thread).
+Thumbnails are decoded and downscaled on a background ``QThread`` — cv2
+decode of a full-size image is too slow to do a page of on the UI thread —
+and handed back as plain BGR numpy arrays via a queued signal; ``QPixmap``
+construction happens on receipt, on the main thread.
 
-Launched from the Models tab's per-row "Images" button.
+``notify``/``confirm`` are attributes, not direct ``QMessageBox`` calls, so a
+test can drive Reclassify/Delete without a modal.
 """
 
 from __future__ import annotations
 
-import tkinter as tk
+from collections.abc import Callable
 from pathlib import Path
-from tkinter import messagebox, ttk
 from typing import Any
 
-from .. import paths
+import numpy as np
+from PySide6.QtCore import Qt, QThread, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import (
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
+
 from ..data import image_store
-from ..data.db import Database
-from ..data.models import Model
 from ..data.repository import HeadstampRepo
-from . import sysutil
-from .dialog_image_preview import ImagePreviewDialog
-from .theme import PALETTE
-from .widgets import ScrollableFrame
+from ..paths import model_images_dir
+from .dialog_image_preview import ImagePreviewDialog, bgr_to_pixmap
 
 _TILE_W = 140
-_GUTTER = 8
 _THUMB = 120
+_GUTTER = 8
 _PAGE_SIZES = (20, 50, 100, 150, 200)
+_DEFAULT_PAGE_SIZE = 50
+# Approximates the palette's `bg_input` role at decode time (baked into the
+# thumbnail's pixels, so it can't live-retheme).
+_THUMB_BG = 11
 
 
-def _decode_thumb(path: str, size: int = _THUMB):
-    """Decode + letterbox a thumbnail (worker thread). Returns a PIL image."""
-    try:
-        from PIL import Image
+def _make_thumbnail(frame: np.ndarray, size: int) -> np.ndarray:
+    """Downscale + letterbox a BGR frame into a ``size`` x ``size`` square."""
+    import cv2
 
-        img = Image.open(path)
-        if img.mode not in ("RGB", "L"):
-            img = img.convert("RGB")
-        img.thumbnail((size, size), Image.Resampling.LANCZOS)
-        bg = Image.new("RGB", (size, size), (10, 17, 34))  # PALETTE bg_input
-        bg.paste(img, ((size - img.width) // 2, (size - img.height) // 2))
-        return bg
-    except Exception:
-        return None
+    height, width = frame.shape[:2]
+    scale = min(size / width, size / height)
+    new_w, new_h = max(1, round(width * scale)), max(1, round(height * scale))
+    resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    canvas = np.full((size, size, 3), _THUMB_BG, dtype=np.uint8)
+    y0, x0 = (size - new_h) // 2, (size - new_w) // 2
+    canvas[y0 : y0 + new_h, x0 : x0 + new_w] = resized
+    return canvas
 
 
-class _ThumbTile(tk.Frame):
-    def __init__(self, parent, *, path, headstamp, on_click, on_double, on_context):
-        super().__init__(
-            parent, bg=PALETTE["bg_card"], bd=0, highlightthickness=2, highlightbackground=PALETTE["bg_card"]
-        )
+class _ThumbWorker(QThread):
+    """Decodes + downscales one page of images off the UI thread."""
+
+    ready = Signal(int, str, object)  # token, path, BGR ndarray thumbnail (or None on failed decode)
+
+    def __init__(self, token: int, paths: list[str], size: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.token = token
+        self._paths = paths
+        self._size = size
+
+    def run(self) -> None:
+        import cv2
+
+        for path in self._paths:
+            if self.isInterruptionRequested():
+                return
+            frame = cv2.imread(path)
+            thumb = _make_thumbnail(frame, self._size) if frame is not None else None
+            self.ready.emit(self.token, path, thumb)
+
+
+class _ThumbTile(QFrame):
+    """One image tile: thumbnail + caption, click to select, double-click to preview."""
+
+    clicked = Signal(str)
+    doubleClicked = Signal(str)
+
+    def __init__(self, path: str, headstamp: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
         self.path = path
         self.headstamp = headstamp
         self.selected = False
-        self._photo = None
+        self.setObjectName("thumbTile")
+        self.setFixedWidth(_TILE_W)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
 
-        holder = tk.Frame(self, width=_THUMB, height=_THUMB, bg=PALETTE["bg_input"])
-        holder.pack(padx=4, pady=(4, 2))
-        holder.pack_propagate(False)
-        self._img = tk.Label(holder, bg=PALETTE["bg_input"])
-        self._img.pack(fill=tk.BOTH, expand=True)
-
+        column = QVBoxLayout(self)
+        column.setContentsMargins(4, 4, 4, 4)
+        column.setSpacing(2)
+        self.image_label = QLabel(self)
+        self.image_label.setObjectName("thumbImage")
+        self.image_label.setFixedSize(_THUMB, _THUMB)
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        column.addWidget(self.image_label, 0, Qt.AlignmentFlag.AlignHCenter)
         caption = headstamp if len(headstamp) <= 16 else headstamp[:15] + "…"
-        # `font=(None, 8)` isn't a valid family per the Tk font spec — Tcl
-        # took it literally as a family named "None" rather than "use the
-        # default family". "TkDefaultFont" is the named default font that
-        # actually resolves.
-        self._cap = tk.Label(self, text=caption, bg=PALETTE["bg_card"], fg=PALETTE["text"], font=("TkDefaultFont", 8))
-        self._cap.pack(pady=(0, 4))
+        self.caption_label = QLabel(caption, self)
+        self.caption_label.setObjectName("thumbCaption")
+        self.caption_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        column.addWidget(self.caption_label)
 
-        for w in (self, holder, self._img, self._cap):
-            w.bind("<Button-1>", lambda _e: on_click(self))
-            w.bind("<Double-Button-1>", lambda _e: on_double(self))
-            w.bind("<Button-3>", lambda e: on_context(self, e))
-
-    def set_image(self, photo) -> None:
-        self._photo = photo  # keep a reference so Tk doesn't GC it
-        self._img.configure(image=photo)
+    def set_pixmap(self, pixmap: Any) -> None:
+        self.image_label.setPixmap(pixmap)
 
     def set_selected(self, selected: bool) -> None:
         self.selected = selected
-        color = PALETTE["accent"] if selected else PALETTE["bg_card"]
-        self.configure(highlightbackground=color, highlightcolor=color)
+        self.setProperty("selected", selected)
+        style = self.style()
+        style.unpolish(self)
+        style.polish(self)
+
+    def mousePressEvent(self, event: Any) -> None:
+        self.clicked.emit(self.path)
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event: Any) -> None:
+        self.doubleClicked.emit(self.path)
+        super().mouseDoubleClickEvent(event)
 
 
-class ModelImagesDialog(tk.Toplevel):
-    def __init__(self, parent: tk.Misc, db: Database, model: Model, *, app: Any) -> None:
+class ModelImagesDialog(QDialog):
+    """Filterable, paged thumbnail grid over one model's training images."""
+
+    def __init__(
+        self,
+        parent: QWidget | None,
+        config: Any,
+        model_id: int,
+        images_dir: Path | str | None = None,
+    ) -> None:
         super().__init__(parent)
-        self.db = db
-        self.model = model
-        self.app = app
-        self.images_dir = paths.model_images_dir(model.id)
+        self.config = config
+        self.model_id = model_id
+        self.images_dir = Path(images_dir) if images_dir is not None else model_images_dir(model_id)
         self.images_dir.mkdir(parents=True, exist_ok=True)
-        self._headstamp_names = [h.name for h in HeadstampRepo(db).list_for_model(model.id)]
+        self._headstamp_names = [h.name for h in HeadstampRepo(config.db).list_for_model(model_id)]
 
-        self.title(f"Images — {model.name}")
-        # wm_transient's stub wants a Wm (Tk/Toplevel), not the broader
-        # Misc `parent` type; winfo_toplevel() resolves to the actual
-        # top-level window, which is what Tk already does internally.
-        self.transient(parent.winfo_toplevel())
-        self.resizable(True, True)
-        self.minsize(820, 560)
-        self.configure(bg=PALETTE["bg_window"])
+        self.setWindowTitle("Training images")
+        self.resize(820, 560)
 
         self._filtered: list[Path] = []
-        self._tiles: list[_ThumbTile] = []
+        self.tiles: dict[str, _ThumbTile] = {}
         self._cols = 0
         self._page_index = 0
-        self._page_size = 50
+        self._page_size = _DEFAULT_PAGE_SIZE
         self._load_token = 0
-        self._context_tile: _ThumbTile | None = None
-        self._thumb_topic = f"images/thumb/{id(self)}"
+        self._worker: _ThumbWorker | None = None
+        # Attributes, not methods: a test replaces them so nothing modal opens.
+        self.notify: Callable[[str, str], None] = self._warn
+        self.confirm: Callable[[str, str], bool] = self._ask
 
         self._build_ui()
-        self.app.bus.subscribe(self._thumb_topic, self._on_thumb)
-        self.protocol("WM_DELETE_WINDOW", self._close)
-        self.bind("<Escape>", lambda _e: self._close())
-        self._reload()
+        self.refresh()
 
-    # ----- construction -------------------------------------------------------
+    # ----- construction ---------------------------------------------------
 
     def _build_ui(self) -> None:
-        top = ttk.Frame(self, style="Window.TFrame", padding=(10, 10, 10, 4))
-        top.pack(fill=tk.X)
+        column = QVBoxLayout(self)
 
-        ttk.Label(top, text="Show", style="Muted.TLabel").pack(side=tk.LEFT)
-        self._filter_var = tk.StringVar()
-        self._filter_combo = ttk.Combobox(top, state="readonly", width=22, textvariable=self._filter_var)
-        self._filter_combo.pack(side=tk.LEFT, padx=(6, 12))
-        self._filter_combo.bind("<<ComboboxSelected>>", lambda _e: self._reload(reset_page=True))
+        top = QHBoxLayout()
+        top.addWidget(QLabel("Show", self))
+        self.filter_combo = QComboBox(self)
+        self.filter_combo.currentTextChanged.connect(lambda _text: self.refresh(reset_page=True))
+        top.addWidget(self.filter_combo)
+        top.addSpacing(12)
+        top.addWidget(QLabel("Per page", self))
+        self.pagesize_combo = QComboBox(self)
+        self.pagesize_combo.addItems([str(n) for n in _PAGE_SIZES])
+        self.pagesize_combo.setCurrentText(str(_DEFAULT_PAGE_SIZE))
+        self.pagesize_combo.currentTextChanged.connect(self._on_pagesize)
+        top.addWidget(self.pagesize_combo)
+        top.addSpacing(12)
+        self.open_folder_button = QPushButton("Open folder", self)
+        self.open_folder_button.clicked.connect(self._open_folder)
+        top.addWidget(self.open_folder_button)
+        top.addStretch(1)
+        self.counts_label = QLabel("", self)
+        self.counts_label.setObjectName("mutedLabel")
+        top.addWidget(self.counts_label)
+        column.addLayout(top)
+
+        self._scroll = QScrollArea(self)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._grid_host = QWidget(self._scroll)
+        self._grid = QGridLayout(self._grid_host)
+        self._grid.setContentsMargins(4, 4, 4, 4)
+        self._grid.setSpacing(_GUTTER)
+        self._scroll.setWidget(self._grid_host)
+        self.empty_label = QLabel("No images.", self._grid_host)
+        self.empty_label.setObjectName("mutedLabel")
+        self.empty_label.hide()
+        column.addWidget(self._scroll, 1)
+
+        pager = QHBoxLayout()
+        self.first_button = QPushButton("⏮ First", self)
+        self.prev_button = QPushButton("◀ Prev", self)
+        self.next_button = QPushButton("Next ▶", self)
+        self.last_button = QPushButton("Last ⏭", self)
+        self.first_button.clicked.connect(lambda: self._go(0))
+        self.prev_button.clicked.connect(lambda: self._go(self._page_index - 1))
+        self.next_button.clicked.connect(lambda: self._go(self._page_index + 1))
+        self.last_button.clicked.connect(lambda: self._go(self._page_count() - 1))
+        pager.addWidget(self.first_button)
+        pager.addWidget(self.prev_button)
+        self.page_label = QLabel("", self)
+        self.page_label.setObjectName("mutedLabel")
+        pager.addWidget(self.page_label)
+        pager.addStretch(1)
+        pager.addWidget(self.last_button)
+        pager.addWidget(self.next_button)
+        column.addLayout(pager)
+
+        actions = QHBoxLayout()
+        self.selection_label = QLabel("0 selected", self)
+        self.selection_label.setObjectName("mutedLabel")
+        actions.addWidget(self.selection_label)
+        actions.addStretch(1)
+        actions.addWidget(QLabel("to", self))
+        self.target_combo = QComboBox(self)
+        self.target_combo.addItems(self._headstamp_names)
+        actions.addWidget(self.target_combo)
+        self.reclassify_button = QPushButton("Reclassify selected", self)
+        self.reclassify_button.clicked.connect(self.reclassify_selected)
+        actions.addWidget(self.reclassify_button)
+        self.delete_button = QPushButton("Delete selected", self)
+        self.delete_button.setObjectName("danger")
+        self.delete_button.clicked.connect(self.delete_selected)
+        actions.addWidget(self.delete_button)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
+        buttons.rejected.connect(self.reject)
+        actions.addWidget(buttons)
+        column.addLayout(actions)
+
         self._populate_filter_combo()
-
-        ttk.Label(top, text="Per page", style="Muted.TLabel").pack(side=tk.LEFT)
-        self._pagesize_var = tk.StringVar(value=str(self._page_size))
-        pagesize = ttk.Combobox(
-            top, state="readonly", width=6, textvariable=self._pagesize_var, values=[str(n) for n in _PAGE_SIZES]
-        )
-        pagesize.pack(side=tk.LEFT, padx=(6, 12))
-        pagesize.bind("<<ComboboxSelected>>", lambda _e: self._on_pagesize())
-
-        ttk.Button(top, text="Open folder", command=self._open_folder).pack(side=tk.LEFT)
-        self._counts_var = tk.StringVar(value="")
-        ttk.Label(top, textvariable=self._counts_var, style="Subtle.TLabel").pack(side=tk.RIGHT)
-
-        # ---- thumbnail grid (scrollable) ------------------------------------
-        body = ttk.Frame(self)
-        body.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
-        self._scroll = ScrollableFrame(body)
-        self._scroll.pack(fill=tk.BOTH, expand=True)
-        self._grid = self._scroll.body
-        self._grid.bind("<Configure>", lambda _e: self._reflow(), add="+")
-        self._empty = ttk.Label(
-            self._grid,
-            text="No images.",
-            style="Subtle.TLabel",
-        )
-
-        # ---- pager ----------------------------------------------------------
-        pager = ttk.Frame(self, style="Window.TFrame", padding=(10, 0))
-        pager.pack(fill=tk.X)
-        self._first_btn = ttk.Button(pager, text="⏮ First", width=8, command=lambda: self._go(0))
-        self._prev_btn = ttk.Button(pager, text="◀ Prev", width=8, command=lambda: self._go(self._page_index - 1))
-        self._next_btn = ttk.Button(pager, text="Next ▶", width=8, command=lambda: self._go(self._page_index + 1))
-        self._last_btn = ttk.Button(pager, text="Last ⏭", width=8, command=lambda: self._go(self._page_count() - 1))
-        self._first_btn.pack(side=tk.LEFT)
-        self._prev_btn.pack(side=tk.LEFT, padx=(6, 0))
-        self._page_var = tk.StringVar(value="")
-        ttk.Label(pager, textvariable=self._page_var, style="Muted.TLabel").pack(side=tk.LEFT, padx=12)
-        self._last_btn.pack(side=tk.LEFT)
-        self._next_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        # ---- bulk actions ---------------------------------------------------
-        actions = ttk.Frame(self, style="Window.TFrame", padding=(10, 6, 10, 10))
-        actions.pack(fill=tk.X)
-        self._sel_var = tk.StringVar(value="0 selected")
-        ttk.Label(actions, textvariable=self._sel_var, style="Muted.TLabel").pack(side=tk.LEFT)
-        ttk.Button(actions, text="Close", command=self._close).pack(side=tk.RIGHT)
-        self._delete_btn = ttk.Button(
-            actions, text="Delete selected", command=self._delete_selected, style="Danger.TButton"
-        )
-        self._delete_btn.pack(side=tk.RIGHT, padx=(8, 12))
-        self._reclassify_btn = ttk.Button(actions, text="Reclassify selected", command=self._reclassify_selected)
-        self._reclassify_btn.pack(side=tk.RIGHT, padx=(8, 0))
-        self._target_var = tk.StringVar()
-        self._target_combo = ttk.Combobox(
-            actions, state="readonly", width=20, textvariable=self._target_var, values=self._headstamp_names
-        )
-        if self._headstamp_names:
-            self._target_combo.current(0)
-        self._target_combo.pack(side=tk.RIGHT)
-        ttk.Label(actions, text="to", style="Muted.TLabel").pack(side=tk.RIGHT, padx=6)
+        self._update_selection()
 
     def _populate_filter_combo(self) -> None:
-        values = [image_store.ALL_FILTER] + self._headstamp_names + [image_store.UNKNOWN_FILTER]
-        self._filter_combo["values"] = values
-        self._filter_var.set(image_store.ALL_FILTER)
+        self.filter_combo.blockSignals(True)
+        self.filter_combo.clear()
+        self.filter_combo.addItems([image_store.ALL_FILTER, *self._headstamp_names, image_store.UNKNOWN_FILTER])
+        self.filter_combo.setCurrentText(image_store.ALL_FILTER)
+        self.filter_combo.blockSignals(False)
 
-    # ----- data + paging ------------------------------------------------------
+    def _warn(self, title: str, text: str) -> None:
+        QMessageBox.warning(self, title, text)
+
+    def _ask(self, title: str, text: str) -> bool:
+        return QMessageBox.question(self, title, text) == QMessageBox.StandardButton.Yes
+
+    # ----- data + paging ----------------------------------------------------
+
+    @property
+    def loading(self) -> bool:
+        return self._worker is not None and self._worker.isRunning()
 
     def _scan_filter(self) -> None:
         files = image_store.list_images(self.images_dir)
-        self._filtered = image_store.filter_images(
-            files,
-            self._filter_var.get(),
-            self._headstamp_names,
-        )
-        max_page = max(0, self._page_count() - 1)
-        self._page_index = min(self._page_index, max_page)
+        self._filtered = image_store.filter_images(files, self.filter_combo.currentText(), self._headstamp_names)
+        self._page_index = min(self._page_index, max(0, self._page_count() - 1))
 
     def _page_count(self) -> int:
         if not self._filtered:
@@ -219,20 +284,21 @@ class ModelImagesDialog(tk.Toplevel):
         start = self._page_index * self._page_size
         return self._filtered[start : start + self._page_size]
 
-    def _on_pagesize(self) -> None:
+    def _on_pagesize(self, text: str) -> None:
         try:
-            self._page_size = int(self._pagesize_var.get())
+            self._page_size = int(text)
         except ValueError:
-            self._page_size = 50
-        self._reload(reset_page=True)
+            self._page_size = _DEFAULT_PAGE_SIZE
+        self.refresh(reset_page=True)
 
     def _go(self, page_index: int) -> None:
         page_index = max(0, min(page_index, max(0, self._page_count() - 1)))
         if page_index != self._page_index:
             self._page_index = page_index
-            self._reload()
+            self.refresh()
 
-    def _reload(self, *, reset_page: bool = False) -> None:
+    def refresh(self, *, reset_page: bool = False) -> None:
+        """Re-scan the folder, rebuild the visible page, and kick off thumbnail decode."""
         if reset_page:
             self._page_index = 0
         self._load_token += 1
@@ -241,185 +307,177 @@ class ModelImagesDialog(tk.Toplevel):
         self._build_tiles()
         self._update_pager()
         self._update_selection()
-        page = [str(p) for p in self._page_files()]
+        page = self._page_files()
         if page:
-            self.app.run_worker(lambda: self._decode_page(token, page))
+            self._start_worker(token, [str(p) for p in page])
 
     def _build_tiles(self) -> None:
-        for tile in self._tiles:
-            tile.destroy()
-        self._tiles = []
+        # `empty_label` is shared across reloads; skip it so an empty->populated
+        # transition doesn't deleteLater() the widget the next empty state needs.
+        while self._grid.count():
+            item = self._grid.takeAt(0)
+            widget = item.widget() if item is not None else None
+            if widget is not None and widget is not self.empty_label:
+                widget.setParent(None)
+                widget.deleteLater()
+        self.tiles = {}
         self._cols = 0
         page = self._page_files()
         if not page:
-            self._empty.grid(row=0, column=0, padx=12, pady=12, sticky="w")
+            self.empty_label.show()
+            self._grid.addWidget(self.empty_label, 0, 0)
             return
-        self._empty.grid_forget()
+        self.empty_label.hide()
         for path in page:
-            tile = _ThumbTile(
-                self._grid,
-                path=path,
-                headstamp=image_store.parse_headstamp(path),
-                on_click=self._toggle_tile,
-                on_double=self._open_preview,
-                on_context=self._show_context,
-            )
-            self._tiles.append(tile)
+            tile = _ThumbTile(str(path), image_store.parse_headstamp(path), self._grid_host)
+            tile.clicked.connect(self._toggle_tile)
+            tile.doubleClicked.connect(self._open_preview)
+            tile.customContextMenuRequested.connect(lambda pos, t=tile: self._show_context(t, pos))
+            self.tiles[str(path)] = tile
         self._reflow(force=True)
 
     def _reflow(self, *, force: bool = False) -> None:
-        if not self._tiles:
+        if not self.tiles:
             return
-        width = max(1, self._grid.winfo_width())
+        width = max(1, self._scroll.viewport().width())
         cols = max(1, width // (_TILE_W + _GUTTER))
         if not force and cols == self._cols:
             return
         self._cols = cols
-        for i, tile in enumerate(self._tiles):
+        for i, tile in enumerate(self.tiles.values()):
             row, col = divmod(i, cols)
-            tile.grid(row=row, column=col, padx=_GUTTER // 2, pady=_GUTTER // 2, sticky="nw")
+            self._grid.addWidget(tile, row, col)
 
-    # ----- thumbnail loading (worker thread) ----------------------------------
+    def resizeEvent(self, event: Any) -> None:
+        super().resizeEvent(event)
+        self._reflow()
 
-    def _decode_page(self, token: int, page: list[str]) -> None:
-        for idx, path in enumerate(page):
-            if token != self._load_token:
-                return  # page/filter changed — abandon stale work
-            pil = _decode_thumb(path)
-            if pil is not None:
-                self.app.bus.post(self._thumb_topic, (token, idx, pil))
+    # ----- thumbnail loading (worker thread) --------------------------------
 
-    def _on_thumb(self, payload: tuple[int, int, Any]) -> None:
-        token, idx, pil = payload
-        if token != self._load_token or idx >= len(self._tiles):
+    def _start_worker(self, token: int, paths: list[str]) -> None:
+        if self._worker is not None:
+            self._worker.requestInterruption()
+        worker = _ThumbWorker(token, paths, _THUMB, self)
+        worker.ready.connect(self._on_thumb_ready)
+        worker.finished.connect(lambda w=worker: self._on_worker_finished(w))
+        self._worker = worker
+        worker.start()
+
+    def _on_worker_finished(self, worker: _ThumbWorker) -> None:
+        # Drop the reference before deleteLater() — otherwise the next refresh's
+        # requestInterruption()/wait() touches an already-deleted C++ object.
+        if self._worker is worker:
+            self._worker = None
+        worker.deleteLater()
+
+    def _on_thumb_ready(self, token: int, path: str, thumb: Any) -> None:
+        if token != self._load_token or thumb is None:
             return
-        try:
-            from PIL import ImageTk
+        tile = self.tiles.get(path)
+        if tile is not None:
+            tile.set_pixmap(bgr_to_pixmap(thumb, _THUMB))
 
-            self._tiles[idx].set_image(ImageTk.PhotoImage(pil))
-        except Exception:
-            pass
+    # ----- selection ---------------------------------------------------------
 
-    # ----- selection ----------------------------------------------------------
-
-    def _toggle_tile(self, tile: _ThumbTile) -> None:
+    def _toggle_tile(self, path: str) -> None:
+        tile = self.tiles.get(path)
+        if tile is None:
+            return
         tile.set_selected(not tile.selected)
         self._update_selection()
 
-    def _selected(self) -> list[_ThumbTile]:
-        return [t for t in self._tiles if t.selected]
+    def _selected_tiles(self) -> list[_ThumbTile]:
+        return [t for t in self.tiles.values() if t.selected]
 
     def _update_selection(self) -> None:
-        count = len(self._selected())
-        self._sel_var.set(f"{count} selected")
-        state = tk.NORMAL if count else tk.DISABLED
-        self._delete_btn.configure(state=state)
-        self._reclassify_btn.configure(state=tk.NORMAL if (count and self._headstamp_names) else tk.DISABLED)
+        count = len(self._selected_tiles())
+        self.selection_label.setText(f"{count} selected")
+        self.reclassify_button.setEnabled(bool(count and self._headstamp_names))
+        self.delete_button.setEnabled(bool(count))
 
     def _update_pager(self) -> None:
         total = len(self._filtered)
         count = self._page_count()
         if total == 0:
-            self._page_var.set("Page 0 of 0")
+            self.page_label.setText("Page 0 of 0")
         else:
             start = self._page_index * self._page_size + 1
             end = min(total, (self._page_index + 1) * self._page_size)
-            self._page_var.set(f"Page {self._page_index + 1} of {count}   ({start}–{end} of {total})")
-        self._counts_var.set(f"{total} image" + ("" if total == 1 else "s"))
+            self.page_label.setText(f"Page {self._page_index + 1} of {count}   ({start}–{end} of {total})")
+        self.counts_label.setText(f"{total} image" + ("" if total == 1 else "s"))
         at_first = self._page_index <= 0
         at_last = self._page_index >= count - 1 or count == 0
-        self._first_btn.configure(state=tk.DISABLED if at_first else tk.NORMAL)
-        self._prev_btn.configure(state=tk.DISABLED if at_first else tk.NORMAL)
-        self._next_btn.configure(state=tk.DISABLED if at_last else tk.NORMAL)
-        self._last_btn.configure(state=tk.DISABLED if at_last else tk.NORMAL)
+        self.first_button.setEnabled(not at_first)
+        self.prev_button.setEnabled(not at_first)
+        self.next_button.setEnabled(not at_last)
+        self.last_button.setEnabled(not at_last)
 
-    # ----- mutations ----------------------------------------------------------
+    # ----- mutations -----------------------------------------------------------
 
-    def _reclassify_selected(self) -> None:
-        target = self._target_var.get()
-        selected = self._selected()
+    def reclassify_selected(self) -> None:
+        target = self.target_combo.currentText()
+        selected = self._selected_tiles()
         if not target or not selected:
             return
         for tile in selected:
             image_store.reclassify(tile.path, target)
-        self._reload()
+        self.refresh()
 
-    def _delete_selected(self) -> None:
-        selected = self._selected()
+    def delete_selected(self) -> None:
+        selected = self._selected_tiles()
         if not selected:
             return
-        if not messagebox.askyesno(
-            "Delete images",
-            f"Delete {len(selected)} image(s)? This cannot be undone.",
-            parent=self,
-        ):
+        if not self.confirm("Delete images", f"Delete {len(selected)} image(s)? This cannot be undone."):
             return
-        for tile in selected:
-            image_store.delete(tile.path)
-        self._reload()
+        failed = [tile for tile in selected if not image_store.delete(tile.path)]
+        if failed:
+            self.notify("Delete failed", f"{len(failed)} image(s) could not be deleted — are they open elsewhere?")
+        self.refresh()
 
-    def _open_preview(self, tile: _ThumbTile) -> None:
-        ImagePreviewDialog(
-            self,
-            tile.path,
-            self._headstamp_names,
-            tile.headstamp,
-            on_changed=lambda _change: self._reload(),
-        )
-
-    def _show_context(self, tile: _ThumbTile, event: tk.Event) -> None:
-        self._context_tile = tile
-        menu = tk.Menu(
-            self,
-            tearoff=0,
-            bg=PALETTE["bg_card"],
-            fg=PALETTE["text"],
-            activebackground=PALETTE["accent"],
-            activeforeground=PALETTE["text_inverse"],
-        )
-        menu.add_command(label="Preview", command=lambda: self._open_preview(tile))
-        sub = tk.Menu(
-            menu,
-            tearoff=0,
-            bg=PALETTE["bg_card"],
-            fg=PALETTE["text"],
-            activebackground=PALETTE["accent"],
-            activeforeground=PALETTE["text_inverse"],
-        )
-        for name in self._headstamp_names:
-            sub.add_command(label=name, command=lambda n=name: self._reclassify_one(tile, n))
-        menu.add_cascade(label="Reclassify to", menu=sub, state=tk.NORMAL if self._headstamp_names else tk.DISABLED)
-        menu.add_separator()
-        menu.add_command(label="Delete", command=lambda: self._delete_one(tile))
+    def _open_preview(self, path: str) -> None:
+        page_paths = self._page_files()
         try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
+            index = page_paths.index(Path(path))
+        except ValueError:
+            index = 0
+        dialog = ImagePreviewDialog(
+            self, page_paths, index, self._headstamp_names, on_changed=lambda _change: self.refresh()
+        )
+        dialog.exec()
+
+    def _show_context(self, tile: _ThumbTile, pos: Any) -> None:
+        menu = QMenu(self)
+        menu.addAction("Preview", lambda: self._open_preview(tile.path))
+        reclass_menu = menu.addMenu("Reclassify to")
+        reclass_menu.setEnabled(bool(self._headstamp_names))
+        for name in self._headstamp_names:
+            reclass_menu.addAction(name, lambda n=name: self._reclassify_one(tile, n))
+        menu.addSeparator()
+        menu.addAction("Delete", lambda: self._delete_one(tile))
+        menu.exec(tile.mapToGlobal(pos))
 
     def _reclassify_one(self, tile: _ThumbTile, name: str) -> None:
         image_store.reclassify(tile.path, name)
-        self._reload()
+        self.refresh()
 
     def _delete_one(self, tile: _ThumbTile) -> None:
-        if not messagebox.askyesno(
-            "Delete image",
-            f"Delete this image?\n\n{Path(tile.path).name}",
-            parent=self,
-        ):
+        if not self.confirm("Delete image", f"Delete this image?\n\n{Path(tile.path).name}"):
             return
-        image_store.delete(tile.path)
-        self._reload()
+        if not image_store.delete(tile.path):
+            # A file that would not go must be said out loud (a silent False
+            # left images behind on Windows), not swallowed.
+            self.notify("Delete failed", f"Could not delete {Path(tile.path).name} — is it open elsewhere?")
+        self.refresh()
 
     def _open_folder(self) -> None:
-        if not sysutil.open_path(self.images_dir):
-            messagebox.showinfo("Open folder", str(self.images_dir), parent=self)
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.images_dir))):
+            self.notify("Open folder", str(self.images_dir))
 
-    # ----- lifecycle ----------------------------------------------------------
+    # ----- lifecycle -----------------------------------------------------------
 
-    def _close(self) -> None:
+    def closeEvent(self, event: Any) -> None:
         self._load_token += 1  # abandon any in-flight decode
-        try:
-            self.app.bus.unsubscribe(self._thumb_topic, self._on_thumb)
-        except Exception:
-            pass
-        self.destroy()
+        if self._worker is not None:
+            self._worker.requestInterruption()
+            self._worker.wait(1000)
+        super().closeEvent(event)

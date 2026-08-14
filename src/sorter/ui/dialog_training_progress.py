@@ -1,172 +1,232 @@
-"""Modal training-progress window.
+"""Live training console.
 
-Spawned by `tab_train.py` when the user clicks Train. Subscribes to the
-`training/*` bus topics and updates its progress label + console as the
-subprocess emits markers. Closes automatically on terminal events
-(`training/done`, `training/failed`, `training/cancelled`).
+``TrainingManager`` already turns the subprocess's ``[PROGRESS]`` markers into
+``training/*`` bus events; this window is purely a subscriber. It never touches
+the process: Cancel calls the ``on_cancel`` it was handed (the manager's own
+``cancel``, which owns the SIGTERM→SIGKILL escalation).
+
+Two things it is careful about:
+
+* **It unsubscribes on close.** A deleted Qt widget raises ``RuntimeError``
+  from anywhere in the C++ half, so the handlers have to come off the bus —
+  a liveness guard inside each one is not enough.
+* **Closing while the run is live asks first.** The window is not the run — the
+  subprocess outlives it — so closing it silently would strand a training run
+  with no console and no way back to it.
 """
 
 from __future__ import annotations
 
-import tkinter as tk
 from collections.abc import Callable
-from tkinter import ttk
 from typing import Any
 
+from PySide6.QtGui import QFontDatabase
+from PySide6.QtWidgets import (
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPlainTextEdit,
+    QProgressBar,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
+
 from ..control.events import EventBus
-from .theme import PALETTE
+
+CONSOLE_LINES = 2000
+STARTING_TEXT = "Starting…"
+CLOSE_WHILE_RUNNING_TITLE = "Training is still running"
+CLOSE_WHILE_RUNNING_TEXT = (
+    "Closing this window would leave the training subprocess running with "
+    "nowhere to report.\n\nCancel the run and close?"
+)
 
 
-class TrainingProgressDialog(tk.Toplevel):
+class TrainingProgressDialog(QDialog):
+    """Console + progress bar for one training run.
+
+    ``final_payload`` holds the terminal event's payload once the run ends;
+    the Train page reads it to decide whether a checkpoint was produced.
+    """
+
     def __init__(
         self,
-        parent: tk.Misc,
         bus: EventBus,
         *,
         on_cancel: Callable[[], None],
         on_closed: Callable[[dict[str, Any] | None], None] | None = None,
+        parent: QWidget | None = None,
         title: str = "Training progress",
     ) -> None:
         super().__init__(parent)
         self.bus = bus
         self.on_cancel = on_cancel
         self.on_closed = on_closed
-        self.title(title)
-        # wm_transient's stub wants a Wm (Tk/Toplevel), not the broader
-        # Misc `parent` type; winfo_toplevel() resolves to the actual
-        # top-level window, which is what Tk already does internally.
-        self.transient(parent.winfo_toplevel())
-        self.configure(bg=PALETTE["bg_surface"])
-        self.geometry("720x420")
-        self.protocol("WM_DELETE_WINDOW", self._user_close)
+        self.final_payload: dict[str, Any] | None = None
+        self.finished_run = False
+        self._closed = False
+        # Replaceable so a test can drive the close guard without a modal.
+        self.confirm_close: Callable[[], bool] = self._ask_close
 
-        wrap = ttk.Frame(self, padding=12)
-        wrap.pack(fill=tk.BOTH, expand=True)
+        self.setWindowTitle(title)
+        self.resize(720, 420)
 
-        self.status_var = tk.StringVar(value="Starting…")
-        ttk.Label(wrap, textvariable=self.status_var, style="Header.TLabel").pack(side=tk.TOP, anchor="w")
+        column = QVBoxLayout(self)
+        self.status_label = QLabel(STARTING_TEXT, self)
+        self.status_label.setWordWrap(True)
+        column.addWidget(self.status_label)
 
-        console_wrap = ttk.Frame(wrap, style="Card.TFrame", padding=4)
-        console_wrap.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(8, 8))
-        self.console = tk.Text(
-            console_wrap,
-            height=14,
-            wrap=tk.NONE,
-            bg=PALETTE["bg_input"],
-            fg=PALETTE["text"],
-            insertbackground=PALETTE["accent"],
-            highlightthickness=0,
-            borderwidth=0,
-            state=tk.DISABLED,
-        )
-        self.console.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        ttk.Scrollbar(console_wrap, orient=tk.VERTICAL, command=self.console.yview).pack(side=tk.RIGHT, fill=tk.Y)
-        self.console.config(yscrollcommand=lambda *a: None)  # detached scrollbar
+        self.progress = QProgressBar(self)
+        self.progress.setObjectName("trainingProgress")
+        # Indeterminate until a start/epoch event says how many epochs there are.
+        self.progress.setRange(0, 0)
+        column.addWidget(self.progress)
 
-        btns = ttk.Frame(wrap)
-        btns.pack(side=tk.BOTTOM, fill=tk.X)
-        self._cancel_btn = ttk.Button(btns, text="Cancel training", command=self._cancel, style="Danger.TButton")
-        self._cancel_btn.pack(side=tk.LEFT)
-        self._close_btn = ttk.Button(btns, text="Close", command=self._user_close, state=tk.DISABLED)
-        self._close_btn.pack(side=tk.RIGHT)
+        self.console = QPlainTextEdit(self)
+        self.console.setObjectName("trainingConsole")
+        self.console.setReadOnly(True)
+        self.console.setMaximumBlockCount(CONSOLE_LINES)
+        # Epoch lines are columns of numbers; they only line up in a fixed font.
+        self.console.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        column.addWidget(self.console, 1)
 
-        # Bus subscriptions — we collect (topic, handler) pairs so we can
-        # unsubscribe on close.
-        self._final_payload: dict[str, Any] | None = None
-        self._unsub: list[Callable[[], None]] = []
-        self._subscribe("training/start", self._on_start)
-        self._subscribe("training/epoch", self._on_epoch)
-        self._subscribe("training/log", self._on_log)
-        self._subscribe("training/error", self._on_error)
-        self._subscribe("training/done", self._on_done)
-        self._subscribe("training/failed", self._on_failed)
-        self._subscribe("training/cancelled", self._on_cancelled)
+        row = QHBoxLayout()
+        self.cancel_button = QPushButton("Cancel training", self)
+        self.cancel_button.setObjectName("danger")
+        self.cancel_button.clicked.connect(self.cancel)
+        row.addWidget(self.cancel_button)
+        row.addStretch(1)
+        self.close_button = QPushButton("Close", self)
+        self.close_button.setEnabled(False)
+        self.close_button.clicked.connect(self.close)
+        row.addWidget(self.close_button)
+        column.addLayout(row)
 
-    def _subscribe(self, topic: str, handler: Callable[[Any], None]) -> None:
-        self.bus.subscribe(topic, handler)
-        # Best-effort unsubscribe: EventBus may not expose one. We mark the
-        # dialog as "destroyed" so stale events are dropped.
+        self._subscriptions: list[tuple[str, Callable[[Any], None]]] = []
+        for topic, handler in (
+            ("training/start", self._on_start),
+            ("training/epoch", self._on_epoch),
+            ("training/log", self._on_log),
+            ("training/error", self._on_error),
+            ("training/done", self._on_done),
+            ("training/failed", self._on_failed),
+            ("training/cancelled", self._on_cancelled),
+        ):
+            bus.subscribe(topic, handler)
+            self._subscriptions.append((topic, handler))
+
+    # ----- console ------------------------------------------------------------
+
+    def append(self, text: str) -> None:
+        self.console.appendPlainText(text)
+
+    def console_text(self) -> str:
+        return self.console.toPlainText()
 
     # ----- bus handlers -------------------------------------------------------
 
-    def _alive(self) -> bool:
-        try:
-            return bool(self.winfo_exists())
-        except tk.TclError:
-            return False
-
-    def _append(self, text: str) -> None:
-        if not self._alive():
-            return
-        self.console.config(state=tk.NORMAL)
-        self.console.insert(tk.END, text)
-        self.console.see(tk.END)
-        self.console.config(state=tk.DISABLED)
-
-    def _on_start(self, payload: dict[str, Any]) -> None:
-        if not self._alive():
-            return
-        self.status_var.set(
-            f"Training {payload.get('model', '')} — "
-            f"epochs={payload.get('epochs')} classes={payload.get('classes')} "
-            f"images={payload.get('images')} device={payload.get('device')}"
+    def _on_start(self, payload: Any) -> None:
+        data = payload if isinstance(payload, dict) else {}
+        self._set_total(data.get("epochs"))
+        self.status_label.setText(
+            f"Training {data.get('model', '')} — epochs={data.get('epochs')} "
+            f"classes={data.get('classes')} images={data.get('images')} "
+            f"device={data.get('device')}"
         )
-        self._append(f"[start] {payload}\n")
+        self.append(f"[start] {data}")
 
-    def _on_epoch(self, payload: dict[str, Any]) -> None:
-        if not self._alive():
-            return
-        ep = payload.get("epoch")
-        tot = payload.get("total")
-        tl = payload.get("train_loss")
-        ta = payload.get("train_acc")
-        va = payload.get("val_acc")
-        bits = [
-            f"Epoch {ep}/{tot}",
-            f"train_loss={tl:.4f}" if isinstance(tl, (int, float)) else "",
-            f"train_acc={ta:.4f}" if isinstance(ta, (int, float)) else "",
-            f"val_acc={va:.4f}" if isinstance(va, (int, float)) else "",
-        ]
-        self.status_var.set("  ".join(b for b in bits if b))
-        self._append(f"[epoch] {payload}\n")
+    def _on_epoch(self, payload: Any) -> None:
+        data = payload if isinstance(payload, dict) else {}
+        epoch = data.get("epoch")
+        total = data.get("total")
+        if total:
+            self._set_total(total)
+        if isinstance(epoch, (int, float)):
+            self.progress.setValue(int(epoch))
+        bits = [f"Epoch {epoch}/{total or self.progress.maximum() or '?'}"]
+        for key, caption in (("train_loss", "train_loss"), ("train_acc", "train_acc"), ("val_acc", "val_acc")):
+            value = data.get(key)
+            if isinstance(value, (int, float)):
+                bits.append(f"{caption}={value:.4f}")
+        self.status_label.setText("  ".join(bits))
+        self.append(f"[epoch] {data}")
 
-    def _on_log(self, line: str) -> None:
+    def _on_log(self, line: Any) -> None:
         if line:
-            self._append(line + "\n")
+            self.append(str(line))
 
-    def _on_error(self, line: str) -> None:
+    def _on_error(self, line: Any) -> None:
         if line:
-            self._append(f"[err] {line}\n")
+            self.append(f"[err] {line}")
 
-    def _on_done(self, payload: dict[str, Any]) -> None:
+    def _on_done(self, payload: Any) -> None:
         self._terminal("Done", payload)
 
-    def _on_failed(self, payload: dict[str, Any]) -> None:
-        self._terminal(f"Failed (rc={payload.get('return_code')})", payload)
+    def _on_failed(self, payload: Any) -> None:
+        data = payload if isinstance(payload, dict) else {}
+        self._terminal(f"Failed (rc={data.get('return_code')})", payload)
 
-    def _on_cancelled(self, payload: dict[str, Any]) -> None:
+    def _on_cancelled(self, payload: Any) -> None:
         self._terminal("Cancelled.", payload)
 
-    def _terminal(self, label: str, payload: dict[str, Any]) -> None:
-        if not self._alive():
-            return
-        self._final_payload = payload
-        self.status_var.set(label)
-        self._append(f"[{label.lower()}] {payload}\n")
-        self._cancel_btn.config(state=tk.DISABLED)
-        self._close_btn.config(state=tk.NORMAL)
+    def _set_total(self, total: Any) -> None:
+        if isinstance(total, (int, float)) and int(total) > 0:
+            self.progress.setRange(0, int(total))
 
-    # ----- buttons ------------------------------------------------------------
+    def _terminal(self, label: str, payload: Any) -> None:
+        self.final_payload = payload if isinstance(payload, dict) else None
+        self.finished_run = True
+        self.status_label.setText(label)
+        self.append(f"[{label.lower()}] {payload}")
+        if self.progress.maximum() == 0:
+            # Nothing ever reported an epoch count; stop the busy animation.
+            self.progress.setRange(0, 1)
+        self.progress.setValue(self.progress.maximum())
+        self.cancel_button.setEnabled(False)
+        self.close_button.setEnabled(True)
 
-    def _cancel(self) -> None:
-        self._cancel_btn.config(state=tk.DISABLED)
-        self.status_var.set("Cancel requested…")
+    # ----- buttons / lifecycle ------------------------------------------------
+
+    def cancel(self) -> None:
+        self.cancel_button.setEnabled(False)
+        self.status_label.setText("Cancel requested…")
         self.on_cancel()
 
-    def _user_close(self) -> None:
-        if callable(self.on_closed):
-            self.on_closed(self._final_payload)
-        try:
-            self.destroy()
-        except tk.TclError:
-            pass
+    def _ask_close(self) -> bool:
+        return (
+            QMessageBox.question(self, CLOSE_WHILE_RUNNING_TITLE, CLOSE_WHILE_RUNNING_TEXT)
+            == QMessageBox.StandardButton.Yes
+        )
+
+    def closeEvent(self, event: Any) -> None:
+        """Guard the close while a run is live, then detach from the bus."""
+        if not self.finished_run and not self._closed:
+            if not self.confirm_close():
+                event.ignore()
+                return
+            self.cancel()
+        self._detach()
+        if self.on_closed is not None:
+            self.on_closed(self.final_payload)
+            self.on_closed = None
+        super().closeEvent(event)
+
+    def _detach(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        for topic, handler in self._subscriptions:
+            self.bus.unsubscribe(topic, handler)
+        self._subscriptions = []
+
+
+def build_training_progress_dialog(
+    bus: EventBus,
+    *,
+    on_cancel: Callable[[], None],
+    on_closed: Callable[[dict[str, Any] | None], None] | None = None,
+    parent: QWidget | None = None,
+) -> TrainingProgressDialog:
+    return TrainingProgressDialog(bus, on_cancel=on_cancel, on_closed=on_closed, parent=parent)
