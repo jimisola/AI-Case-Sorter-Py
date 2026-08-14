@@ -441,12 +441,15 @@ def test_edits_land_on_the_active_model_not_on_the_next_one(window, config) -> N
     section.min_radius_spin.setValue(180)
 
     stored_a = ModelRepo(config.db).get(model_a.id)
+    assert stored_a is not None
     assert (stored_a.primer_mask_size, stored_a.hide_primer, stored_a.use_primer_mask) == (160, True, False)
     assert stored_a.image_processing.hough["min_radius"] == 180
     assert stored_a.image_processing.primer_radius == 160
 
     # B never inherits A's edit — Seth's report, from the write side.
-    assert ModelRepo(config.db).get(model_b.id).primer_mask_size == 210
+    stored_b = ModelRepo(config.db).get(model_b.id)
+    assert stored_b is not None
+    assert stored_b.primer_mask_size == 210
     _activate(window, model_b.id)
     assert section.primer_radius_spin.value() == 210
     _activate(window, model_a.id)
@@ -482,7 +485,9 @@ def test_ai_config_mode_keeps_the_settings_global(window, config) -> None:
     section.primer_radius_spin.setValue(144)
 
     assert Config(config.db).load().image_proc["primer_radius"] == 144
-    assert ModelRepo(config.db).get(model.id).primer_mask_size == 135
+    stored = ModelRepo(config.db).get(model.id)
+    assert stored is not None
+    assert stored.primer_mask_size == 135
 
 
 def test_reopening_the_page_picks_up_a_model_editor_change(window, config) -> None:
