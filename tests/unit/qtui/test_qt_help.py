@@ -285,7 +285,7 @@ def test_guide_exists() -> None:
 
 
 def test_every_intra_page_anchor_link_resolves() -> None:
-    text = GUIDE_MD.read_text()
+    text = GUIDE_MD.read_text(encoding="utf-8")
     headings = _headings(text)
     for link in _LINK_RE.findall(text):
         if link.startswith(("http://", "https://", "mailto:")):
@@ -308,7 +308,7 @@ def test_every_topic_the_shell_can_ask_for_has_a_heading() -> None:
     """
     from sorter.qtui.app import ACTIVITIES, AI_CONFIG_ACTIVITY, SETTINGS_SECTIONS
 
-    headings = _headings(GUIDE_MD.read_text())
+    headings = _headings(GUIDE_MD.read_text(encoding="utf-8"))
     # AI Config is the one activity with no page of its own: it navigates to
     # the Settings section of that name, and is covered by the loop below.
     topics = {topic_for(name) for _icon, name in ACTIVITIES if name != AI_CONFIG_ACTIVITY}
@@ -320,7 +320,7 @@ def test_every_topic_the_shell_can_ask_for_has_a_heading() -> None:
 
 def test_no_duplicate_heading_slugs() -> None:
     """A slug collision would silently break both GitHub's and our own anchor resolution."""
-    text = GUIDE_MD.read_text()
+    text = GUIDE_MD.read_text(encoding="utf-8")
     slugs = [_slugify(m.group(2)) for m in _HEADING_RE.finditer(text)]
     duplicates = {slug for slug in slugs if slugs.count(slug) > 1}
     assert not duplicates, f"duplicate heading slugs in GUIDE.md: {duplicates}"
