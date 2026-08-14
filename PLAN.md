@@ -285,3 +285,29 @@ Checked when the Qt UI covers it (not necessarily with the Tk layout):
   carries headstamp names, not slots, so imports land unrouted (guide + PR
   parity note); (3) guide lacks an "Image Processing" heading (F1 falls back);
   (4) build.yml Tk-job comments stale re opencv-headless.
+- 2026-08-14 — the Linux qtui CI segfault (deterministic at
+  test_qt_sort:260 since `6182678`): bisected to pytest-cov's tracer, not
+  our code — reverting/re-adding a single unrelated QAction flips the
+  crash, on every coverage core, branch on or off; uninstrumented the
+  suite has never crashed (reproduced locally on 3.13 and 3.14). Fix:
+  conftest applies pytest-cov's `no_cover` marker to tests/unit/qtui only
+  (`bb95165`) — nothing consumed qtui coverage anyway. Two real fixes
+  fell out of the hunt: all eight qtui `QTimer.singleShot` deferrals now
+  pass their owner as context object so a dying window drops its
+  callbacks (`9f76225`), and window teardown deleteLater+DB-close ended
+  the ResourceWarning drizzle. Windows' Train reflow tests are
+  metrics-derived now (rows-per-column follows the platform font; exact
+  hbar==0 is unattainable there — tolerance is a quarter column).
+- 2026-08-14 — JL live-testing, second dock-UX round: AllowTabbedDocks/
+  AllowNestedDocks (`4bcb347`) — without tabbing, dropping History onto
+  the occupied bottom area is refused by Qt, which reads as "docking is
+  broken"; title-bar tooltips say panels drag and name View → Re-dock
+  panels. Train page regrouped (`2065519`): Training strip at the foot
+  (Sort while training beside Training settings… — "a training setting
+  worn as a shortcut", JL), Feed leads the preview column, splitter
+  handle drops to the group frames, and checkbox/radio indicators are
+  now explicitly styled in every theme (platform style left them
+  invisible → toggles read as labels). Casing ruling (JL): sentence case
+  for controls, Title Case for window/dock titles — app-wide sweep in
+  flight. QtAds noted as the IDE-grade docking upgrade path if Seth
+  wants it: LGPL-2.1+, GPL-3-compatible, PyPI `PySide6-QtAds`.
