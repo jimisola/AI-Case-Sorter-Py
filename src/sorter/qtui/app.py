@@ -106,7 +106,7 @@ from .settings_camera import build_camera_section
 from .settings_imageproc import build_imageproc_section
 from .settings_serial import build_serial_section
 from .slot_grid import SlotGrid
-from .theme import build_stylesheet
+from .theme import build_stylesheet, unavailable_ink
 from .torch_gate import TorchGate
 from .train_page import build_train_page
 
@@ -570,10 +570,10 @@ class QtMainWindow(QMainWindow):
         """
         button = self.sidebar_buttons[name]
         if button.property("unavailable"):
-            role = "text_subtle"
+            color = unavailable_ink(self.palette_colors)
         else:
-            role = "text_highlight" if button.isChecked() else "text_muted"
-        button.setIcon(vector_icon(self._sidebar_icon_names[name], self.palette_colors[role], SIDEBAR_ICON_SIZE))
+            color = self.palette_colors["text_highlight" if button.isChecked() else "text_muted"]
+        button.setIcon(vector_icon(self._sidebar_icon_names[name], color, SIDEBAR_ICON_SIZE))
 
     def _paint_sidebar_icons(self) -> None:
         for name in self.sidebar_buttons:

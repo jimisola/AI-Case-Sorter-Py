@@ -67,16 +67,19 @@ def test_a_muted_activity_is_inked_apart_from_its_neighbours(window, config) -> 
     from sorter.qtui.app import SIDEBAR_ICON_SIZE
     from sorter.qtui.icons import TRAIN
     from sorter.qtui.icons import icon as vector_icon
+    from sorter.qtui.theme import unavailable_ink
 
-    def rendered(role: str):
-        return vector_icon(TRAIN, window.palette_colors[role], SIDEBAR_ICON_SIZE).pixmap(SIDEBAR_ICON_SIZE).toImage()
+    def rendered(color: str):
+        return vector_icon(TRAIN, color, SIDEBAR_ICON_SIZE).pixmap(SIDEBAR_ICON_SIZE).toImage()
 
     train = window.sidebar_buttons["Train"]
     inked = train.icon().pixmap(SIDEBAR_ICON_SIZE).toImage()
 
     assert train.property("unavailable") is True
-    assert inked == rendered("text_subtle")  # dimmer than an ordinary...
-    assert inked != rendered("text_muted")  # ...unchecked neighbour
+    # Blended toward the window, not merely text_subtle: JL read a
+    # text_subtle AI Config as still available.
+    assert inked == rendered(unavailable_ink(window.palette_colors))
+    assert inked != rendered(window.palette_colors["text_muted"])
 
     # And the muting is undone, not merely applied, when the mode allows it.
     from .conftest import seed_model
@@ -86,7 +89,7 @@ def test_a_muted_activity_is_inked_apart_from_its_neighbours(window, config) -> 
     window.bus.drain()
 
     assert train.property("unavailable") is False
-    assert train.icon().pixmap(SIDEBAR_ICON_SIZE).toImage() == rendered("text_muted")
+    assert train.icon().pixmap(SIDEBAR_ICON_SIZE).toImage() == rendered(window.palette_colors["text_muted"])
 
 
 def test_sidebar_fits_the_widest_label(window) -> None:

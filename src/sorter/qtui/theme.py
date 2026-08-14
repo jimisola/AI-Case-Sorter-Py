@@ -21,6 +21,8 @@ INDICATOR_SIZE = 14
 
 # Only these roles are read, so a palette that is missing one (a hand-edited
 # settings row) falls back rather than raising mid-stylesheet.
+from PySide6.QtGui import QColor  # ty: ignore[unresolved-import]
+
 _FALLBACK = {
     "bg_window": "#131313",
     "bg_surface": "#1c1c1c",
@@ -51,6 +53,24 @@ _FALLBACK = {
     "danger_hover": "#f87171",
     "danger_press": "#dc2626",
 }
+
+
+def unavailable_ink(palette: dict[str, str]) -> str:
+    """The mode pair's muted ink: text_subtle pulled 45% toward the window.
+
+    text_subtle alone reads as merely unfocused, not inactive (JL: a muted
+    AI Config still looked available). One function inks both the QSS text
+    rule and the painted icon (app._paint_sidebar_icon), so they can't drift.
+    """
+    a = QColor(palette.get("text_subtle", _FALLBACK["text_subtle"]))
+    b = QColor(palette.get("bg_window", _FALLBACK["bg_window"]))
+    t = 0.45
+    mixed = QColor(
+        round(a.red() + (b.red() - a.red()) * t),
+        round(a.green() + (b.green() - a.green()) * t),
+        round(a.blue() + (b.blue() - a.blue()) * t),
+    )
+    return mixed.name()
 
 
 def build_stylesheet(palette: dict[str, str]) -> str:
@@ -93,7 +113,7 @@ QMainWindow::separator:hover {{ background-color: {c["border_focus"]}; }}
    The :checked twin is spelled out because the rule above would otherwise
    out-specify this one while the muted activity is the open page. */
 #sidebar QToolButton[unavailable="true"],
-#sidebar QToolButton[unavailable="true"]:checked {{ color: {c["text_subtle"]}; }}
+#sidebar QToolButton[unavailable="true"]:checked {{ color: {unavailable_ink(c)}; }}
 /* Splits the always-live surfaces from the Train / AI Config mode pair. */
 #sidebarSeparator {{ background-color: {c["border"]}; margin: 4px 6px; }}
 QMenuBar {{
