@@ -694,24 +694,33 @@ of `qtui/serial_monitor.py`. Custom themes therefore register into the Qt
 registry, not Tk's — one process runs one UI, and the `ui.custom_themes`
 settings row is what the two actually share.
 
-- **Shell (`app.py`).** `QtMainWindow` = an **activity sidebar** (Sort, Train,
-  AI Config, Models, Community; Settings pinned below the stretch) driving a
-  `QStackedWidget` of pages, plus four **docks** — serial monitor (bottom),
+- **Shell (`app.py`).** `QtMainWindow` = an **activity sidebar** in two groups —
+  the always-live surfaces (`ACTIVITIES`: Sort, Models, Community), a hairline
+  (`sidebar_separator`, objectName `sidebarSeparator`, coloured from the
+  palette's `border` role by `qtui/theme.py` alone, so a theme switch needs no
+  hook), then the mode pair (`MODE_ACTIVITIES`: Train, AI Config); Settings
+  stays pinned below the stretch — driving a `QStackedWidget` of pages, plus
+  four **docks** — serial monitor (bottom),
   classification history, the user guide and the theme picker (right, all
   three closed until asked for) — a status bar (camera/serial indicators,
   update affordance, identity + sign-in) and File/View/Help menus. It owns the
   `EventBus`, `Camera`, broker, `RunController` and `AuthManager`, exactly as
-  Tk's `MainWindow` does. Mode drives two entries, and they now **coexist**:
-  **AI Config appears in AI Config mode** (it has no page of its own — the one
-  `AiSection` is already mounted in the Settings stack, so `open_activity`
-  navigates to Settings → AI Config rather than re-parenting it), while
-  **Train is never hidden**. When the active model isn't trainable
-  (`models.is_trainable`) `_set_activity_unavailable` sets the dynamic
-  property `unavailable` on the button — restyled `text_subtle` by
-  `qtui/theme.py` and re-inked by `_paint_sidebar_icon`, since a stylesheet
-  can't reach a QIcon — and leaves it **enabled**: the click must still work,
-  because `train_page`'s stacked explainer panel is what answers it. Hiding
-  it was how JL came not to know Train existed.
+  Tk's `MainWindow` does.
+  **Neither of the mode pair is ever hidden**, and exactly one is *live*:
+  Train ⟺ `models.is_trainable(active model)`, AI Config ⟺ no active model —
+  so a community model leaves neither live. The other gets
+  `_set_activity_unavailable`, which sets the dynamic property `unavailable`
+  on the button — restyled `text_subtle` by `qtui/theme.py` and re-inked by
+  `_paint_sidebar_icon`, since a stylesheet can't reach a QIcon — and leaves
+  it **enabled**: the click must still work, because the explainer behind it
+  is what answers it. `train_page`'s stacked panel is one half;
+  `settings_ai`'s notice is the other, naming the model that classifies
+  instead and offering a jump to Models, with the real form still visible
+  below it. (AI Config has no page of its own — the one `AiSection` is already
+  mounted in the Settings stack, so `open_activity` refreshes it and navigates
+  to Settings → AI Config rather than re-parenting it.) A tooltip on both
+  entries states liveness in one line. Hiding an activity was how JL came not
+  to know Train existed.
   The **Themes dock** is a second face on Settings → Theme, not a second
   implementation: both pickers drive `set_theme`, `refresh_theme_picker`
   (the hook `dialog_theme_editor` already looks for) re-reads the registry

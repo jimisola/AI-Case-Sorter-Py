@@ -44,22 +44,32 @@ it, a menu bar on top and a status bar underneath.
 
 ### Activities
 
-The sidebar switches between the things you do, one button each:
+The sidebar switches between the things you do, one button each. A thin line
+splits it in two: the screens that are always live above it, and the pair
+that follows the active model below it.
 
 | Button | What it is |
 |--------|-----------|
 | **Sort** | The [Sort dashboard](#sort-dashboard) — where sorting happens. |
-| **Train** | The [Train](#train) screen. Always here — when the active model can't be trained on this machine the button is dimmed, and clicking it opens a page explaining why and what to do instead. |
-| **AI Config** | Shown *alongside* a dimmed Train when no local model is active. It takes you to [Settings → AI Config](#ai-config), which is the equivalent step for that mode — teaching the classifier what to look for. |
 | **Models** | The [model library](#models). |
 | **Community** | The [community catalogue](#community). Shown only while signed in. |
+| *(separator line)* | Below it, the two ways a classifier is taught. |
+| **Train** | The [Train](#train) screen — teaching a local model of your own. |
+| **AI Config** | [Settings → AI Config](#ai-config) — the equivalent step when an HTTP server does the recognising: teaching *it* what to look for. |
 | **Settings** | Pinned at the bottom, separate from the activities above it: everything you configure once and rarely touch again. |
 
-Train and AI Config both follow the **active model** (see [Models](#models)):
-a model you own gives you a live Train button, AI Config mode adds the AI
-Config entry and dims Train, and a community model dims Train too. A dimmed
-button still works — it is the page behind it that explains the state, never
-a dead end.
+Train and AI Config are always both there, and exactly one of them is in use
+at a time — which one follows the **active model** (see [Models](#models)):
+
+- **a model you own** — Train is live, AI Config is dimmed;
+- **AI Config mode** ("Use AI Config" on the Models page) — AI Config is live,
+  Train is dimmed;
+- **a community model** — neither is live: its publisher trained it, and it,
+  not a server, does the classifying.
+
+Hover either button and the tooltip says which of those you are in. A dimmed
+button still works — it is the screen behind it that explains the state, and
+carries a button to the Models page to change it. Never a dead end.
 
 ### Status bar
 
@@ -310,6 +320,12 @@ says which of the two cases you are in:
 
 Either way the page carries a button straight to the model library.
 
+The same holds the other way round for **AI Config**, which is dimmed
+whenever a local model is active: clicking it takes you to
+[Settings → AI Config](#ai-config), where a notice names the model doing the
+classifying and offers the same jump to the model library. Both buttons stay
+in the sidebar in every mode — what changes is which one is live.
+
 ### Capturing images
 
 The left column reads top to bottom in the order you work:
@@ -536,8 +552,14 @@ currently set, so nothing is lost when you activate one for the first time.
 
 The alternative to a local model: classification is sent to an
 OpenAI-compatible HTTP server. This page is the active surface whenever no
-local model is active, which is also when the sidebar shows an **AI Config**
-button in Train's place.
+local model is active — the sidebar's **AI Config** button is live then, and
+its mirror, **Train**, is dimmed.
+
+When a local model *is* active the button is dimmed instead, and clicking it
+still brings you here: a notice at the top names the model that is
+classifying instead, with a button straight to the [Models](#models) page.
+The settings below it stay on screen, greyed, so you can see what is
+configured — select **Use AI Config** on the Models page to edit them again.
 
 - **Server** — endpoint URL, API key, model name, the prompt (use
   `{{headstamps}}` where the list of headstamps should be injected), and the

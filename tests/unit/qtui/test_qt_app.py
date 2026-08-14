@@ -19,18 +19,34 @@ from PySide6.QtGui import QPixmap
 
 
 def test_sidebar_activities(window) -> None:
-    # AI Config sits between Train and Models: it is Train's mode-mirror. The
-    # two coexist — Train is never hidden, only muted (JL).
+    # Two groups: the always-live surfaces, then the mode pair (Train first —
+    # the flagship local-model path, AI Config the alternative backend).
     assert list(window.sidebar_buttons) == [
         "Sort",
-        "Train",
-        "AI Config",
         "Models",
         "Community",
+        "Train",
+        "AI Config",
         "Settings",
     ]
     assert window.sidebar_buttons["Sort"].isChecked()
     assert window.pages.currentWidget() is window._pages_by_name["Sort"]
+
+
+def test_a_separator_splits_the_mode_pair_off(window) -> None:
+    """The line is what makes the sidebar two groups rather than one list."""
+    # Community is auth-gated, and a hidden widget drops out of the layout —
+    # sign in so the group above the line is actually laid out.
+    window.community_page.is_signed_in = lambda: True
+    window._apply_auth_visibility()
+    sidebar = window.sidebar_buttons["Sort"].parentWidget()
+    sidebar.layout().activate()
+
+    separator = window.sidebar_separator
+
+    assert separator.objectName() == "sidebarSeparator"  # palette-driven, via theme.py
+    assert window.sidebar_buttons["Community"].geometry().bottom() <= separator.y()
+    assert separator.geometry().bottom() <= window.sidebar_buttons["Train"].y()
 
 
 @pytest.mark.parametrize("name", ["Train", "Models", "Community", "Settings", "Sort"])

@@ -408,18 +408,31 @@ def test_demo_c_model_lifecycle(config, window, monkeypatch, tmp_path) -> None:
     assert drain_until(window, lambda: SettingsRepo(config.db).get_active_model_id() == imported.id)
     assert window.slot_grid.cards[1].names_label.text() == EMPTY_HINT
     assert not window.sidebar_buttons["Train"].property("unavailable")
+    # ...and AI Config, its mirror, is the muted half of the pair.
+    assert window.sidebar_buttons["AI Config"].property("unavailable") is True
 
-    # 7. Back to AI Config mode: Train stays in the sidebar but goes muted,
-    #    and its page explains why (JL: hidden activities are undiscoverable).
+    # 7. Back to AI Config mode: the pair swaps which one is live. Neither is
+    #    ever hidden (JL: hidden activities are undiscoverable) — the muted one
+    #    explains itself when clicked.
     select_model(page, -1)  # the synthetic "Use AI Config" row
     activate_row(page, -1)
     assert drain_until(window, lambda: window.sidebar_buttons["Train"].property("unavailable"))
     assert not window.sidebar_buttons["Train"].isHidden()
+    assert not window.sidebar_buttons["AI Config"].property("unavailable")
     assert SettingsRepo(config.db).get_active_model_id() is None
 
     window.sidebar_buttons["Train"].click()
     assert window.pages.currentWidget() is window._pages_by_name["Train"]
     assert not window.train_page.is_available()
+
+    # And the muted AI Config, back on the imported model, lands on guidance
+    # that names it rather than dumping the user in Settings unexplained.
+    select_model(page, imported.id)
+    activate_row(page, imported.id)
+    assert drain_until(window, lambda: window.sidebar_buttons["AI Config"].property("unavailable") is True)
+    window.sidebar_buttons["AI Config"].click()
+    assert window.settings_pages.currentWidget() is window.ai_section
+    assert imported.name in window.ai_section.notice_label.text()
 
 
 def select_model(page: Any, model_id: int) -> None:

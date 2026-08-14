@@ -94,6 +94,8 @@ QMainWindow::separator:hover {{ background-color: {c["border_focus"]}; }}
    out-specify this one while the muted activity is the open page. */
 #sidebar QToolButton[unavailable="true"],
 #sidebar QToolButton[unavailable="true"]:checked {{ color: {c["text_subtle"]}; }}
+/* Splits the always-live surfaces from the Train / AI Config mode pair. */
+#sidebarSeparator {{ background-color: {c["border"]}; margin: 4px 6px; }}
 QMenuBar {{
     background-color: {c["bg_surface"]};
     color: {c["text"]};

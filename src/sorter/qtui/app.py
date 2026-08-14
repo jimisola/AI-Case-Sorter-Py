@@ -58,6 +58,7 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -116,17 +117,26 @@ PLACEHOLDER_TEXT = "Not ported to the Qt spike yet — launch without --qt for t
 # Sidebar: (icon name, page name). Settings is pinned to the bottom, below the
 # stretch. The icons are drawn from qtui/icons.py and inked by the live
 # palette (_paint_sidebar_icons) — emoji read as artwork and themed badly.
-# AI Config sits where Train sits and is its mode-mirror (Seth: "it takes the
-# place of the training screen; it is analogous to training for an LLM").
 AI_CONFIG_ACTIVITY = "AI Config"
+# The always-live surfaces.
 ACTIVITIES = (
     (SORT, "Sort"),
-    (TRAIN, "Train"),
-    (AI_CONFIG, AI_CONFIG_ACTIVITY),
     (MODELS, "Models"),
     (COMMUNITY, "Community"),
 )
+# Below a separator: the two ways a classifier is taught, of which exactly one
+# is live at a time (Seth on AI Config: "it takes the place of the training
+# screen; it is analogous to training for an LLM"). Both are always visible —
+# the muted one explains itself when clicked (JL).
+MODE_ACTIVITIES = (
+    (TRAIN, "Train"),
+    (AI_CONFIG, AI_CONFIG_ACTIVITY),
+)
 SETTINGS_ACTIVITY = (SETTINGS, "Settings")
+# One line each, always set, saying only whether this entry is the live one.
+ACTIVITY_TOOLTIP_LIVE = "Classification uses this now"
+TRAIN_TOOLTIP_MUTED = "Activates when a local model is active — see Models"
+AI_CONFIG_TOOLTIP_MUTED = "Activates when 'Use AI Config' is selected on Models"
 SIDEBAR_ICON_SIZE = 26
 SETTINGS_SECTIONS = ("Camera", "Serial", "Image Processing", "AI Config", "Theme")
 BAUD_CHOICES = (9600, 19200, 38400, 57600, 115200)
@@ -506,6 +516,10 @@ class QtMainWindow(QMainWindow):
         self._sidebar_group.setExclusive(True)
         for icon_name, name in ACTIVITIES:
             column.addWidget(self._activity_button(sidebar, icon_name, name))
+        self.sidebar_separator = self._sidebar_separator(sidebar)
+        column.addWidget(self.sidebar_separator)
+        for icon_name, name in MODE_ACTIVITIES:
+            column.addWidget(self._activity_button(sidebar, icon_name, name))
         column.addStretch(1)
         column.addWidget(self._activity_button(sidebar, *SETTINGS_ACTIVITY))
 
@@ -519,6 +533,18 @@ class QtMainWindow(QMainWindow):
         self._paint_sidebar_icons()
         self.show_page("Sort")
         return sidebar
+
+    def _sidebar_separator(self, parent: QWidget) -> QFrame:
+        """The hairline splitting the always-live surfaces from the mode pair.
+
+        A QFrame, not a styled QWidget: only the former paints a stylesheet
+        background without a paintEvent of its own, which is what keeps the
+        colour palette-driven and re-themed by the stylesheet alone.
+        """
+        line = QFrame(parent)
+        line.setObjectName("sidebarSeparator")
+        line.setFixedHeight(1)
+        return line
 
     def _activity_button(self, parent: QWidget, icon_name: str, name: str) -> QToolButton:
         button = QToolButton(parent)
@@ -1442,8 +1468,13 @@ class QtMainWindow(QMainWindow):
         instance would double the state it writes. So the entry navigates to
         Settings → AI Config instead, which leaves Settings the checked
         button — honest about where the user actually landed.
+
+        The section is re-read on the way in so that a click on a *muted* AI
+        Config lands on its guidance notice (which names the active model)
+        rather than on whatever the last mode change left there.
         """
         if name == AI_CONFIG_ACTIVITY:
+            self.ai_section.refresh_mode()
             self._open_settings_section(AI_CONFIG_ACTIVITY)
             return
         self.show_page(name)
@@ -1603,20 +1634,25 @@ class QtMainWindow(QMainWindow):
         return ModelRepo(self.db).get(model_id) if model_id is not None else None
 
     def _apply_mode_visibility(self) -> None:
-        """The mode inks Train and shows/hides AI Config.
+        """The mode inks the Train / AI Config pair. **Neither is ever hidden**
+        (JL: a hidden activity is one nobody finds).
 
-        **Train is never hidden** (JL: a hidden activity is one nobody finds).
-        When the active model can't be trained here it goes muted instead —
-        still clickable, and the page it opens says why (train_page's
-        unavailable panel). AI Config still appears for AI Config mode, the
-        same "no active model" test settings_ai gates its own fields on; the
-        two now coexist rather than replacing each other.
+        Exactly one of the two is live — a trainable local model, or no active
+        model at all — and a community model makes it neither. The other goes
+        muted: still clickable, with the explainer behind it (train_page's
+        unavailable panel, settings_ai's notice) saying why and what to do.
         """
         from ..data.models import is_trainable
 
         model = self._active_model()
-        self._set_activity_unavailable("Train", not is_trainable(model))
-        self._set_activity_visible(AI_CONFIG_ACTIVITY, model is None)
+        train_live = is_trainable(model)
+        ai_live = model is None
+        self._set_activity_unavailable("Train", not train_live)
+        self._set_activity_unavailable(AI_CONFIG_ACTIVITY, not ai_live)
+        self.sidebar_buttons["Train"].setToolTip(ACTIVITY_TOOLTIP_LIVE if train_live else TRAIN_TOOLTIP_MUTED)
+        self.sidebar_buttons[AI_CONFIG_ACTIVITY].setToolTip(
+            ACTIVITY_TOOLTIP_LIVE if ai_live else AI_CONFIG_TOOLTIP_MUTED
+        )
 
     def _set_activity_unavailable(self, name: str, unavailable: bool) -> None:
         """Ink a sidebar button as "leads somewhere, but not usable right now".
@@ -1635,10 +1671,9 @@ class QtMainWindow(QMainWindow):
         self._paint_sidebar_icon(name)
 
     def _set_activity_visible(self, name: str, visible: bool) -> None:
+        """Community only — it is the one activity that comes and goes (auth)."""
         button = self.sidebar_buttons[name]
         button.setVisible(visible)
-        # AI Config has no page of its own (see open_activity), so there is
-        # nothing to bounce off when it goes away.
         page = self._pages_by_name.get(name)
         if not visible and page is not None and self.pages.currentWidget() is page:
             self.sidebar_buttons["Sort"].setChecked(True)

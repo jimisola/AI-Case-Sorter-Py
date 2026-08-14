@@ -596,21 +596,57 @@ def test_train_is_muted_but_present_in_ai_config_mode(window) -> None:
 
 def test_ai_config_sits_beside_a_muted_train_in_ai_config_mode(window) -> None:
     """Seth: "it takes the place of the training screen; it is analogous to
-    training for an LLM". The two are still mode-mirrors — they just coexist
-    now rather than one replacing the other (JL)."""
+    training for an LLM". The two are mode-mirrors and coexist — neither is
+    ever hidden, and exactly one of them is live (JL)."""
     assert not window.sidebar_buttons["AI Config"].isHidden()
     assert not window.sidebar_buttons["Train"].isHidden()
     names = list(window.sidebar_buttons)
     assert names.index("AI Config") == names.index("Train") + 1
+    assert window.sidebar_buttons["AI Config"].property("unavailable") is False
+    assert window.sidebar_buttons["Train"].property("unavailable") is True
 
 
-def test_ai_config_gives_way_to_a_live_train_for_a_local_model(window, config) -> None:
+def test_ai_config_goes_muted_beside_a_live_train_for_a_local_model(window, config) -> None:
+    """The mirror image, and the pair still both in the sidebar."""
     seed_model(config, {"9mm FC": 1})
 
     mode_changed(window)
 
-    assert window.sidebar_buttons["AI Config"].isHidden()
+    assert not window.sidebar_buttons["AI Config"].isHidden()
+    assert window.sidebar_buttons["AI Config"].property("unavailable") is True
     assert not window.sidebar_buttons["Train"].property("unavailable")
+
+
+def test_a_community_model_leaves_neither_of_the_pair_live(window, config) -> None:
+    """Its publisher trained it and it isn't AI Config either — so both are
+    muted, and each explains its own half of that."""
+    from sorter.data.repository import ModelRepo
+
+    repo = ModelRepo(config.db)
+    model = repo.get(seed_model(config, {"9mm FC": 1}))
+    assert model is not None
+    model.model_type = "CommunityManaged"
+    repo.update(model)
+
+    mode_changed(window)
+
+    assert window.sidebar_buttons["Train"].property("unavailable") is True
+    assert window.sidebar_buttons["AI Config"].property("unavailable") is True
+    assert not window.sidebar_buttons["Train"].isHidden()
+    assert not window.sidebar_buttons["AI Config"].isHidden()
+
+
+def test_the_pair_tooltips_state_which_one_is_live(window, config) -> None:
+    from sorter.qtui.app import ACTIVITY_TOOLTIP_LIVE, AI_CONFIG_TOOLTIP_MUTED, TRAIN_TOOLTIP_MUTED
+
+    assert window.sidebar_buttons["AI Config"].toolTip() == ACTIVITY_TOOLTIP_LIVE
+    assert window.sidebar_buttons["Train"].toolTip() == TRAIN_TOOLTIP_MUTED
+
+    seed_model(config, {"9mm FC": 1})
+    mode_changed(window)
+
+    assert window.sidebar_buttons["Train"].toolTip() == ACTIVITY_TOOLTIP_LIVE
+    assert window.sidebar_buttons["AI Config"].toolTip() == AI_CONFIG_TOOLTIP_MUTED
 
 
 def test_ai_config_opens_the_settings_section_it_already_owns(window) -> None:
@@ -626,16 +662,51 @@ def test_ai_config_opens_the_settings_section_it_already_owns(window) -> None:
     assert not window.sidebar_buttons["AI Config"].isChecked()
 
 
-def test_hiding_ai_config_leaves_the_settings_page_alone(window, config) -> None:
-    """It has no page to bounce off — the section's own notice explains why
-    its fields went flat, and a forced jump to Sort would be a jump the user
-    didn't ask for."""
+def test_a_muted_ai_config_click_lands_on_guidance_naming_the_active_model(window, config) -> None:
+    """The mirror of Train's explainer page: the click still reaches the real
+    form, but the notice above it says what is classifying instead."""
+    seed_model(config, {"9mm FC": 1}, name="Range brass")
+    mode_changed(window)
+
+    window.sidebar_buttons["AI Config"].click()
+
+    section = window.ai_section
+    assert window.settings_pages.currentWidget() is section
+    assert not section.notice_widget.isHidden()
+    assert "Range brass" in section.notice_label.text()
+    assert "Use AI Config" in section.notice_label.text()
+    # The form is still there to look at, explained rather than hidden away.
+    assert not section.server_group.isHidden()
+
+
+def test_the_guidance_jump_button_goes_to_models(window, config) -> None:
+    seed_model(config, {"9mm FC": 1})
+    mode_changed(window)
+    window.sidebar_buttons["AI Config"].click()
+
+    window.ai_section.models_button.click()
+
+    assert window.pages.currentWidget() is window._pages_by_name["Models"]
+    assert window.sidebar_buttons["Models"].isChecked()
+
+
+def test_the_guidance_is_gone_in_ai_config_mode(window) -> None:
+    window.sidebar_buttons["AI Config"].click()
+
+    assert window.ai_section.notice_widget.isHidden()
+    assert window.pages.currentWidget() is window._pages_by_name["Settings"]
+
+
+def test_a_mode_change_leaves_the_settings_page_alone(window, config) -> None:
+    """AI Config has no page to bounce off — the notice explains why its fields
+    went flat, and a forced jump to Sort would be a jump the user didn't ask
+    for."""
     window.sidebar_buttons["AI Config"].click()
     seed_model(config, {"9mm FC": 1})
 
     mode_changed(window)
 
-    assert window.sidebar_buttons["AI Config"].isHidden()
+    assert not window.sidebar_buttons["AI Config"].isHidden()
     assert window.pages.currentWidget() is window._pages_by_name["Settings"]
 
 
