@@ -169,16 +169,20 @@ class HelpWindow(QWidget):
         self.browser.ensureCursorVisible()
 
     def _scroll_to_anchor(self, anchor: str) -> bool:
-        """Find the heading whose slug matches and move the cursor there.
+        """Find the heading whose slug matches and scroll it to the viewport top.
 
         ``scrollToAnchor`` can't do this for a Markdown-loaded document — see
-        the module docstring.
+        the module docstring. ``ensureCursorVisible`` alone scrolls minimally,
+        which parks a heading reached from above at the *bottom* edge; the
+        scrollbar nudge after it aligns the heading to the top instead.
         """
         block = self.browser.document().begin()
         while block.isValid():
             if block.blockFormat().headingLevel() > 0 and _slugify(block.text()) == anchor:
                 self.browser.setTextCursor(QTextCursor(block))
                 self.browser.ensureCursorVisible()
+                bar = self.browser.verticalScrollBar()
+                bar.setValue(bar.value() + self.browser.cursorRect().top())
                 return True
             block = block.next()
         return False

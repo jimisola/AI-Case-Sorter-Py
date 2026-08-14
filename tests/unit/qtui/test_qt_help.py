@@ -97,6 +97,24 @@ def test_show_topic_scrolls_to_settings_subsections(help_window, qapp) -> None:
     assert _block_text(help_window) == "Camera"
 
 
+def test_a_downward_jump_parks_the_heading_at_the_viewport_top(help_window, qapp) -> None:
+    # ensureCursorVisible alone scrolls minimally, leaving a heading reached
+    # from above at the bottom edge — the regression JL hit on Community.
+    help_window.show_topic("")
+    _pump(qapp)
+    help_window.show_topic("community")
+    _pump(qapp)
+    assert _block_text(help_window) == "Community"
+    rect = help_window.browser.cursorRect()
+    assert 0 <= rect.top() <= rect.height()
+
+    help_window.show_topic("models")  # and the same when jumping back up
+    _pump(qapp)
+    assert _block_text(help_window) == "Models"
+    rect = help_window.browser.cursorRect()
+    assert 0 <= rect.top() <= rect.height()
+
+
 def test_empty_topic_scrolls_to_top(help_window, qapp) -> None:
     help_window.show_topic("settings")
     _pump(qapp)
