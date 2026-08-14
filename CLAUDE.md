@@ -745,6 +745,20 @@ settings row is what the two actually share.
   a settings round-trip across a restart, a model's life from cartridge to
   activation, F1 following the page) through the real bus, controller and
   serial emulator, with only the camera and `classify_active` stubbed.
+- **Hard rules, each one paid for with a CI crash saga** (full post-mortems
+  and the debugging playbook: `.claude/skills/qt-ui-debugging/SKILL.md`):
+  - Every `QTimer.singleShot` passes its owner as the context argument —
+    `singleShot(ms, self, callback)` — so a dying widget drops the callback
+    instead of firing into freed C++.
+  - qtui tests run outside coverage (`no_cover`, applied by their conftest);
+    pytest-cov's tracer segfaults the full suite non-deterministically. Never
+    re-enable it, never chase "the crashing test" under coverage.
+  - Test teardown: DeferredDelete-only flush, no forced gc, no generic
+    `processEvents()`; `closeEvent` stops the window's timers.
+  - Geometry tests derive every threshold from measured metrics
+    (`sizeHintForColumn`, cell rects, `fontMetrics`) — a pixel constant that
+    passes on Linux fails on Windows fonts. Set sizes before the first
+    `show()`; item-rect caches don't refresh on later resizes offscreen.
 
 ---
 
