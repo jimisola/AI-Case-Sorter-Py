@@ -15,7 +15,7 @@ Three rules carried over verbatim, each easy to get wrong:
   training set gets built in the first place — so declining costs only the
   predicted-label convenience, and the decline is remembered for the session.
   Training itself is gated properly, at the Train button.
-* **Sort While Training routes on the user's label, never the prediction.**
+* **Sort while training routes on the user's label, never the prediction.**
   The case being dropped is the one that was just labelled, so a Save chains
   into the next feed carrying that label (``sort_label``), not whatever the
   field says by then.
@@ -117,12 +117,16 @@ class TrainPage(QWidget):
         # _build_counts_group), so the user needs to be able to drag it wider
         # rather than being stuck with whatever share a stretch factor gave it.
         self.body_splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        # Both children are group boxes; the objectName is what tells the
+        # stylesheet to drop the handle to their frames (qtui/theme.py).
+        self.body_splitter.setObjectName("groupSplitter")
         self.body_splitter.setChildrenCollapsible(False)
         self.body_splitter.addWidget(self._build_capture_group())
         self.body_splitter.addWidget(self._build_counts_group())
         self.body_splitter.setStretchFactor(0, 1)
         self.body_splitter.setStretchFactor(1, 1)
         column.addWidget(self.body_splitter, 1)
+        column.addWidget(self._build_training_group())
 
         # A run ending re-enables the Train button even if the console is left
         # open; the manager posts these from its wait thread.
@@ -141,44 +145,33 @@ class TrainPage(QWidget):
         self.active_label = QLabel(NO_VALUE, self)
         row.addWidget(self.active_label)
         row.addStretch(1)
-        self.settings_button = QPushButton("Training settings…", self)
-        self.settings_button.clicked.connect(self.open_training_settings)
-        row.addWidget(self.settings_button)
-        self.train_button = QPushButton("Start training", self)
-        self.train_button.setObjectName("action")
-        self.train_button.clicked.connect(self.start_training)
-        row.addWidget(self.train_button)
         return row
 
     def _build_capture_group(self) -> QGroupBox:
+        """Feed → preview → label → save, left to right."""
         box = QGroupBox("Capture", self)
+        self.capture_group = box
         row = QHBoxLayout(box)
+
+        preview = QVBoxLayout()
+        self.feed_row = QHBoxLayout()
+        self.feed_button = QPushButton("Feed", box)
+        self.feed_button.setObjectName("action")
+        self.feed_button.clicked.connect(lambda: self.feed())
+        self.feed_row.addWidget(self.feed_button)
+        self.feed_row.addStretch(1)
+        preview.addLayout(self.feed_row)
 
         self.crop_label = QLabel(NO_CROP_TEXT, box)
         self.crop_label.setObjectName("cropPanel")
         self.crop_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.crop_label.setWordWrap(True)
         self.crop_label.setFixedSize(CROP_SIZE, CROP_SIZE)
-        row.addWidget(self.crop_label)
+        preview.addWidget(self.crop_label)
+        preview.addStretch(1)
+        row.addLayout(preview)
 
         column = QVBoxLayout()
-        feed_row = QHBoxLayout()
-        self.feed_button = QPushButton("Feed", box)
-        self.feed_button.setObjectName("action")
-        self.feed_button.clicked.connect(lambda: self.feed())
-        feed_row.addWidget(self.feed_button)
-        self.prediction_label = QLabel("", box)
-        feed_row.addWidget(self.prediction_label, 1)
-        column.addLayout(feed_row)
-
-        self.sort_check = QCheckBox("Sort While Training", box)
-        self.sort_check.setChecked(bool(self.config.sort_while_training))
-        self.sort_check.setToolTip(
-            "Drop each labelled case into its own bin instead of the catch-all, using the label you picked."
-        )
-        self.sort_check.toggled.connect(self._on_sort_while_training_toggled)
-        column.addWidget(self.sort_check)
-
         label_caption = QLabel("Label", box)
         label_caption.setObjectName("mutedLabel")
         column.addWidget(label_caption)
@@ -191,18 +184,20 @@ class TrainPage(QWidget):
         self.save_button.clicked.connect(self.save_clicked)
         column.addWidget(self.save_button)
 
-        # Per-feed timing, as on the Tk tab: image processing covers feed +
+        # Per-feed readouts, as on the Tk tab: image processing covers feed +
         # capture + crop + mask; the breakdown is local_inference's own
         # per-step split, so a regression is diagnosable from the UI alone.
-        timings = QFormLayout()
+        readouts = QFormLayout()
+        self.prediction_label = QLabel("", box)
         self.image_proc_label = QLabel(NO_VALUE, box)
         self.predict_label = QLabel(NO_VALUE, box)
         self.breakdown_label = QLabel(NO_VALUE, box)
         self.breakdown_label.setWordWrap(True)
-        timings.addRow("Image processing", self.image_proc_label)
-        timings.addRow("Prediction", self.predict_label)
-        timings.addRow("Breakdown", self.breakdown_label)
-        column.addLayout(timings)
+        readouts.addRow("Predicted", self.prediction_label)
+        readouts.addRow("Image processing", self.image_proc_label)
+        readouts.addRow("Prediction time", self.predict_label)
+        readouts.addRow("Breakdown", self.breakdown_label)
+        column.addLayout(readouts)
 
         self.status_label = QLabel("", box)
         self.status_label.setObjectName("mutedLabel")
@@ -212,8 +207,40 @@ class TrainPage(QWidget):
         row.addLayout(column, 1)
         return box
 
+    def _build_training_group(self) -> QGroupBox:
+        """The other workflow on this page: turn the images above into a model.
+
+        Its own strip at the foot of the page, so the two buttons read as one
+        cluster instead of straddling the capture controls.
+        """
+        box = QGroupBox("Training", self)
+        self.training_group = box
+        row = QHBoxLayout(box)
+        hint = QLabel("Train a new checkpoint from the images above.", box)
+        hint.setObjectName("mutedLabel")
+        row.addWidget(hint)
+        row.addStretch(1)
+        # With the settings, not with Feed: routing cases while you train is a
+        # training setting worn as a shortcut (JL).
+        self.sort_check = QCheckBox("Sort while training", box)
+        self.sort_check.setChecked(bool(self.config.sort_while_training))
+        self.sort_check.setToolTip(
+            "Drop each labelled case into its own bin instead of the catch-all, using the label you picked."
+        )
+        self.sort_check.toggled.connect(self._on_sort_while_training_toggled)
+        row.addWidget(self.sort_check)
+        self.settings_button = QPushButton("Training settings…", box)
+        self.settings_button.clicked.connect(self.open_training_settings)
+        row.addWidget(self.settings_button)
+        self.train_button = QPushButton("Start training", box)
+        self.train_button.setObjectName("action")
+        self.train_button.clicked.connect(self.start_training)
+        row.addWidget(self.train_button)
+        return box
+
     def _build_counts_group(self) -> QGroupBox:
         box = QGroupBox("Image counts", self)
+        self.counts_group = box
         box.setMinimumWidth(280)
         column = QVBoxLayout(box)
         self.counts_list = QListWidget(box)
@@ -383,7 +410,7 @@ class TrainPage(QWidget):
         self.status_label.setText("Feeding…")
         self.prediction_label.setText("")
 
-        # Sort While Training: route the dropping case to its headstamp's run
+        # Sort while training: route the dropping case to its headstamp's run
         # slot. The label is the user's — the field when Feed is clicked, or the
         # just-saved one when a Save chains into a feed. NEVER the prediction.
         feed_slot = 0

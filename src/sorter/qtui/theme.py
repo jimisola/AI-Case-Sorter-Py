@@ -9,6 +9,16 @@ Key roles are documented in ``qtui/palettes.py``'s ``_DARK`` dict.
 
 from __future__ import annotations
 
+# A QGroupBox's frame starts this far below its top edge — the title sits in
+# that margin. A splitter dividing two group boxes offsets its handle by the
+# same amount (`#groupSplitter` below), or the divider runs above the borders
+# it divides.
+GROUPBOX_TOP_MARGIN = 10
+
+# The check/radio indicator, in px. Small enough to sit inside a label's line
+# box, large enough to read as a control.
+INDICATOR_SIZE = 14
+
 # Only these roles are read, so a palette that is missing one (a hand-edited
 # settings row) falls back rather than raising mid-stylesheet.
 _FALLBACK = {
@@ -180,6 +190,28 @@ QDialog {{ background-color: {c["bg_window"]}; }}
 QLabel#dialogHint, QLabel#rowHint {{ color: {c["text_muted"]}; }}
 QCheckBox, QRadioButton {{ background: transparent; color: {c["text"]}; }}
 QCheckBox:disabled, QRadioButton:disabled {{ color: {c["text_subtle"]}; }}
+/* Left to the platform style these all but vanish on a dark surface, and a
+   checkbox then reads as a plain label. Checked is a solid `action` fill —
+   the same "on/go" role the primary buttons carry. */
+QCheckBox::indicator, QRadioButton::indicator {{
+    width: {INDICATOR_SIZE}px;
+    height: {INDICATOR_SIZE}px;
+    border: 1px solid {c["border_focus"]};
+    background-color: {c["bg_input"]};
+}}
+QCheckBox::indicator {{ border-radius: 3px; }}
+QRadioButton::indicator {{ border-radius: {INDICATOR_SIZE // 2 + 1}px; }}
+QCheckBox::indicator:hover, QRadioButton::indicator:hover {{ border-color: {c["accent"]}; }}
+/* Before :checked, which shares its specificity: a disabled toggle that is ON
+   must still read as on, so the later rule has to be the checked one. */
+QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {{
+    border-color: {c["border"]};
+    background-color: {c["bg_surface"]};
+}}
+QCheckBox::indicator:checked, QRadioButton::indicator:checked {{
+    background-color: {c["action"]};
+    border-color: {c["action"]};
+}}
 QSpinBox, QDoubleSpinBox {{
     background-color: {c["bg_input"]};
     color: {c["text"]};
@@ -225,7 +257,7 @@ QPlainTextEdit:focus {{ border-color: {c["border_focus"]}; }}
 QGroupBox {{
     border: 1px solid {c["border"]};
     border-radius: 4px;
-    margin-top: 10px;
+    margin-top: {GROUPBOX_TOP_MARGIN}px;
     color: {c["text"]};
 }}
 QGroupBox::title {{
@@ -259,6 +291,10 @@ QProgressBar::chunk {{ background-color: {c["action"]}; border-radius: 2px; }}
 QSplitter::handle {{ background-color: {c["border"]}; }}
 QSplitter::handle:horizontal {{ width: 3px; }}
 QSplitter::handle:vertical {{ height: 3px; }}
+/* A splitter between two group boxes: the margin drops the painted handle to
+   where their frames actually start (the widget itself is unchanged, so the
+   grab area keeps its full height). */
+QSplitter#groupSplitter::handle:horizontal {{ margin-top: {GROUPBOX_TOP_MARGIN}px; }}
 
 QToolTip {{
     background-color: {c["bg_card"]};

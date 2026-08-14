@@ -191,7 +191,7 @@ def test_feed_drops_a_case_captures_and_arms_save(connected, window, config) -> 
 
     do_feed(connected, window)
 
-    assert window.broker.slots == [0]  # catch-all: Sort While Training is off
+    assert window.broker.slots == [0]  # catch-all: Sort while training is off
     assert window.camera.captures == 1
     assert connected._last_cropped is not None
     assert connected.save_button.isEnabled()
@@ -461,7 +461,85 @@ def test_dragging_the_splitter_widens_the_list_and_the_scrollbar_follows(qapp, w
 
     assert wide_width > narrow_width  # dragging left actually widened the list
     assert narrow_hbar_max > 0  # narrow: later columns needed a scroll...
-    assert wide_hbar_max == 0  # ...wide: the reflow followed and the scroll is gone
+    # ...wide: the reflow followed and the scroll is gone. Not `== 0`:
+    # Windows' QListView keeps a few px of contents overhang even when every
+    # column fits (frame/gutter arithmetic), so demand "vanishingly small
+    # next to a column", not "zero".
+    assert wide_hbar_max < cell.width() // 4
+
+
+# ----- the page reads as two workflows ---------------------------------------
+#
+# Feed and the sort toggle both govern what the NEXT feed does, so they ride
+# together above the preview; "Training settings…"/"Start training" are the
+# other workflow on the page and cluster at its foot. Every assertion below is
+# derived from measured geometry — button sizes follow the platform font.
+
+
+@pytest.fixture
+def shown(qapp, window):
+    """The Train page laid out for real — geometry means nothing before this."""
+    window.show_page("Train")
+    window.resize(1200, 700)
+    window.show()
+    for _ in range(10):
+        qapp.processEvents()
+    return window.train_page
+
+
+def test_the_sort_toggle_sits_with_the_training_settings(shown) -> None:
+    # JL: routing cases while you train is a training setting worn as a
+    # shortcut — it belongs beside "Training settings…", not beside Feed.
+    assert shown.sort_check.parentWidget() is shown.training_group
+    check = shown.sort_check.geometry()
+    settings = shown.settings_button.geometry()
+    assert check.top() < settings.bottom() and settings.top() < check.bottom()  # one row
+    assert check.right() <= settings.left()  # toggle reads first, then the dialog
+
+
+def test_feed_leads_the_preview_column(shown) -> None:
+    feed = shown.feed_button.geometry()
+    crop = shown.crop_label.geometry()
+
+    assert feed.bottom() <= crop.top()  # Feed sits on top of the preview
+    assert crop.left() <= feed.left() < crop.right()  # in the preview's column
+
+
+def test_the_training_buttons_cluster_at_the_foot_of_the_page(shown) -> None:
+    assert shown.settings_button.parentWidget() is shown.training_group
+    assert shown.train_button.parentWidget() is shown.training_group
+    # …and nothing from the capture loop is in there with them.
+    assert shown.feed_button.parentWidget() is shown.capture_group
+
+    settings = shown.settings_button.geometry()
+    start = shown.train_button.geometry()
+
+    assert settings.top() < start.bottom() and start.top() < settings.bottom()  # one row
+    assert start.left() >= settings.right()
+    # Adjacent, not merely on the same row: layout spacing, never a button's width.
+    assert start.left() - settings.right() < min(settings.width(), start.width())
+    # The whole cluster is below the capture/counts body.
+    assert shown.training_group.geometry().top() >= shown.body_splitter.geometry().bottom()
+
+
+def test_the_splitter_handle_starts_where_the_group_frames_do(shown, window) -> None:
+    """The divider used to run up into the header band above the groups (JL)."""
+    from PySide6.QtGui import QColor
+
+    splitter = shown.body_splitter
+    image = splitter.grab().toImage()
+    border = QColor(window.palette_colors["border"]).rgb()
+
+    def first_border_row(x: int) -> int | None:
+        return next((y for y in range(image.height()) if image.pixel(x, y) == border), None)
+
+    # Sampled well right of a group's title, which is drawn in the same margin
+    # band and breaks the top border wherever it sits.
+    group_top = first_border_row(shown.counts_group.geometry().right() - 40)
+    handle_top = first_border_row(splitter.handle(1).geometry().center().x())
+
+    assert group_top is not None
+    assert handle_top == group_top
 
 
 # ----- the torch offer -------------------------------------------------------
