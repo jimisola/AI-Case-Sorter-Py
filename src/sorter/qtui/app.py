@@ -84,6 +84,7 @@ from ..hardware.camera import Camera
 from ..hardware.serial_emulator import EMULATED_PORT, EmulatorBroker
 from ..ml import classifier
 from ..paths import app_data_dir
+from .ai_page import build_ai_page
 from .community_page import build_community_page
 from .dialog_slot_assign import CATCH_ALL_HINT, SlotAssignDialog
 from .dialog_template import EditTemplateDialog, NewTemplateDialog
@@ -101,7 +102,6 @@ from .palettes import (
     theme_names,
 )
 from .serial_monitor import build_serial_monitor
-from .settings_ai import build_ai_section
 from .settings_camera import build_camera_section
 from .settings_imageproc import build_imageproc_section
 from .settings_serial import build_serial_section
@@ -138,7 +138,7 @@ ACTIVITY_TOOLTIP_LIVE = "Classification uses this now"
 TRAIN_TOOLTIP_MUTED = "Activates when a local model is active — see Models"
 AI_CONFIG_TOOLTIP_MUTED = "Activates when 'Use AI Config' is selected on Models"
 SIDEBAR_ICON_SIZE = 26
-SETTINGS_SECTIONS = ("Camera", "Serial", "Image Processing", "AI Config", "Theme")
+SETTINGS_SECTIONS = ("Camera", "Serial", "Image Processing", "Theme")
 BAUD_CHOICES = (9600, 19200, 38400, 57600, 115200)
 # On every dock's tab: QtAds's drop overlays show where a panel *can* go once
 # a drag starts, but nothing hints that it can be dragged at all (JL).
@@ -429,6 +429,7 @@ class QtMainWindow(QMainWindow):
         self._pages_by_name: dict[str, QWidget] = {}
         self._add_page("Sort", self._build_sort_page())
         self._add_page("Train", self._build_train_page())
+        self._add_page(AI_CONFIG_ACTIVITY, self._build_ai_page())
         self._add_page("Models", self._build_models_page())
         self._add_page("Community", self._build_community_page())
         self._add_page("Settings", self._build_settings_page())
@@ -911,7 +912,6 @@ class QtMainWindow(QMainWindow):
             "Serial": self._build_serial_page,
             "Camera": lambda: build_camera_section(self),
             "Image Processing": lambda: build_imageproc_section(self),
-            "AI Config": self._build_ai_page,
         }
         for name in SETTINGS_SECTIONS:
             self.settings_list.addItem(name)
@@ -983,9 +983,9 @@ class QtMainWindow(QMainWindow):
         ModelEvaluatorDialog(self, self, model).exec()
 
     def _build_ai_page(self) -> QWidget:
-        # Kept on self: mode/changed re-reads it (refresh_mode).
-        self.ai_section = build_ai_section(self)
-        return self.ai_section
+        # Kept on self: mode/changed and navigating to the page both refresh it.
+        self.ai_page = build_ai_page(self)
+        return self.ai_page
 
     def _build_theme_section(self) -> QWidget:
         page = QWidget()
@@ -1461,22 +1461,7 @@ class QtMainWindow(QMainWindow):
     # ----- navigation ---------------------------------------------------------
 
     def open_activity(self, name: str) -> None:
-        """What a sidebar click does. Every activity is a page — except AI Config.
-
-        The AI settings section is one widget, already parented into the
-        Settings stack; a second mount would double-parent it, and a second
-        instance would double the state it writes. So the entry navigates to
-        Settings → AI Config instead, which leaves Settings the checked
-        button — honest about where the user actually landed.
-
-        The section is re-read on the way in so that a click on a *muted* AI
-        Config lands on its guidance notice (which names the active model)
-        rather than on whatever the last mode change left there.
-        """
-        if name == AI_CONFIG_ACTIVITY:
-            self.ai_section.refresh_mode()
-            self._open_settings_section(AI_CONFIG_ACTIVITY)
-            return
+        """What a sidebar click does: every activity is a page of its own."""
         self.show_page(name)
 
     def show_page(self, name: str) -> None:
@@ -1495,6 +1480,10 @@ class QtMainWindow(QMainWindow):
             # Headstamps and images change from the Models page, the Tk UI and
             # imports; the counts are read off disk every time, never cached.
             self.train_page.refresh()
+        elif name == AI_CONFIG_ACTIVITY:
+            # A click on the *muted* entry has to land on the explainer naming
+            # the active model, not on whatever the last mode change left.
+            self.ai_page.refresh_mode()
 
     def _open_data_folder(self) -> None:
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(app_data_dir())))
@@ -1640,7 +1629,7 @@ class QtMainWindow(QMainWindow):
         Exactly one of the two is live — a trainable local model, or no active
         model at all — and a community model makes it neither. The other goes
         muted: still clickable, with the explainer behind it (train_page's
-        unavailable panel, settings_ai's notice) saying why and what to do.
+        and ai_page's unavailable panels) saying why and what to do.
         """
         from ..data.models import is_trainable
 
@@ -1685,7 +1674,7 @@ class QtMainWindow(QMainWindow):
         self._clear_counts()
         self._refresh_templates()
         self._refresh_sort_grid()
-        self.ai_section.refresh_mode()
+        self.ai_page.refresh_mode()
         # The server's policy and the version prompt belonged to the old model.
         self._clear_community_settings()
         self._refresh_notes_button()
@@ -1777,6 +1766,8 @@ class QtMainWindow(QMainWindow):
             self.serial_monitor.apply_palette()
         if hasattr(self, "history_view"):
             self.history_view.apply_palette()
+        if hasattr(self, "models_page"):
+            self.models_page.apply_palette()
         # Indicator dots carry state, not a palette role a stylesheet can reach.
         self._paint_indicators()
 

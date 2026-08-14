@@ -59,6 +59,7 @@ DEFAULT_TOPIC = ""
 _PAGE_TOPICS = {
     "Sort": "sort-dashboard",
     "Train": "train",
+    "AI Config": "ai-config",
     "Models": "models",
     "Community": "community",
 }

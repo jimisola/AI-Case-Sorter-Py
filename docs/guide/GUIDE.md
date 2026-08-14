@@ -15,11 +15,12 @@ day, in the order you meet them.
 - [Sort dashboard](#sort-dashboard) — the main working screen: the current
   case, the slot cards, sorting templates and the run controls.
 - [Train](#train) — capture cases, label them, and train a model from them.
+- [AI Config](#ai-config) — the other way to classify: an HTTP server instead
+  of a local model.
 - [Models](#models) — the model library: activate, edit, import, export.
 - [Community](#community) — browse and install published models.
 - [Settings](#settings) — [Camera](#camera), [Serial](#serial), [Image
-  Processing](#image-processing), [AI Config](#ai-config) and
-  [Theme](#theme).
+  Processing](#image-processing) and [Theme](#theme).
 - [Getting help](#getting-help) — this guide, the [support
   package](#support-package) and [updates](#updates).
 
@@ -55,7 +56,7 @@ that follows the active model below it.
 | **Community** | The [community catalogue](#community). Shown only while signed in. |
 | *(separator line)* | Below it, the two ways a classifier is taught. |
 | **Train** | The [Train](#train) screen — teaching a local model of your own. |
-| **AI Config** | [Settings → AI Config](#ai-config) — the equivalent step when an HTTP server does the recognising: teaching *it* what to look for. |
+| **AI Config** | The [AI Config](#ai-config) screen — the equivalent step when an HTTP server does the recognising: teaching *it* what to look for. |
 | **Settings** | Pinned at the bottom, separate from the activities above it: everything you configure once and rarely touch again. |
 
 Train and AI Config are always both there, and exactly one of them is in use
@@ -320,9 +321,9 @@ says which of the two cases you are in:
 
 Either way the page carries a button straight to the model library.
 
-The same holds the other way round for **AI Config**, which is dimmed
-whenever a local model is active: clicking it takes you to
-[Settings → AI Config](#ai-config), where a notice names the model doing the
+The same holds the other way round for [AI Config](#ai-config), which is
+dimmed whenever a local model is active: clicking it opens its own page,
+where — in place of the server form — a panel names the model doing the
 classifying and offers the same jump to the model library. Both buttons stay
 in the sidebar in every mode — what changes is which one is live.
 
@@ -376,6 +377,34 @@ model:
 Training needs PyTorch. If it isn't installed, the app offers to install it
 here.
 
+## AI Config
+
+The alternative to a local model: classification is sent to an
+OpenAI-compatible HTTP server, and this screen is where that server — and the
+headstamps it may answer with — is set up. It is Train's mirror in the
+sidebar: live whenever no local model is active, dimmed when one is.
+
+### When AI Config isn't the one classifying
+
+Activate a local model and this screen swaps its form for a panel naming the
+model that is classifying instead, with a button straight to the
+[Models](#models) page. Select **Use AI Config** there to come back — the
+server settings are still exactly as you left them.
+
+### Setting up the server
+
+- **Server** — endpoint URL, API key, model name, the prompt (use
+  `{{headstamps}}` where the list of headstamps should be injected), and the
+  JPEG quality and scale used for the image. Press **Save** to apply — these
+  fields do not save as you type.
+- **Headstamps** — the list this mode routes on, and each one's slot. Add,
+  rename, remove, clear, or **Load from server**. These do save immediately,
+  and editing a slot here updates the Sort dashboard's cards straight away.
+- **Test shot**, under *Test (capture → crop → classify)* — takes one frame
+  from the camera, runs it through the same pipeline, and shows the label and
+  confidence that came back. No board feed needed; it reads the fields above
+  as they stand, so an API key and model name must be filled in.
+
 ## Models
 
 The model library. Everything the app knows how to classify with is a row in
@@ -389,17 +418,18 @@ training images it has, whether it has been trained, and when. Click a
 column heading to sort by it.
 
 The **Active** column marks the model the app currently classifies with:
-exactly one row reads **● ACTIVE**, and every other row's Active cell is
-blank. To change it, select a row and press **Activate** at the bottom right.
+exactly one row reads **● ACTIVE** in the theme's action colour, and every
+other row's Active cell is blank. To change it, select a row and press
+**Activate** at the bottom right.
 
 Above the table: filters by **cartridge** and **type**, a search box, and
 **New cartridge**, **New model** and **Import…**.
 
 The **"Use AI Config"** row sits at the top of the list, whenever the filters
 and the search box leave it there. Activating it puts the app in AI Config
-mode — classification goes to the HTTP server configured in [Settings → AI
-Config](#ai-config) instead of a local model. It is not a model, so Edit,
-Delete, Export and the rest stay greyed out while it is selected.
+mode — classification goes to the HTTP server configured on the [AI
+Config](#ai-config) screen instead of a local model. It is not a model, so
+Edit, Delete, Export and the rest stay greyed out while it is selected.
 
 ### Managing a model
 
@@ -477,9 +507,8 @@ not make the model foreign: your copy stays yours and stays trainable.
 
 The Settings activity groups everything you configure once and rarely touch
 again, behind a section list. Most settings here save as you change them,
-with no separate Save step. The two exceptions are the [Camera](#camera)
-page, where the device and resolution are committed by **Apply**, and the
-[AI Config](#ai-config) server fields, which keep their **Save** button.
+with no separate Save step. The exception is the [Camera](#camera) page,
+where the device and resolution are committed by **Apply**.
 
 ### Camera
 
@@ -544,31 +573,6 @@ currently set, so nothing is lost when you activate one for the first time.
 - **Camera LED brightness** — the board's ring-light level. This one *is*
   global: it is a property of the machine, not of the model. The board is
   updated shortly after you stop moving the slider.
-
-### AI Config
-
-The alternative to a local model: classification is sent to an
-OpenAI-compatible HTTP server. This page is the active surface whenever no
-local model is active — the sidebar's **AI Config** button is live then, and
-its mirror, **Train**, is dimmed.
-
-When a local model *is* active the button is dimmed instead, and clicking it
-still brings you here: a notice at the top names the model that is
-classifying instead, with a button straight to the [Models](#models) page.
-The settings below it stay on screen, greyed, so you can see what is
-configured — select **Use AI Config** on the Models page to edit them again.
-
-- **Server** — endpoint URL, API key, model name, the prompt (use
-  `{{headstamps}}` where the list of headstamps should be injected), and the
-  JPEG quality and scale used for the image. Press **Save** to apply — these
-  fields do not save as you type.
-- **Headstamps** — the list this mode routes on, and each one's slot. Add,
-  rename, remove, clear, or **Load from server**. These do save immediately,
-  and editing a slot here updates the Sort dashboard's cards straight away.
-- **Test shot**, under *Test (capture → crop → classify)* — takes one frame
-  from the camera, runs it through the same pipeline, and shows the label and
-  confidence that came back. No board feed needed; it reads the fields above
-  as they stand, so an API key and model name must be filled in.
 
 ### Theme
 

@@ -1,4 +1,4 @@
-"""Settings -> AI Config page: server settings, headstamp manager, single-shot test.
+"""AI Config activity — server settings, headstamp manager, single-shot test.
 
 Behavior reference: ``sorter/ui/tab_ai.py`` (config keys, defaults and the
 explicit-Save trigger come from there) and ``sorter/ml/api_client.py`` for the
@@ -15,9 +15,11 @@ Three deliberate differences from the Tk tab, all noted where they happen:
 
 Save is on the **Save** button, as in Tk — this page does not save on edit.
 
-This section is also where a click on a *muted* AI Config sidebar entry lands,
-so the local-model notice at the top is guidance, not decoration: it names the
-model that is classifying instead and offers a jump to the Models page.
+The page is a two-card stack, exactly as Train's is: the form when this is the
+backend that classifies (no active model), or — when a local model is doing it
+instead — a panel naming that model and offering the jump to the Models page.
+The sidebar entry is never hidden (app.py's ``_apply_mode_visibility``), so
+this page is what has to answer a click on the muted half of the pair.
 """
 
 from __future__ import annotations
@@ -40,6 +42,7 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -50,19 +53,34 @@ from ..ml import api_client
 
 CROP_SIZE = 200
 NO_RESULT = "—"
-# The guidance a muted AI Config entry opens onto: the sidebar keeps the entry
-# at all times, so this notice is what a click on it has to answer — what is
-# classifying instead, and how to change that. The form stays visible below it.
+# The explainer a muted AI Config entry opens onto. The sidebar keeps the entry
+# at all times, so this is what a click on it has to answer: what is
+# classifying instead, and how to change that.
+UNAVAILABLE_TITLE = "A local model is doing the classifying"
 LOCAL_MODEL_NOTICE = (
     "Classification currently uses the local model “{name}”. To classify over HTTP "
     "instead, select “Use AI Config” on the Models page."
 )
 LOCAL_MODEL_NOTICE_UNNAMED = (
-    "A local model is active, so cases are classified on it — these server settings "
+    "A local model is active, so cases are classified on it and these server settings "
     "are unused. Select “Use AI Config” on the Models page to edit them."
 )
 MODELS_JUMP_TEXT = "Go to Models"
 NAME_HINT = "Add creates a headstamp; Rename applies the typed name to the selected one."
+
+
+def ai_config_mode(win: Any) -> bool:
+    """AI Config mode = no active local model. Only then do these settings apply."""
+    return win.config.settings.get_active_model_id() is None
+
+
+def active_model_name(win: Any) -> str | None:
+    """Read fresh — the explainer names whatever is classifying right now."""
+    model_id = win.config.settings.get_active_model_id()
+    if model_id is None:
+        return None
+    model = ModelRepo(win.config.db).get(model_id)
+    return None if model is None else str(model.name)
 
 
 class AiSection(QWidget):
@@ -81,23 +99,6 @@ class AiSection(QWidget):
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(8)
 
-        self.notice_widget = QWidget(self)
-        notice_row = QVBoxLayout(self.notice_widget)
-        notice_row.setContentsMargins(0, 0, 0, 0)
-        notice_row.setSpacing(4)
-        self.notice_label = QLabel(LOCAL_MODEL_NOTICE_UNNAMED, self.notice_widget)
-        self.notice_label.setObjectName("dialogHint")
-        self.notice_label.setWordWrap(True)
-        notice_row.addWidget(self.notice_label)
-        self.models_button = QPushButton(MODELS_JUMP_TEXT, self.notice_widget)
-        self.models_button.clicked.connect(self._open_models_page)
-        button_row = QHBoxLayout()
-        button_row.setContentsMargins(0, 0, 0, 0)
-        button_row.addWidget(self.models_button)
-        button_row.addStretch(1)
-        notice_row.addLayout(button_row)
-        column.addWidget(self.notice_widget)
-
         top = QHBoxLayout()
         self.server_group = self._build_server_group()
         self.headstamp_group = self._build_headstamp_group()
@@ -109,7 +110,7 @@ class AiSection(QWidget):
         column.addWidget(self.test_group)
         column.addStretch(1)
 
-        self.refresh_mode()
+        self.refresh_list()
 
     # ----- server settings ----------------------------------------------------
 
@@ -265,8 +266,8 @@ class AiSection(QWidget):
     def _on_selection_changed(self) -> None:
         name = self.selected_name()
         for button in (self.remove_button, self.rename_button):
-            button.setEnabled(name is not None and self._editable())
-        self.slot_spin.setEnabled(name is not None and self._editable())
+            button.setEnabled(name is not None)
+        self.slot_spin.setEnabled(name is not None)
         self._syncing = True
         self.slot_spin.setValue(self._slot_of(name) if name else 0)
         self._syncing = False
@@ -449,22 +450,55 @@ class AiSection(QWidget):
             )
         )
 
-    # ----- mode awareness -----------------------------------------------------
 
-    def _editable(self) -> bool:
-        """AI Config mode = no active local model. Only then do these settings apply."""
-        return self._win.config.settings.get_active_model_id() is None
+class AiPage(QWidget):
+    """The form, or the explainer saying why it isn't the backend right now."""
 
-    def _active_model_name(self) -> str | None:
-        """Read fresh — the notice names whatever is classifying right now."""
-        model_id = self._win.config.settings.get_active_model_id()
-        if model_id is None:
-            return None
-        model = ModelRepo(self._win.config.db).get(model_id)
-        return None if model is None else str(model.name)
+    def __init__(self, win: Any) -> None:
+        super().__init__()
+        self._win = win
+
+        # Index 0 is the working form, 1 the "why not" panel — `refresh_mode`
+        # is the only thing that switches them. Same shape as train_page.
+        self.stack = QStackedWidget(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(12, 12, 12, 12)
+        outer.addWidget(self.stack)
+
+        self.section = AiSection(win)
+        self.stack.addWidget(self.section)
+        self.stack.addWidget(self._build_unavailable_panel())
+        self.refresh_mode()
+
+    def _build_unavailable_panel(self) -> QWidget:
+        panel = QWidget(self.stack)
+        column = QVBoxLayout(panel)
+        column.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        column.setSpacing(10)
+
+        title = QLabel(UNAVAILABLE_TITLE, panel)
+        title.setObjectName("emptyStateTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        column.addWidget(title)
+
+        self.notice_label = QLabel(LOCAL_MODEL_NOTICE_UNNAMED, panel)
+        self.notice_label.setObjectName("mutedLabel")
+        self.notice_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.notice_label.setWordWrap(True)
+        self.notice_label.setMaximumWidth(560)
+        column.addWidget(self.notice_label, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        self.models_button = QPushButton(MODELS_JUMP_TEXT, panel)
+        self.models_button.clicked.connect(self._open_models_page)
+        column.addWidget(self.models_button, 0, Qt.AlignmentFlag.AlignHCenter)
+        return panel
 
     def _open_models_page(self) -> None:
         self._win.go_to_activity("Models")
+
+    def is_available(self) -> bool:
+        """Whether the form is showing rather than the explainer."""
+        return self.stack.currentIndex() == 0
 
     def refresh_mode(self) -> None:
         """Re-read the active model and the (model-scoped) headstamp list.
@@ -472,15 +506,14 @@ class AiSection(QWidget):
         The server fields aren't model-scoped, so they are left alone — a mode
         change must not discard an edit that hasn't been saved yet.
         """
-        editable = self._editable()
-        if not editable:
-            name = self._active_model_name()
-            self.notice_label.setText(LOCAL_MODEL_NOTICE.format(name=name) if name else LOCAL_MODEL_NOTICE_UNNAMED)
-        self.notice_widget.setVisible(not editable)
-        for group in (self.server_group, self.headstamp_group, self.test_group):
-            group.setEnabled(editable)
-        self.refresh_list()
+        self.section.refresh_list()
+        if ai_config_mode(self._win):
+            self.stack.setCurrentIndex(0)
+            return
+        name = active_model_name(self._win)
+        self.notice_label.setText(LOCAL_MODEL_NOTICE.format(name=name) if name else LOCAL_MODEL_NOTICE_UNNAMED)
+        self.stack.setCurrentIndex(1)
 
 
-def build_ai_section(win: Any) -> AiSection:
-    return AiSection(win)
+def build_ai_page(win: Any) -> AiPage:
+    return AiPage(win)

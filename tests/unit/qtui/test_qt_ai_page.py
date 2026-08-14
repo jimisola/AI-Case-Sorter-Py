@@ -1,4 +1,4 @@
-"""Settings -> AI Config page.
+"""The AI Config activity page.
 
 Offscreen, against the real SQLite-backed ``Config`` from the shared qtui
 conftest — every headstamp assertion round-trips through a *second* ``Config``
@@ -26,18 +26,25 @@ import cv2
 from PySide6.QtWidgets import QLineEdit
 
 from sorter.data.config import Config
+from sorter.data.repository import SettingsRepo
 from sorter.ml import api_client
-from sorter.qtui import settings_ai
+from sorter.qtui import ai_page
 
 from .conftest import drain_until, seed_model
 
 
 @pytest.fixture
-def section(window):
+def page(window):
     """The page, with modals and the camera stubbed out."""
     window.notify = _Notifier()
     window.camera = types.SimpleNamespace(capture_frame=lambda: None, latest_frame=lambda: None, stop=lambda: None)
-    return settings_ai.build_ai_section(window)
+    return ai_page.build_ai_page(window)
+
+
+@pytest.fixture
+def section(page):
+    """The form half of the page — what most of these tests drive."""
+    return page.section
 
 
 class _Notifier:
@@ -84,7 +91,7 @@ def _fresh(config: Config) -> Config:
     return Config(config.db).load()
 
 
-def _names(section: settings_ai.AiSection) -> list[str]:
+def _names(section: ai_page.AiSection) -> list[str]:
     return [str(e["name"]) for e in section._entries()]
 
 
@@ -264,26 +271,55 @@ def test_load_from_server_needs_endpoint_and_model(section, window) -> None:
 # ----- mode awareness -----------------------------------------------------------
 
 
-def test_refresh_mode_disables_the_page_for_a_local_model(section, config) -> None:
-    assert section.server_group.isEnabled()
-    # isVisibleTo, not isVisible: the page is never shown in an offscreen run.
-    assert not section.notice_label.isVisibleTo(section)
+def test_a_local_model_replaces_the_form_with_the_explainer(page, section, config) -> None:
+    """Train's pattern, mirrored: the form is swapped out, not greyed out."""
+    assert page.is_available()
 
-    seed_model(config, {"9mm": 1, "45acp": 2})
-    section.refresh_mode()
+    seed_model(config, {"9mm": 1, "45acp": 2}, name="Range brass")
+    page.refresh_mode()
 
-    assert section.notice_label.isVisibleTo(section)
-    assert not section.server_group.isEnabled()
-    assert not section.headstamp_group.isEnabled()
-    assert not section.test_group.isEnabled()
+    assert not page.is_available()
+    assert page.stack.currentWidget() is not section
+    assert "Range brass" in page.notice_label.text()
+    assert "Use AI Config" in page.notice_label.text()
     # Headstamps are model-scoped, so the list now shows the model's.
     assert _names(section) == ["45acp", "9mm"]
 
 
-def test_refresh_mode_keeps_unsaved_edits(section) -> None:
+def test_the_explainer_falls_back_when_the_model_cannot_be_named(page, config, monkeypatch) -> None:
+    seed_model(config, {"9mm": 1})
+    monkeypatch.setattr(ai_page, "active_model_name", lambda _win: None)
+
+    page.refresh_mode()
+
+    assert page.notice_label.text() == ai_page.LOCAL_MODEL_NOTICE_UNNAMED
+
+
+def test_the_explainer_jumps_to_the_models_page(page, window, config) -> None:
+    seed_model(config, {"9mm": 1})
+    page.refresh_mode()
+
+    page.models_button.click()
+
+    assert window.pages.currentWidget() is window._pages_by_name["Models"]
+    assert window.sidebar_buttons["Models"].isChecked()
+
+
+def test_the_form_comes_back_in_ai_config_mode(page, section, config) -> None:
+    seed_model(config, {"9mm": 1})
+    page.refresh_mode()
+
+    SettingsRepo(config.db).clear_active_model()
+    page.refresh_mode()
+
+    assert page.is_available()
+    assert page.stack.currentWidget() is section
+
+
+def test_refresh_mode_keeps_unsaved_edits(page, section) -> None:
     section.endpoint_edit.setText("http://box:9000")
 
-    section.refresh_mode()
+    page.refresh_mode()
 
     assert section.endpoint_edit.text() == "http://box:9000"
 

@@ -49,7 +49,7 @@ def test_a_separator_splits_the_mode_pair_off(window) -> None:
     assert separator.geometry().bottom() <= window.sidebar_buttons["Train"].y()
 
 
-@pytest.mark.parametrize("name", ["Train", "Models", "Community", "Settings", "Sort"])
+@pytest.mark.parametrize("name", ["Train", "AI Config", "Models", "Community", "Settings", "Sort"])
 def test_sidebar_switches_pages(window, name: str) -> None:
     window.sidebar_buttons[name].click()
 

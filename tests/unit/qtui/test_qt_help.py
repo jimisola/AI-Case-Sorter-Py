@@ -51,10 +51,10 @@ def _block_text(window: HelpWindow) -> str:
         ("Settings", "Serial", "serial"),
         ("Settings", "Camera", "camera"),
         ("Settings", "Image Processing", "image-processing"),
-        ("Settings", "AI Config", "ai-config"),
         ("Settings", "Theme", "theme"),
         ("Settings", None, "settings"),
         ("Train", None, "train"),
+        ("AI Config", None, "ai-config"),
         ("Models", None, "models"),
         ("Community", None, "community"),
         ("", None, ""),
@@ -306,12 +306,10 @@ def test_every_topic_the_shell_can_ask_for_has_a_heading() -> None:
     renamed heading (or a new section with no guide content) silently
     degrades to the top of the guide, which this catches instead.
     """
-    from sorter.qtui.app import ACTIVITIES, AI_CONFIG_ACTIVITY, SETTINGS_SECTIONS
+    from sorter.qtui.app import ACTIVITIES, MODE_ACTIVITIES, SETTINGS_SECTIONS
 
     headings = _headings(GUIDE_MD.read_text(encoding="utf-8"))
-    # AI Config is the one activity with no page of its own: it navigates to
-    # the Settings section of that name, and is covered by the loop below.
-    topics = {topic_for(name) for _icon, name in ACTIVITIES if name != AI_CONFIG_ACTIVITY}
+    topics = {topic_for(name) for _icon, name in (*ACTIVITIES, *MODE_ACTIVITIES)}
     topics |= {topic_for("Settings", section) for section in SETTINGS_SECTIONS}
     topics.add(topic_for("Settings"))
     for topic in topics:

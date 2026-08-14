@@ -345,18 +345,20 @@ changed since increment 3, by surface:
 - **Models and Community share one idiom.** Sortable columns above, one
   selection-scoped action bar below — destructive far left, the primary far
   right. Models: Delete … Activate, with the Active column left as a
-  "● ACTIVE" marker. Community: Remove plus one state-driven primary
+  "● ACTIVE" marker, inked in the palette's action colour so activity reads
+  by colour as well as text. Community: Remove plus one state-driven primary
   (Download / Update / "Already installed"), which carries the whole
   lifecycle — install → update → remove — and queues a second download
   behind a running one. Row-embedded controls were tried on both and
   reverted (see the decision rows).
 - **Sidebar.** Sort / Train / Models / Community with Settings pinned below,
   now inked from hand-authored SVGs by the live palette (the emoji wishlist
-  item, done), plus an **AI Config** activity that appears beside a muted
-  Train in AI Config mode and navigates to Settings → AI Config (Seth: "it
-  takes the place of the training screen; it is analogous to training for an
-  LLM"). Train itself is never hidden — JL didn't discover it existed — only
-  inked `text_subtle`, with the page behind it saying why.
+  item, done), plus an **AI Config** activity beside a muted Train in AI
+  Config mode (Seth: "it takes the place of the training screen; it is
+  analogous to training for an LLM") — a page of its own, like Train's, not
+  a Settings section. Neither of the pair is ever hidden — JL didn't
+  discover Train existed — only inked `text_subtle`, with the page behind it
+  saying why.
 - **Image processing follows the active model.** The primer-mask and crop
   (Hough) settings have lived on the model row since the WinForms port;
   nothing read them. The page now reads/writes the active
@@ -370,6 +372,7 @@ changed since increment 3, by surface:
   `QTextBrowser` alike, opened at the topic for wherever the user is (F1 /
   Help → User Guide) in the guide panel. `topic_for` covers every activity
   and every Settings section; a test pins each answer to a real heading.
+  AI Config is a top-level section of the guide, not a Settings subsection.
 - **Conventions settled:** sentence case for controls, Title Case for
   titles; zoom sliders (50–200%, persisted) on the two log-like panels; the
   notify/confirm seam on every surface that could open a modal.
@@ -748,7 +751,9 @@ candidate work item; per-item agent tasks in a future increment.
 | 2026-08-14 | **Docks moved from `QDockWidget` to Qt Advanced Docking System** (`pyside6-qtads`, LGPL-2.1+, ~600 KB wheel that pins the same `PySide6-Essentials==6.11.1`). Two rounds of stock-Qt fixes still left drag-docking unusable on JL's Linux box; QtAds brings VS Code-style drop-indicator overlays and lays out in its own splitters. Net *removal*: the whole QMainWindowLayout workaround stack (transition repaint, collapsed-dock floor, 1px resize nudge) is gone — those failure modes don't exist here. API differences that leak: `isClosed()` not `isHidden()`, `setFloating()` takes no argument (re-dock is `addDockWidget`), and `addDockWidget` re-opens a closed panel. Theming is `ads--*` QSS with QtAds's own sheet off (`DisableStylesheet`), which also means re-declaring its button-icon rules. No new system deps (`ldd`: libGL/libxkbcommon/libxcb, all already installed by the qtui CI job). |
 | 2026-08-14 | **Row actions on the Models table** (JL), matching Community's: ✓/✎/× as fixed-size icon buttons in the row, the AI Config row getting ✓ alone; the bottom bar keeps only the selection-scoped Images…/Headstamps…/Evaluate…/Export…. Community's button carries the full install → update → remove lifecycle, and a second click queues behind the running download. **Superseded the same day — see the revert below.** |
 | 2026-08-14 | **Foot strips, green primary far right** (JL) on both Sort and Train, with the run counters and the template picker moved onto the slot grid's own header row. Train's capture reads as one column under the image; its counts sit behind a 50/50 splitter and reflow into columns. |
-| 2026-08-14 | **Themes panel + AI Config activity** (Seth via JL): a panel listing every theme, applying on click and synced with Settings → Theme; an AI Config sidebar entry that takes Train's place in AI Config mode and navigates to its Settings section (it has no page of its own — a second mount would double-parent the widget). |
+| 2026-08-14 | **Themes panel + AI Config activity** (Seth via JL): a panel listing every theme, applying on click and synced with Settings → Theme; an AI Config sidebar entry that takes Train's place in AI Config mode and navigates to its Settings section (it has no page of its own — a second mount would double-parent the widget). **The routing was superseded the same day — see the promotion to a page below.** |
 | 2026-08-14 | **In-app guide is one file** (`docs/guide/GUIDE.md`), rendered by GitHub and by the guide panel alike, opened at the topic for wherever the user is. `topic_for` covers every activity and Settings section, and a test pins each answer to a real heading so the two can't drift. |
-| 2026-08-14 | **Sidebar in two groups** (JL): Sort/Models/Community, a palette-driven hairline, then Train and AI Config — both always visible, exactly one live (trainable local model → Train; no active model → AI Config; a community model → neither), tooltips saying which. The muted AI Config now mirrors Train's explainer page instead of dumping the user in Settings: its notice names the active model and jumps to Models, with the form still visible below it. |
+| 2026-08-14 | **Sidebar in two groups** (JL): Sort/Models/Community, a palette-driven hairline, then Train and AI Config — both always visible, exactly one live (trainable local model → Train; no active model → AI Config; a community model → neither), tooltips saying which. The muted AI Config now mirrors Train's explainer instead of dumping the user in Settings: it names the active model and jumps to Models. (First as a notice above a greyed form; the page below completes the mirror.) |
+| 2026-08-14 | **AI Config leaves Settings and becomes an activity page** (JL, live-testing): it was a Settings section that `open_activity` special-cased, so a sidebar click landed the user on *Settings* with the entry unchecked. It is now `qtui/ai_page.py` — a `QStackedWidget` mirroring Train's exactly: the server form when it is the backend, otherwise a full-page explainer naming the model classifying instead plus a jump to Models (the greyed-form-with-a-notice is gone; a form you can't use is noise). `SETTINGS_SECTIONS` no longer lists AI Config, `open_activity` has no special case left, and the guide's AI Config section moved out from under Settings. |
+| 2026-08-14 | **The Models table's "● ACTIVE" marker is inked in the action colour** (JL, live-testing): activity should read by colour, not only by text. An item foreground brush is baked in and no stylesheet reaches it, so `models_page.apply_palette()` joins the serial log and history cards in `_apply_theme`'s hand re-render list. |
 | 2026-08-14 | **Row actions reverted; both tables act from a selection-scoped bar** (JL, after living with the experiment above). Models is Delete … Activate with "● ACTIVE" back as the Active column's marker; Community is Remove plus one state-driven primary whose label and role follow the selected row's `installed_state` and the download queue. Only the trigger surface moved: the queue, the `models/changed` state sync, the Includes column and full column sorting all stayed. Net simplification — no item widgets in either table, so nothing has to be rebuilt after a sort or `_pin_ai_row`. |

@@ -21,6 +21,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QPoint, Qt
+from PySide6.QtGui import QColor
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QHeaderView
 
@@ -30,6 +31,7 @@ from sorter.data.models import Model
 from sorter.data.repository import CartridgeRepo, HeadstampRepo, ModelRepo, SettingsRepo
 from sorter.qtui.dialog_model_editor import ModelEditorDialog
 from sorter.qtui.models_page import (
+    ACTIVE_COLUMN,
     ACTIVE_MARK,
     AI_CONFIG_HINT,
     AI_CONFIG_NAME,
@@ -40,6 +42,7 @@ from sorter.qtui.models_page import (
     SELECT_HINT,
     ZIP_FILTER,
 )
+from sorter.qtui.palettes import THEMES, theme_names
 
 from .conftest import drain_until, seed_model
 
@@ -99,6 +102,12 @@ def active_names(page: Any) -> list[str]:
         for row in range(page.tree.topLevelItemCount())
         if cell(page, row, "Active") == ACTIVE_MARK
     ]
+
+
+def active_colour(page: Any, model_name: str) -> QColor:
+    """The Active cell's foreground on the row named ``model_name``."""
+    item = page.tree.topLevelItem(names(page).index(model_name))
+    return item.foreground(ACTIVE_COLUMN).color()
 
 
 def select_row(page: Any, index: int) -> None:
@@ -500,6 +509,34 @@ def test_the_active_column_marks_exactly_one_row(page, config) -> None:
     assert marks.count(ACTIVE_MARK) == 1
     assert active_names(page) == ["Range brass"]
     assert not any(mark for mark in marks if mark != ACTIVE_MARK)
+
+
+def test_the_active_mark_is_inked_in_the_action_colour(page, window, config) -> None:
+    """JL: activity should read by colour, not only by text."""
+    model = make_model(config, "Range brass")
+    page.refresh()
+    select(page, model.id)
+    page.activate_selected()
+
+    action = QColor(window.palette_colors["action"])
+
+    assert active_colour(page, "Range brass") == action
+    # The AI row is the one that just lost the mark: it must not keep the ink.
+    assert active_colour(page, AI_CONFIG_NAME) != action
+
+
+def test_a_theme_switch_re_inks_the_active_mark(page, window, config) -> None:
+    """An item brush is baked in, so the switch needs the explicit
+    ``apply_palette`` re-render rather than the stylesheet."""
+    model = make_model(config, "Range brass")
+    page.refresh()
+    select(page, model.id)
+    page.activate_selected()
+    other = next(name for name in theme_names() if THEMES[name]["action"] != window.palette_colors["action"])
+
+    window.set_theme(other)
+
+    assert active_colour(page, "Range brass") == QColor(THEMES[other]["action"])
 
 
 def test_the_ai_row_has_no_model_actions(page) -> None:

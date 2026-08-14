@@ -9,7 +9,8 @@ is and who owns it.
 Layout is Qt-idiomatic rather than a transcription: one sortable table of
 models with an action bar that follows the selection, instead of Tk's per-row
 card buttons. The columns carry the same facts the cards did, and the Active
-column marks the active row. (Row-scoped controls — a radio in the Active
+column marks the active row in the palette's action colour, so the mark reads
+at a glance (JL). (Row-scoped controls — a radio in the Active
 column, ✎/× icon buttons in an Actions column — were tried and dropped: JL
 lived with them and chose the bar.)
 
@@ -37,6 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QByteArray, Qt  # ty: ignore[unresolved-import]
+from PySide6.QtGui import QBrush, QColor  # ty: ignore[unresolved-import]
 from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QAbstractItemView,
     QComboBox,
@@ -81,6 +83,7 @@ COLUMNS = ("Model", "Active", "Cartridge", "Type", "Mode", "Images", "Trained", 
 # Breathing room over resizeColumnToContents — see _autosize_columns.
 COLUMN_PADDING = 12
 ACTIVE_MARK = "● ACTIVE"
+ACTIVE_COLUMN = COLUMNS.index("Active")
 EMPTY_VALUE = "—"
 # GNOME's file-chooser portal strips the parenthesized "(*.zip)" from the
 # label it shows, leaving just "Model archives" with no visible pattern (JL
@@ -480,8 +483,27 @@ class ModelsPage(QWidget):
     ) -> QTreeWidgetItem:
         item = _SortableItem(values, sort_values, model_id)
         self.tree.addTopLevelItem(item)
+        if values[ACTIVE_COLUMN] == ACTIVE_MARK:
+            item.setForeground(ACTIVE_COLUMN, self._active_brush())
         self._rows.append((model_id, model))
         return item
+
+    def _active_brush(self) -> QBrush:
+        """The action role — activity reads as green, not only as text (JL)."""
+        return QBrush(QColor(self._win.palette_colors["action"]))
+
+    def apply_palette(self) -> None:
+        """Re-ink the ACTIVE marker after a theme switch.
+
+        An item brush is baked in at build time and no stylesheet reaches it,
+        so this is the same hand re-render the serial log and history cards
+        get from ``app._apply_theme``.
+        """
+        brush = self._active_brush()
+        for index in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(index)
+            if item is not None and item.text(ACTIVE_COLUMN) == ACTIVE_MARK:
+                item.setForeground(ACTIVE_COLUMN, brush)
 
     def _add_ai_row(self, active: bool) -> None:
         item = self._add_row(

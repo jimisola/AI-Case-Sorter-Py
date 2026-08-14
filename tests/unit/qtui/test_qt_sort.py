@@ -649,65 +649,60 @@ def test_the_pair_tooltips_state_which_one_is_live(window, config) -> None:
     assert window.sidebar_buttons["AI Config"].toolTip() == AI_CONFIG_TOOLTIP_MUTED
 
 
-def test_ai_config_opens_the_settings_section_it_already_owns(window) -> None:
-    """One AiSection instance, mounted once: the sidebar entry navigates to
-    Settings → AI Config rather than re-parenting that widget into a page."""
+def test_ai_config_is_a_page_of_its_own(window) -> None:
+    """It left Settings (JL): the sidebar entry is a plain page navigation,
+    and the button that was clicked is the one that ends up checked."""
     window.sidebar_buttons["AI Config"].click()
 
-    assert window.pages.currentWidget() is window._pages_by_name["Settings"]
-    assert window.settings_list.currentItem().text() == "AI Config"
-    assert window.settings_pages.currentWidget() is window.ai_section
-    # Settings is where the user landed, and the sidebar says so.
-    assert window.sidebar_buttons["Settings"].isChecked()
-    assert not window.sidebar_buttons["AI Config"].isChecked()
+    assert window.pages.currentWidget() is window._pages_by_name["AI Config"]
+    assert window.sidebar_buttons["AI Config"].isChecked()
+    assert "AI Config" not in [window.settings_list.item(i).text() for i in range(window.settings_list.count())]
 
 
-def test_a_muted_ai_config_click_lands_on_guidance_naming_the_active_model(window, config) -> None:
-    """The mirror of Train's explainer page: the click still reaches the real
-    form, but the notice above it says what is classifying instead."""
+def test_a_muted_ai_config_click_lands_on_the_explainer_naming_the_active_model(window, config) -> None:
+    """The mirror of Train's explainer page: the form is replaced by a panel
+    saying what is classifying instead."""
     seed_model(config, {"9mm FC": 1}, name="Range brass")
     mode_changed(window)
 
     window.sidebar_buttons["AI Config"].click()
 
-    section = window.ai_section
-    assert window.settings_pages.currentWidget() is section
-    assert not section.notice_widget.isHidden()
-    assert "Range brass" in section.notice_label.text()
-    assert "Use AI Config" in section.notice_label.text()
-    # The form is still there to look at, explained rather than hidden away.
-    assert not section.server_group.isHidden()
+    page = window.ai_page
+    assert window.pages.currentWidget() is page
+    assert not page.is_available()
+    assert "Range brass" in page.notice_label.text()
+    assert "Use AI Config" in page.notice_label.text()
 
 
-def test_the_guidance_jump_button_goes_to_models(window, config) -> None:
+def test_the_explainer_jump_button_goes_to_models(window, config) -> None:
     seed_model(config, {"9mm FC": 1})
     mode_changed(window)
     window.sidebar_buttons["AI Config"].click()
 
-    window.ai_section.models_button.click()
+    window.ai_page.models_button.click()
 
     assert window.pages.currentWidget() is window._pages_by_name["Models"]
     assert window.sidebar_buttons["Models"].isChecked()
 
 
-def test_the_guidance_is_gone_in_ai_config_mode(window) -> None:
+def test_the_form_is_what_ai_config_mode_shows(window) -> None:
     window.sidebar_buttons["AI Config"].click()
 
-    assert window.ai_section.notice_widget.isHidden()
-    assert window.pages.currentWidget() is window._pages_by_name["Settings"]
+    assert window.ai_page.is_available()
+    assert window.ai_page.stack.currentWidget() is window.ai_page.section
 
 
-def test_a_mode_change_leaves_the_settings_page_alone(window, config) -> None:
-    """AI Config has no page to bounce off — the notice explains why its fields
-    went flat, and a forced jump to Sort would be a jump the user didn't ask
-    for."""
+def test_a_mode_change_leaves_the_ai_config_page_alone(window, config) -> None:
+    """The explainer replaces the form in place — a forced jump to Sort would
+    be a jump the user didn't ask for."""
     window.sidebar_buttons["AI Config"].click()
     seed_model(config, {"9mm FC": 1})
 
     mode_changed(window)
 
     assert not window.sidebar_buttons["AI Config"].isHidden()
-    assert window.pages.currentWidget() is window._pages_by_name["Settings"]
+    assert window.pages.currentWidget() is window._pages_by_name["AI Config"]
+    assert not window.ai_page.is_available()
 
 
 def test_community_follows_auth_state(window) -> None:

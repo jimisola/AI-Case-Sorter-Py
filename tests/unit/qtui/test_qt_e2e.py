@@ -423,13 +423,14 @@ def test_demo_c_model_lifecycle(config, window, monkeypatch, tmp_path) -> None:
     assert window.pages.currentWidget() is window._pages_by_name["Train"]
     assert not window.train_page.is_available()
 
-    # And the muted AI Config, back on the imported model, lands on guidance
-    # that names it rather than dumping the user in Settings unexplained.
+    # And the muted AI Config, back on the imported model, lands on its own
+    # page's explainer, which names the model classifying instead.
     activate_row(page, imported.id)
     assert drain_until(window, lambda: window.sidebar_buttons["AI Config"].property("unavailable") is True)
     window.sidebar_buttons["AI Config"].click()
-    assert window.settings_pages.currentWidget() is window.ai_section
-    assert imported.name in window.ai_section.notice_label.text()
+    assert window.pages.currentWidget() is window.ai_page
+    assert not window.ai_page.is_available()
+    assert imported.name in window.ai_page.notice_label.text()
 
 
 def select_model(page: Any, model_id: int) -> None:

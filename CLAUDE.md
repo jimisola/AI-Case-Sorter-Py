@@ -713,14 +713,13 @@ settings row is what the two actually share.
   on the button — restyled `text_subtle` by `qtui/theme.py` and re-inked by
   `_paint_sidebar_icon`, since a stylesheet can't reach a QIcon — and leaves
   it **enabled**: the click must still work, because the explainer behind it
-  is what answers it. `train_page`'s stacked panel is one half;
-  `settings_ai`'s notice is the other, naming the model that classifies
-  instead and offering a jump to Models, with the real form still visible
-  below it. (AI Config has no page of its own — the one `AiSection` is already
-  mounted in the Settings stack, so `open_activity` refreshes it and navigates
-  to Settings → AI Config rather than re-parenting it.) A tooltip on both
-  entries states liveness in one line. Hiding an activity was how JL came not
-  to know Train existed.
+  is what answers it. Both halves are the same stacked panel now:
+  `train_page`'s, and `ai_page`'s — which replaces the server form with a
+  panel naming the model that classifies instead and a jump to Models (JL,
+  2026-08-14: AI Config was a Settings section reached by a special case in
+  `open_activity`; it is a page like any other, and `SETTINGS_SECTIONS` no
+  longer lists it). A tooltip on both entries states liveness in one line.
+  Hiding an activity was how JL came not to know Train existed.
   The **Themes dock** is a second face on Settings → Theme, not a second
   implementation: both pickers drive `set_theme`, `refresh_theme_picker`
   (the hook `dialog_theme_editor` already looks for) re-reads the registry
@@ -741,8 +740,8 @@ settings row is what the two actually share.
   `QMainWindowLayout` workarounds this UI used to carry — don't reintroduce
   repaint/collapse/resize-nudge handling for docks.
 - **One module per surface.** Activity pages (`models_page.py`,
-  `train_page.py`, `community_page.py`), Settings sections
-  (`settings_{camera,serial,imageproc,ai}.py`) and dialogs (`dialog_*.py`)
+  `train_page.py`, `community_page.py`, `ai_page.py`), Settings sections
+  (`settings_{camera,serial,imageproc}.py`) and dialogs (`dialog_*.py`)
   each own their widgets and expose a `build_*(win)` factory taking the
   window; `app.py` only wires them together. Settings sections are listed in
   `SETTINGS_SECTIONS` and reached by name (`_open_settings_section`);
@@ -750,9 +749,10 @@ settings row is what the two actually share.
   "take me there" button should use — `open_activity` alone leaves the
   sidebar pointing at where the user was.
 - **A surface that can't do its job explains itself where it is.** Sort's
-  first-run panel and Train's unavailable panel are both a `QStackedWidget`
-  over the page's own content, swapped by a re-evaluate on `mode/changed` (or
-  an indicator paint), never a modal and never a disabled sidebar entry.
+  first-run panel and Train's and AI Config's unavailable panels are all a
+  `QStackedWidget` over the page's own content, swapped by a re-evaluate on
+  `mode/changed` (or an indicator paint), never a modal and never a disabled
+  sidebar entry.
 - **Both tables act from a selection-scoped bar, not from the rows.** Models
   and Community each put every row-changing action on the bar under the
   table, following `currentItem`: Models is Delete (danger, far left) …
@@ -760,8 +760,10 @@ settings row is what the two actually share.
   one state-driven primary (far right) whose label/role come from
   `installed_state` — Download / Update / "Already installed" — plus the
   queue, so a row already downloading or waiting says so instead of offering
-  the click again. The Active column is a **marker** (`ACTIVE_MARK`), not a
-  control. Row-embedded controls (a radio in Active, ✎/× icon buttons in an
+  the click again. The Active column is a **marker** (`ACTIVE_MARK`, inked in
+  the palette's `action` role by `models_page.apply_palette`, which
+  `_apply_theme` calls — an item brush is baked in, out of the stylesheet's
+  reach), not a control. Row-embedded controls (a radio in Active, ✎/× icon buttons in an
   Actions column, the catalogue's ↓/↻/× button) were built, shipped behind
   `--qt` and then reverted: JL lived with them and chose the bar. Don't
   reintroduce item widgets in these tables — `_pin_ai_row` and every sort
