@@ -136,27 +136,26 @@ jobs:
       - name: Sync dependencies (with the qt extra)
         run: uv sync --locked --extra qt --python ${{ matrix.python-version }}
 
-      - name: Run the qtui tests
-        if: runner.os == 'Linux'
-        run: >
-          uv run --locked --extra qt --python ${{ matrix.python-version }}
-          pytest tests/unit/qtui -q --junitxml=build/junit.xml
-
-      # Windows runs one pytest process per test module. Qt's offscreen
-      # plugin on this runner takes an access violation at the first real
-      # event pump after some mid-suite state accumulates (deterministic;
-      # site moves as tests are skipped, so it is cross-module, and every
-      # module is green in isolation). Process-per-module keeps FULL
-      # coverage — no skips — at the cost of interpreter startup per file.
-      # Revisit on PySide6 upgrades; Linux above stays one process and
-      # would catch any genuine cross-module regression.
+      # BOTH platforms run one pytest process per test module. Windows first:
+      # its offscreen plugin took an access violation at the first real event
+      # pump once mid-suite state accumulated. Linux kept a single process as
+      # the cross-module canary — and that canary then segfaulted three
+      # separate times at the same landmark test, each a runner-only crash
+      # unreproducible on an identical local tree/Python (coverage tracer
+      # once, allocation noise twice; see .claude/skills/qt-ui-debugging).
+      # Process-per-module keeps FULL coverage — no skips — and turns an
+      # environment-noise crash into a named module failure instead of a
+      # suite kill. Cross-module interaction is still exercised: locally the
+      # suite runs one-process (and has never crashed there), and the e2e
+      # module drives whole journeys in one process. pwsh ships on both
+      # runner images, so one step serves both. Revisit on PySide6 upgrades.
       - name: Run the qtui tests (process per module)
-        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $failed = @()
           Get-ChildItem tests/unit/qtui/test_*.py | ForEach-Object {
-            uv run --locked --extra qt --python ${{ matrix.python-version }} pytest $_.FullName -q
+            $junit = "build/junit-" + $_.BaseName + ".xml"
+            uv run --locked --extra qt --python ${{ matrix.python-version }} pytest $_.FullName -q --junitxml=$junit
             if ($LASTEXITCODE -ne 0) { $failed += $_.Name }
           }
           if ($failed.Count -gt 0) { Write-Error ("failing modules: " + ($failed -join ', ')); exit 1 }
@@ -165,7 +164,7 @@ jobs:
         if: always() && runner.os == 'Linux'
         with:
           name: junit-qtui-${{ matrix.os }}
-          path: build/junit.xml
+          path: build/junit-*.xml
 
   launcher-smoke:
     name: verify launcher bootstrap (${{ matrix.os }})
