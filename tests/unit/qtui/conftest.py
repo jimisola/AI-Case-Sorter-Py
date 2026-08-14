@@ -19,6 +19,21 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
+def pytest_collection_modifyitems(config: Any, items: list) -> None:
+    """Run every test in this directory outside coverage measurement.
+
+    The full suite under pytest-cov's tracer segfaults, and which test dies
+    is decided by allocation noise, not by any line of ours: bisected to the
+    point where adding or removing a single unrelated QAction flips the
+    crash, on both CI runners and locally, on every coverage core and with
+    branch coverage on or off. Uninstrumented, the suite has never crashed.
+    pytest-cov's ``no_cover`` marker is the supported per-test off switch.
+    """
+    for item in items:
+        if "tests/unit/qtui" in str(item.path).replace("\\", "/"):
+            item.add_marker(pytest.mark.no_cover)
+
+
 @pytest.fixture(scope="session")
 def qapp():
     pytest.importorskip("PySide6")
@@ -69,7 +84,10 @@ def config(tmp_path: Path):
 
     db = Database(tmp_path / "casesorter.db")
     db.ensure_initialized()
-    return Config(db).load()
+    yield Config(db).load()
+    # Explicit close, or every window teardown surfaces a ResourceWarning
+    # once the finalizer actually runs (window_factory deleteLater's).
+    db.close()
 
 
 @pytest.fixture
@@ -88,6 +106,7 @@ def window_factory(qapp) -> Any:
     yield _make
     for window in windows:
         window.close()
+        window.deleteLater()
 
 
 @pytest.fixture
