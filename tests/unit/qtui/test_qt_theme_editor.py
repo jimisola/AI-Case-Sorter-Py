@@ -174,6 +174,26 @@ def test_success_and_error_stay_locked_to_action_and_danger(window) -> None:
     assert THEMES["Mine"]["error"] == THEMES["Mine"]["danger"] == "#010203"
 
 
+def test_save_and_apply_keeps_the_editor_open_and_switches_to_editing(window) -> None:
+    """Seth: saving is the iteration step, not the exit — the dialog stays up,
+    and a first save of a built-in-based theme becomes an edit session on the
+    new theme."""
+    dialog = _editor(window)
+    dialog.name_edit.setText("Mine")
+
+    dialog.save()
+
+    assert dialog.result() == 0  # neither accepted nor rejected — still open
+    assert dialog.editing is True
+    assert dialog.base == "Mine"
+    assert "Mine" in dialog.mode_hint.text()
+
+    # A second save writes back to the same theme without a replace-confirm.
+    dialog.set_color("action", "#123456")
+    dialog.save()
+    assert THEMES["Mine"]["action"] == "#123456"
+
+
 def test_a_typed_hex_updates_the_working_palette(window) -> None:
     dialog = _editor(window)
 

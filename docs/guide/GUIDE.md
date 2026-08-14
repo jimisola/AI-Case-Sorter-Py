@@ -581,7 +581,8 @@ panel](#themes-panel), which is the easier place to try several.
 **Edit theme…** opens the theme editor: it starts from the theme you are
 currently using and gives you a colour picker per role with a live preview.
 **Save & apply** writes back to a theme you made (renaming it moves it rather
-than copying) and makes a new one when you started from a built-in;
+than copying), makes a new one when you started from a built-in, and leaves
+the editor open so you can keep adjusting — **Close** ends the session;
 **Create new…** saves under a name you pick, and a built-in is never
 overwritten either way. A theme can also be exported to a file and imported
 on another machine.

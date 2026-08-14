@@ -8,8 +8,9 @@ palette (``theme.normalize_palette``) and a user only wants to change a few
 roles.
 
 On a saved theme, **Save & apply** writes back to it — renaming included, which
-moves the theme rather than copying it. **Create new…** always makes a separate
-theme, so a built-in is never the thing being written to.
+moves the theme rather than copying it — and leaves the dialog open (Seth):
+saving is the iteration step, not the exit. **Create new…** always makes a
+separate theme, so a built-in is never the thing being written to.
 
 The comic-ink and halftone options are edited and stored faithfully but render
 flat under Qt (known gap): they are drawn by the Tk canvases. Keeping them in
@@ -385,14 +386,13 @@ class ThemeEditorDialog(QDialog):
         row.addStretch(1)
         column.addLayout(row)
 
-        column.addWidget(
-            self._hint(
-                f"Editing “{self.base}” — Save & apply writes back to it, including a rename."
-                if self.editing
-                else f"Starting from the built-in “{self.base}”, which can't be changed. "
-                "Save & apply keeps this as a new theme."
-            )
+        self.mode_hint = self._hint(
+            f"Editing “{self.base}” — Save & apply writes back to it, including a rename."
+            if self.editing
+            else f"Starting from the built-in “{self.base}”, which can't be changed. "
+            "Save & apply keeps this as a new theme."
         )
+        column.addWidget(self.mode_hint)
         column.addWidget(self._hint(OPTIONS_NOTE))
 
     def _build_color_list(self) -> QWidget:
@@ -485,7 +485,10 @@ class ThemeEditorDialog(QDialog):
         save.setObjectName("action")
         save.clicked.connect(self.save)
         row.addWidget(save)
-        cancel = QPushButton("Cancel", self)
+        # "Close", not "Cancel": Save & apply keeps the dialog open (Seth) and
+        # applies immediately, so by the time this is clicked there may be
+        # nothing left to cancel.
+        cancel = QPushButton("Close", self)
         cancel.clicked.connect(self.reject)
         row.addWidget(cancel)
         column.addLayout(row)
@@ -591,7 +594,13 @@ class ThemeEditorDialog(QDialog):
         payload = self.payload(name)
         payload["based_on"] = origin or self.base
         self._register_and_apply(payload)
-        self.accept()
+        # Stay open (Seth): iterating on a theme is the editor's whole point,
+        # and Save & apply is the iteration step. A first save of a
+        # built-in-based theme turns the session into an edit of the new one.
+        self.editing = True
+        self.base = name
+        self.setWindowTitle("Edit Theme")
+        self.mode_hint.setText(f"Saved — editing “{self.base}”. Save & apply writes back to it, including a rename.")
 
     def create_new(self) -> None:
         """Save these colours as a separate theme, under a name of its own."""
