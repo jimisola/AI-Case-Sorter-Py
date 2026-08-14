@@ -267,7 +267,7 @@ def test_window_state_and_model_columns_persist_across_a_rebuild(window_factory,
     first.show()
     qapp.processEvents()
     first.models_page.tree.header().resizeSection(0, 321)
-    first.history_dock.setVisible(True)
+    first.history_dock.toggleView(True)  # closed at startup; opened here
     qapp.processEvents()
 
     first.close()  # closeEvent saves ui.window_state + ui.models_columns
@@ -278,7 +278,8 @@ def test_window_state_and_model_columns_persist_across_a_rebuild(window_factory,
     qapp.processEvents()
 
     assert second.models_page.tree.header().sectionSize(0) == 321
-    assert second.history_dock.isVisible()
+    # The dock half is now CDockManager's XML state, not QMainWindow's.
+    assert not second.history_dock.isClosed()
 
 
 def test_restore_ignores_a_malformed_setting(window_factory, config) -> None:
@@ -292,145 +293,55 @@ def test_restore_ignores_a_malformed_setting(window_factory, config) -> None:
     window_factory(config)
 
 
-# ----- dock float / re-dock recovery -------------------------------------------
+# ----- dock float / re-dock ----------------------------------------------------
+#
+# The stock-Qt suite here used to pin a stack of QMainWindowLayout workarounds
+# (a repaint-on-transition handler, a collapsed-dock size floor, a 1px resize
+# nudge). QtAds lays panels out in its own splitters, so none of those failure
+# modes exist to work around and the code they covered is gone. What remains
+# worth pinning is the behaviour users actually hit.
 
 
-@pytest.mark.parametrize("dock_name", ["serial_dock", "history_dock"])
-def test_dock_top_level_change_schedules_a_recompute(window, qapp, dock_name: str) -> None:
-    calls = []
-    window._repaint_after_dock_transition = lambda: calls.append("x")
-    dock = getattr(window, dock_name)
-
-    dock.topLevelChanged.emit(True)
-    qapp.processEvents()  # flush the QTimer.singleShot(0, ...)
-
-    assert calls == ["x"]
-
-
-@pytest.mark.parametrize("dock_name", ["serial_dock", "history_dock"])
-def test_dock_location_change_schedules_a_recompute(window, qapp, dock_name: str) -> None:
-    calls = []
-    window._repaint_after_dock_transition = lambda: calls.append("x")
-    dock = getattr(window, dock_name)
-
-    dock.dockLocationChanged.emit(Qt.DockWidgetArea.LeftDockWidgetArea)
-    qapp.processEvents()  # flush the QTimer.singleShot(0, ...)
-
-    assert calls == ["x"]
-
-
-@pytest.mark.parametrize("dock_name", ["serial_dock", "history_dock"])
-def test_dock_visibility_change_schedules_a_collapse_check(window, qapp, dock_name: str) -> None:
-    # Lighter than topLevelChanged/dockLocationChanged's handler on purpose:
-    # visibilityChanged fires on ordinary show/hide (a window's own
-    # construction included), so it must never carry the resize-nudge
-    # fallback — see _watch_dock_transitions's docstring, point 3.
-    calls = []
-    window._restore_collapsed_docks = lambda: calls.append("x")
-    dock = getattr(window, dock_name)
-
-    dock.visibilityChanged.emit(True)
-    qapp.processEvents()  # flush the QTimer.singleShot(0, ...)
-
-    assert calls == ["x"]
-
-
-def test_dock_transition_recompute_invalidates_the_layout(window, qapp) -> None:
+def test_a_floated_panel_returns_home_and_stays_open(window, qapp) -> None:
     window.show()
     qapp.processEvents()
-    layout = window.layout()
-    calls = []
-    original_invalidate = layout.invalidate
-
-    def spy_invalidate() -> None:
-        calls.append("invalidate")
-        original_invalidate()
-
-    layout.invalidate = spy_invalidate
-
-    window._repaint_after_dock_transition()
-
-    assert calls == ["invalidate"]
-
-
-def test_dock_transition_nudge_restores_the_original_size(window, qapp) -> None:
-    window.show()
+    window.serial_dock.setFloating()
     qapp.processEvents()
-    original_size = window.size()
+    assert window.serial_dock.isFloating()
 
-    window._repaint_after_dock_transition()
-    qapp.processEvents()  # flush the queued restore
-
-    assert window.size() == original_size
-
-
-def test_collapsed_serial_dock_is_pushed_back_to_a_usable_height(window, qapp) -> None:
-    from sorter.qtui.app import DOCK_RESTORED_SIZE_PX
-
-    window.show()
+    window._redock_panels()
     qapp.processEvents()
-    calls = []
-    window.resizeDocks = lambda docks, sizes, orientation: calls.append((docks, sizes, orientation))
-    # The offscreen platform doesn't honor resizeDocks/resize() on a
-    # QMainWindowLayout-managed dock (confirmed manually — geometry snaps
-    # back on the next layout pass), so the collapse itself is simulated by
-    # overriding height() rather than actually shrinking the dock; what's
-    # asserted is that the restore logic fires with the right args. The
-    # actual on-screen recovery is what JL verifies on real hardware.
-    window.serial_dock.height = lambda: 10
 
-    window._restore_collapsed_docks()
-
-    assert calls == [([window.serial_dock], [DOCK_RESTORED_SIZE_PX], Qt.Orientation.Vertical)]
+    assert not window.serial_dock.isFloating()
+    assert not window.serial_dock.isClosed()
+    assert window.serial_dock.dockContainer() is window.dock_manager
+    assert window.dock_manager.floatingWidgets() == []
 
 
-def test_collapsed_history_dock_is_pushed_back_to_a_usable_width(window, qapp) -> None:
-    from sorter.qtui.app import DOCK_RESTORED_SIZE_PX
+def test_panels_stay_closable_movable_and_floatable(window) -> None:
+    import PySide6QtAds as ads
 
-    window.show()
-    window.history_dock.setVisible(True)
-    qapp.processEvents()
-    calls = []
-    window.resizeDocks = lambda docks, sizes, orientation: calls.append((docks, sizes, orientation))
-    window.history_dock.width = lambda: 10
-
-    window._restore_collapsed_docks()
-
-    assert calls == [([window.history_dock], [DOCK_RESTORED_SIZE_PX], Qt.Orientation.Horizontal)]
+    feature = ads.CDockWidget.DockWidgetFeature
+    for dock in (window.serial_dock, window.history_dock, window.help_dock):
+        features = dock.features()
+        assert features & feature.DockWidgetClosable
+        assert features & feature.DockWidgetMovable
+        assert features & feature.DockWidgetFloatable
 
 
-def test_a_dock_at_a_healthy_size_is_left_alone(window, qapp) -> None:
-    window.show()
-    qapp.processEvents()
-    calls = []
-    window.resizeDocks = lambda docks, sizes, orientation: calls.append((docks, sizes, orientation))
+def test_the_workspace_is_a_fixed_central_area(window) -> None:
+    # The sidebar+pages must never be draggable or closable: it is the app,
+    # not a panel. QtAds's central widget is exactly that contract.
+    feature = window.central_dock.features()
+    import PySide6QtAds as ads
 
-    window._restore_collapsed_docks()
-
-    assert calls == []
-
-
-def test_a_floating_dock_is_never_resized_by_the_restore(window, qapp) -> None:
-    window.show()
-    qapp.processEvents()
-    window.serial_dock.setFloating(True)
-    qapp.processEvents()
-    calls = []
-    window.resizeDocks = lambda docks, sizes, orientation: calls.append((docks, sizes, orientation))
-    window.serial_dock.height = lambda: 10  # would trip the floor if docked
-
-    window._restore_collapsed_docks()
-
-    assert calls == []
+    assert window.central_dock.isCentralWidget()
+    assert not feature & ads.CDockWidget.DockWidgetFeature.DockWidgetClosable
+    assert not feature & ads.CDockWidget.DockWidgetFeature.DockWidgetFloatable
 
 
-def test_docks_stay_closable_movable_and_floatable(window) -> None:
-    from PySide6.QtWidgets import QDockWidget
-
-    expected = (
-        QDockWidget.DockWidgetFeature.DockWidgetClosable
-        | QDockWidget.DockWidgetFeature.DockWidgetMovable
-        | QDockWidget.DockWidgetFeature.DockWidgetFloatable
-    )
-    assert window.serial_dock.features() == expected
-    assert window.history_dock.features() == expected
+def test_qtads_own_stylesheet_is_disabled_so_the_theme_owns_the_panels(window) -> None:
+    # QtAds installs a ~10 KB sheet on the manager, which sits nearer the
+    # panels than the window's and would win — freezing them at one palette.
+    assert window.dock_manager.styleSheet() == ""
+    assert "ads--CDockWidgetTab" in window.styleSheet()

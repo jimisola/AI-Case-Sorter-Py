@@ -492,7 +492,7 @@ def test_demo_d_help_follows_the_page_you_are_on(window) -> None:
     window.sidebar_buttons["Sort"].click()
     guide_action.trigger()
 
-    assert not window.help_dock.isHidden(), "F1 didn't open the guide dock"
+    assert not window.help_dock.isClosed(), "F1 didn't open the guide dock"
     assert help_block(window) == "Sort dashboard"
 
     window.sidebar_buttons["Settings"].click()
@@ -521,10 +521,10 @@ def test_demo_d_the_guide_dock_toggles_from_the_view_menu(window) -> None:
     assert set(toggles) == {"Serial Monitor", "Classification History", "User Guide panel", "Re-dock panels"}
 
     toggles["User Guide panel"].trigger()
-    assert not window.help_dock.isHidden()
+    assert not window.help_dock.isClosed()
 
     toggles["User Guide panel"].trigger()
-    assert window.help_dock.isHidden()
+    assert window.help_dock.isClosed()
 
 
 # ----- one journey the others can't reach: a model with no checkpoint ---------

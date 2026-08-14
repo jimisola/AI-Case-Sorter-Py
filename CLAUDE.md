@@ -688,10 +688,25 @@ settings row is what the two actually share.
 - **Shell (`app.py`).** `QtMainWindow` = an **activity sidebar** (Sort, Train,
   Models, Community; Settings pinned below the stretch) driving a
   `QStackedWidget` of pages, plus three **docks** — serial monitor (bottom),
-  classification history and the user guide (right, both hidden until asked
+  classification history and the user guide (right, both closed until asked
   for) — a status bar (camera/serial indicators, update affordance, sign-in)
   and File/View/Help menus. It owns the `EventBus`, `Camera`, broker,
   `RunController` and `AuthManager`, exactly as Tk's `MainWindow` does.
+- **Docking is Qt Advanced Docking System** (`pyside6-qtads`, the `[qt]`
+  extra), not `QDockWidget` — stock Qt's drag-docking was unusable on Linux.
+  One `CDockManager` is the window's central widget; the sidebar+pages are
+  *its* central area, a fixed anchor the panels arrange around. Its semantics
+  differ from `QDockWidget`'s in three places that reach call sites and tests:
+  a panel's off state is **`isClosed()`, never `isHidden()`** (which is False
+  either way), `setFloating()` **takes no argument** — re-docking is
+  `addDockWidget` again, which is all `_redock_panels` (View → Re-dock panels)
+  does — and `addDockWidget` **re-opens a closed panel**, so anything walking
+  the docks must skip closed ones. `reveal_dock` is the show/raise pair
+  (`toggleView(True)` + `setAsCurrentTab`). Panel layout persists as the
+  manager's own XML (`ui.window_state`); a pre-QtAds blob simply fails to
+  restore, so there was nothing to migrate. QtAds obviates the
+  `QMainWindowLayout` workarounds this UI used to carry — don't reintroduce
+  repaint/collapse/resize-nudge handling for docks.
 - **One module per surface.** Activity pages (`models_page.py`,
   `train_page.py`, `community_page.py`), Settings sections
   (`settings_{camera,serial,imageproc,ai}.py`) and dialogs (`dialog_*.py`)
@@ -712,7 +727,11 @@ settings row is what the two actually share.
   one `qtui/palettes.py` palette into a stylesheet keyed on **objectNames**
   (`action`, `danger`, `update`, `slotCard`, `serialLog`, …) — set the
   objectName, never a hard-coded color. Halftone/ink-outline themes render
-  flat here. The few places a stylesheet can't reach (rich text in the feed
+  flat here. The dock panels are the one block keyed on class instead
+  (`ads--CDockWidgetTab`, `ads--CDockAreaTitleBar`, …) — QtAds's own
+  stylesheet is disabled so these are what paint them, which also means
+  theme.py has to re-declare QtAds's button-icon rules or every
+  close/undock button renders blank. The few places a stylesheet can't reach (rich text in the feed
   and indicators, `QPlainTextEdit` line colors, painted history cards) bake
   their colors in and are re-rendered by an explicit `apply_palette()` on
   every switch.
@@ -734,9 +753,10 @@ settings row is what the two actually share.
   the same dialog is the history view behind the Sort page's "Moderator notes
   (N)" button. Every one of these surfaces is absent when the fetch fails.
 - **Platform.** `default_qpa_platform()` prefers `xcb;wayland` on Linux — a
-  floated `QDockWidget` can't be moved or resized under native Wayland — and
-  always yields to an explicit `QT_QPA_PLATFORM`, which is what lets the tests
-  run offscreen.
+  floated panel can't be moved or resized under native Wayland, which the move
+  to QtAds didn't change (its floating containers are the same kind of
+  frameless top-level) — and always yields to an explicit `QT_QPA_PLATFORM`,
+  which is what lets the tests run offscreen.
 - **Tests** live in `tests/unit/qtui/` and run **offscreen, with no Xvfb**
   (§8). `conftest.py` supplies `qapp`, a real SQLite-backed `config`,
   `window_factory`/`window`, plus `seed_model` and `drain_until` (pump the bus

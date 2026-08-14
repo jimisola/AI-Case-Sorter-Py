@@ -207,11 +207,12 @@ chrome, placeholder content wherever porting tab logic would be needed.
   Config, Updates, Theme), which is where the six configuration tabs go. The
   theme picker moved out of the title bar into Settings → Theme; the header
   keeps title/subtitle only.
-- **Serial monitor is a `QDockWidget`** (right, closable/floatable) instead of
-  the Tk detached `Toplevel` — `View → Serial Monitor` is literally the dock's
+- **Serial monitor is a dock panel** (closable/floatable) instead of the Tk
+  detached `Toplevel` — `View → Serial Monitor` is literally the dock's
   `toggleViewAction()`. It renders `serial/rx`, `serial/tx` and `serial/note`
   from the bus into a `QPlainTextEdit` with `setMaximumBlockCount(500)` — the
-  ring buffer the Tk monitor hand-rolls with a deque.
+  ring buffer the Tk monitor hand-rolls with a deque. (Built on `QDockWidget`;
+  moved to Qt Advanced Docking System later — see the decision log.)
 - **Menu bar**: File → Open Data Folder / Quit, View, Help → About. The Tk UI
   has no menu bar at all; this is where "not a tab, not a button" actions
   (data folder, updates, about) stop competing for status-bar space.
@@ -234,7 +235,8 @@ green, ruff/ty clean.
 - **`QDockWidget::title` is style-able, its buttons are not** (without shipping
   icons): float/close glyphs come from the platform style, so a dark palette
   gets platform-colored controls on a themed title bar. Acceptable; icons are a
-  later polish item.
+  later polish item. *(Resolved by the QtAds move: it ships its own SVG button
+  icons as Qt resources, which theme.py re-declares.)*
 - **`QSplitter::handle` needs an explicit `width`/`height`** as well as a
   background, or the themed handle is invisible.
 - Emoji-as-icon in the sidebar works and renders fine offscreen, but real SVG
@@ -653,3 +655,4 @@ candidate work item; per-item agent tasks in a future increment.
 | 2026-08-12 | Cost estimate re-baselined from spike 3's measurement: ~8–12 h session time to parity (was 15–25 h; the "dense chunks are slower" assumption measured false). |
 | 2026-08-12 | **Windows validated**: the showcase build runs on a real Windows machine from a plain `uv sync --extra qt` — sidebar, dashboard and all; only runtime noise is OpenCV's DSHOW "no camera" warning. Requirement 2 now confirmed empirically on Linux + Windows. |
 | 2026-08-12 | Spike 2 built and verified (28 offscreen tests, full unit suite green, ruff/ty clean). New gotchas: `QAction.menu()` deletes the menu it returns; dock title-bar buttons aren't themable without icons. Sidebar glyphs stay emoji until real `QIcon`s exist. |
+| 2026-08-14 | **Docks moved from `QDockWidget` to Qt Advanced Docking System** (`pyside6-qtads`, LGPL-2.1+, ~600 KB wheel that pins the same `PySide6-Essentials==6.11.1`). Two rounds of stock-Qt fixes still left drag-docking unusable on JL's Linux box; QtAds brings VS Code-style drop-indicator overlays and lays out in its own splitters. Net *removal*: the whole QMainWindowLayout workaround stack (transition repaint, collapsed-dock floor, 1px resize nudge) is gone — those failure modes don't exist here. API differences that leak: `isClosed()` not `isHidden()`, `setFloating()` takes no argument (re-dock is `addDockWidget`), and `addDockWidget` re-opens a closed panel. Theming is `ads--*` QSS with QtAds's own sheet off (`DisableStylesheet`), which also means re-declaring its button-icon rules. No new system deps (`ldd`: libGL/libxkbcommon/libxcb, all already installed by the qtui CI job). |

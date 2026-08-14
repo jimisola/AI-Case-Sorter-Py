@@ -156,10 +156,9 @@ class SerialSection(QWidget):
         return box
 
     def _open_monitor(self) -> None:
-        dock = getattr(self._win, "serial_dock", None)
-        if dock is not None:
-            dock.show()
-            dock.raise_()
+        open_monitor = getattr(self._win, "open_serial_monitor", None)
+        if open_monitor is not None:
+            open_monitor()
 
     def refresh_ports(self) -> None:
         """Emulated first, then USB/ACM/COM adapters, then the rest.

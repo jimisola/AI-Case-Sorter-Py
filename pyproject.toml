@@ -56,7 +56,9 @@ ml = ["torch==2.9.1", "torchvision==0.24.1"]
 # PySide6 spike UI (`python -m sorter --qt`); see docs/ui-modernization.md.
 # Essentials, not the PySide6 meta-package: the meta adds pyside6-addons
 # (~175 MB of WebEngine/3D/Charts/Multimedia) that nothing uses.
-qt = ["PySide6-Essentials==6.11.1"]
+# QtAds (LGPL-2.1+) is the dock system; it pins the same Essentials build, so
+# the two versions move together.
+qt = ["PySide6-Essentials==6.11.1", "pyside6-qtads==5.0.0.2"]
 
 [build-system]
 requires = ["hatchling==1.31.0", "hatch-vcs==0.5.0"]

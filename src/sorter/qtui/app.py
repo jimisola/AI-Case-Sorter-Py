@@ -26,6 +26,7 @@ from collections.abc import Callable
 from typing import Any
 
 import numpy as np
+import PySide6QtAds as ads  # ty: ignore[unresolved-import]
 from PySide6.QtCore import (  # ty: ignore[unresolved-import]
     QByteArray,
     QSize,
@@ -46,7 +47,6 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QButtonGroup,
     QCheckBox,
     QComboBox,
-    QDockWidget,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -111,8 +111,9 @@ SETTINGS_ACTIVITY = (SETTINGS, "Settings")
 SIDEBAR_ICON_SIZE = 26
 SETTINGS_SECTIONS = ("Camera", "Serial", "Image Processing", "AI Config", "Theme")
 BAUD_CHOICES = (9600, 19200, 38400, 57600, 115200)
-# On every dock's title bar: dragging panels is invisible until tried (JL).
-DOCK_DRAG_HINT = "Drag the title bar to move this panel; View \u2192 Re-dock panels brings it home."
+# On every dock's tab: QtAds's drop overlays show where a panel *can* go once
+# a drag starts, but nothing hints that it can be dragged at all (JL).
+DOCK_DRAG_HINT = "Drag this tab to move the panel; View \u2192 Re-dock panels brings it home."
 
 # The Sort column's primary panel: the crop the classifier actually saw, plus
 # the one result it produced (Seth, 2026-08-13 — the Windows app's layout).
@@ -238,11 +239,33 @@ SETTING_MODELS_COLUMNS = "ui.models_columns"
 # Tk parity (ui/app.py): minsize(960, 660).
 MIN_WINDOW_SIZE = (960, 660)
 
-# A double-click re-dock (or the View toggle) can leave a dock collapsed to
-# near-zero size — visible per its toggle action, but unusable. Below this
-# floor, _restore_collapsed_docks pushes it back out to a usable size.
-DOCK_COLLAPSE_FLOOR_PX = 120
-DOCK_RESTORED_SIZE_PX = 240
+# Each panel's home: where it is built, and where View → Re-dock returns it.
+DOCK_HOMES = (
+    ("serial_dock", ads.BottomDockWidgetArea),
+    ("history_dock", ads.RightDockWidgetArea),
+    ("help_dock", ads.RightDockWidgetArea),
+)
+
+
+def _configure_dock_manager() -> None:
+    """QtAds config flags. Static/global, so they must precede the first manager.
+
+    ``DisableStylesheet`` is the load-bearing one: QtAds otherwise installs its
+    own ~10 KB sheet on the manager, which — being nearer the dock widgets than
+    the window's — wins over ours and freezes the panels at one hard-coded
+    palette. With it off, theme.py's ``ads--*`` rules are the only thing
+    painting them.
+    """
+    flags = ads.CDockManager.eConfigFlag
+    for flag in (
+        flags.DisableStylesheet,
+        flags.HideSingleCentralWidgetTitleBar,  # the pages area is chrome, not a panel
+        flags.OpaqueSplitterResize,
+        flags.FocusHighlighting,
+        flags.DockAreaHasUndockButton,
+        flags.DockAreaHasCloseButton,
+    ):
+        ads.CDockManager.setConfigFlag(flag, True)
 
 
 class QtMainWindow(QMainWindow):
@@ -382,7 +405,15 @@ class QtMainWindow(QMainWindow):
         body.addWidget(self._build_sidebar())
         body.addWidget(self.pages, 1)
         layout.addLayout(body, 1)
-        self.setCentralWidget(central)
+
+        # QtAds owns the docking; the manager installs itself as the window's
+        # central widget, and the sidebar+pages become *its* central area — a
+        # fixed, unclosable, undraggable anchor the panels arrange around.
+        _configure_dock_manager()
+        self.dock_manager = ads.CDockManager(self)
+        self.central_dock = ads.CDockWidget(self.dock_manager, "Workspace")
+        self.central_dock.setWidget(central)
+        self.dock_manager.setCentralWidget(self.central_dock)
 
         # Docks are built before the menus: View hosts their toggle actions.
         self._build_serial_dock()
@@ -853,8 +884,25 @@ class QtMainWindow(QMainWindow):
             item = self.settings_list.currentItem()
             section = item.text() if item is not None else None
         self.help_view.show_topic(topic_for(page, section))
-        self.help_dock.show()
-        self.help_dock.raise_()
+        self.reveal_dock(self.help_dock)
+
+    def reveal_dock(self, dock: Any) -> None:
+        """Open a panel and bring it to the front — the QtAds show/raise pair.
+
+        ``toggleView(True)`` re-opens a closed panel (QWidget ``show()`` does
+        not: QtAds tracks closed-ness itself, and a closed dock has been taken
+        out of its area). ``setAsCurrentTab`` is the raise: a panel sharing a
+        tab group with another is otherwise "open" but behind it.
+        """
+        dock.toggleView(True)
+        dock.setAsCurrentTab()
+        container = dock.floatingDockContainer()
+        if container is not None:
+            container.raise_()
+
+    def open_serial_monitor(self) -> None:
+        """The status bar's serial indicator and the Serial settings button."""
+        self.reveal_dock(self.serial_dock)
 
     def _open_model_images(self, model: Any) -> None:
         from .dialog_model_images import ModelImagesDialog
@@ -906,161 +954,44 @@ class QtMainWindow(QMainWindow):
         self.serial_section = build_serial_section(self)
         return self.serial_section
 
+    def _build_dock(self, title: str, widget: QWidget, area: Any) -> Any:
+        """One QtAds panel: closable, movable, floatable, hinted on its tab."""
+        dock = ads.CDockWidget(self.dock_manager, title)
+        dock.setWidget(widget)
+        # The tab *is* the drag handle in QtAds, so that is where the hint goes
+        # (a QDockWidget put it on the whole panel, which was never the target).
+        dock.setTabToolTip(DOCK_DRAG_HINT)
+        self.dock_manager.addDockWidget(area, dock)
+        return dock
+
     def _build_serial_dock(self) -> None:
-        # Tabbing is what makes "put History next to the Serial Monitor"
-        # possible at all: without it a dock dropped on an occupied area is
-        # refused, which reads as "docking doesn't work" (JL live-testing).
-        self.setDockOptions(
-            QMainWindow.DockOption.AnimatedDocks
-            | QMainWindow.DockOption.AllowTabbedDocks
-            | QMainWindow.DockOption.AllowNestedDocks
-        )
-        self.serial_dock = QDockWidget("Serial Monitor", self)
-        self.serial_dock.setObjectName("serialDock")
-        self.serial_dock.setFeatures(
-            QDockWidget.DockWidgetFeature.DockWidgetClosable
-            | QDockWidget.DockWidgetFeature.DockWidgetMovable
-            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
-        )
-        self.serial_dock.setToolTip(DOCK_DRAG_HINT)
         # The monitor subscribes serial/* itself and keeps the full session
         # history — a dock that exists from startup needs no backlog replay.
         self.serial_monitor = build_serial_monitor(self)
-        self.serial_dock.setWidget(self.serial_monitor)
         # Bottom, like Arduino IDE's monitor / VS Code's terminal (JL).
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.serial_dock)
-        self._watch_dock_transitions(self.serial_dock)
+        self.serial_dock = self._build_dock("Serial Monitor", self.serial_monitor, ads.BottomDockWidgetArea)
 
     def _build_history_dock(self) -> None:
-        self.history_dock = QDockWidget("Classification History", self)
-        self.history_dock.setObjectName("historyDock")
-        self.history_dock.setFeatures(
-            QDockWidget.DockWidgetFeature.DockWidgetClosable
-            | QDockWidget.DockWidgetFeature.DockWidgetMovable
-            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
-        )
-        self.history_dock.setToolTip(DOCK_DRAG_HINT)
         self.history_view = build_history_view(self)
-        self.history_dock.setWidget(self.history_view)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.history_dock)
+        self.history_dock = self._build_dock("Classification History", self.history_view, ads.RightDockWidgetArea)
         # Supplementary, so it starts out of the way; View re-opens it.
-        self.history_dock.hide()
-        self._watch_dock_transitions(self.history_dock)
+        self.history_dock.toggleView(False)
 
     def _redock_panels(self) -> None:
-        """Return every floating panel to its home area, visible and sane.
+        """Return every open panel to its home area, un-floated.
 
-        View → "Re-dock panels". Docks keep their homes: serial monitor at
-        the bottom, history and the guide on the right.
+        View → "Re-dock panels", the always-works escape hatch. Re-issuing
+        each ``addDockWidget`` is the whole implementation: in QtAds that
+        pulls the panel out of wherever it ended up (a floating container, a
+        tab group, another edge) and rebuilds the startup layout. Closed
+        panels are skipped — ``addDockWidget`` re-opens a closed dock, and a
+        panel the user switched off in View must stay off.
         """
-        for dock, area in (
-            (self.serial_dock, Qt.DockWidgetArea.BottomDockWidgetArea),
-            (self.history_dock, Qt.DockWidgetArea.RightDockWidgetArea),
-            (self.help_dock, Qt.DockWidgetArea.RightDockWidgetArea),
-        ):
-            if dock.isFloating():
-                dock.setFloating(False)
-                self.addDockWidget(area, dock)
-        self._schedule_dock_repaint()
-        self._schedule_collapse_check()
-
-    def _watch_dock_transitions(self, dock: QDockWidget) -> None:
-        """Recompute layout and repaint after a float/re-dock.
-
-        Investigated live against a real board (JL, screenshot-verified,
-        Wayland). Two symptoms, two different causes, in the order they were
-        found and ruled out:
-
-        1. Widget fragments visibly mixing into the dock area — turned out to
-           be cv2's bundled Qt plugins loading against PySide6 (scrubbed in
-           ``__main__.py``); the QDockWidget background in theme.py and the
-           repaint calls below stay as defense-in-depth, not the fix.
-        2. On genuine PySide6, after a float -> re-dock the central widget
-           keeps its pre-float (shrunken) geometry — a dead band appears
-           between it and the dock, unowned by either, and the Sort page's
-           slot grid grows a horizontal scrollbar. This is a layout-
-           activation failure, not a paint gap: QMainWindowLayout doesn't
-           always recompute the central widget's geometry on its own when a
-           dock's top-level state changes.
-        3. Double-clicking a floating dock's title re-docks it collapsed —
-           zero height/width, invisible, while its View-menu toggle still
-           shows checked. ``_restore_collapsed_docks`` covers this; also
-           wired to ``visibilityChanged`` for the View-toggle show path,
-           which can leave the same collapsed state — but through a lighter
-           handler than topLevelChanged/dockLocationChanged's: unlike those
-           two, ``visibilityChanged`` fires on perfectly ordinary show/hide
-           (a fresh window's own construction included), so it must never
-           carry the resize-nudge fallback below — that's a "normal
-           operation" case the nudge is explicitly not for, and running it
-           there was an earlier version of this fix's own bug (a stray +1px
-           window-size leak caught by the offscreen test suite).
-        """
-        dock.topLevelChanged.connect(self._schedule_dock_repaint)
-        dock.dockLocationChanged.connect(self._schedule_dock_repaint)
-        dock.visibilityChanged.connect(self._schedule_collapse_check)
-
-    def _schedule_dock_repaint(self, *_args: Any) -> None:
-        # Deferred one event-loop turn: Qt hasn't finished the dock's own
-        # transition (float/re-dock) at the moment the signal fires. The
-        # context argument (here and on every deferral in qtui) drops the
-        # callback if the owner is destroyed first — an unbound singleShot
-        # fires on the deleted C++ widget and segfaults.
-        QTimer.singleShot(0, self, self._repaint_after_dock_transition)
-
-    def _schedule_collapse_check(self, *_args: Any) -> None:
-        QTimer.singleShot(0, self, self._restore_collapsed_docks)
-
-    def _repaint_after_dock_transition(self) -> None:
-        """Force QMainWindowLayout to recompute, then repaint what it owns."""
-        layout = self.layout()
-        if layout is not None:
-            layout.invalidate()
-            layout.activate()
-        central = self.centralWidget()
-        if central is not None:
-            central.updateGeometry()
-            central.update()
-        self.serial_dock.update()
-        self.history_dock.update()
-        self.update()
-        self._restore_collapsed_docks()
-        self._nudge_layout_recompute()
-
-    def _restore_collapsed_docks(self) -> None:
-        """Push a collapsed dock back out to a usable size.
-
-        ``resizeDocks`` is the API that actually sticks against a
-        QMainWindowLayout-managed dock — plain ``resize()``/
-        ``setFixedHeight()`` don't. The orientation-per-dock mapping matches
-        each dock's fixed starting area (bottom / right, see
-        ``_build_serial_dock`` / ``_build_history_dock``): dragging a dock to
-        a different area is a separate user action, not the collapse bug.
-        """
-        for dock, orientation in (
-            (self.serial_dock, Qt.Orientation.Vertical),  # bottom area: height
-            (self.history_dock, Qt.Orientation.Horizontal),  # right area: width
-        ):
-            if not dock.isVisible() or dock.isFloating():
+        for attr, area in DOCK_HOMES:
+            dock = getattr(self, attr)
+            if dock.isClosed():
                 continue
-            size = dock.height() if orientation == Qt.Orientation.Vertical else dock.width()
-            if size < DOCK_COLLAPSE_FLOOR_PX:
-                self.resizeDocks([dock], [DOCK_RESTORED_SIZE_PX], orientation)
-
-    def _nudge_layout_recompute(self) -> None:
-        """Belt-and-braces fallback: a 1px resize round-trip.
-
-        ``invalidate()``/``activate()`` is the direct fix and should be
-        enough on its own; this covers whatever it doesn't, on the
-        (unverified offscreen) chance QMainWindowLayout still needs an
-        actual size change to re-flow the central widget against a dock
-        that just changed float state. Guarded to the dock-transition path
-        only — never called during normal operation — and restores the
-        original size on the next event-loop turn, so it's a one-frame
-        nudge rather than a visible resize.
-        """
-        size = self.size()
-        self.resize(size.width(), size.height() + 1)
-        QTimer.singleShot(0, self, lambda: self.resize(size))
+            self.dock_manager.addDockWidget(area, dock)
 
     def _build_community_page(self) -> QWidget:
         self.community_page = build_community_page(self)
@@ -1350,13 +1281,9 @@ class QtMainWindow(QMainWindow):
     def _build_help_dock(self) -> None:
         # A dock, not a free window (JL): pin the guide beside the work while
         # learning, toggle it away after.
-        self.help_dock = QDockWidget("User Guide", self)
-        self.help_dock.setObjectName("helpDock")
-        self.help_dock.setToolTip(DOCK_DRAG_HINT)
         self.help_view = build_help_window(self)
-        self.help_dock.setWidget(self.help_view)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.help_dock)
-        self.help_dock.hide()
+        self.help_dock = self._build_dock("User Guide", self.help_view, ads.RightDockWidgetArea)
+        self.help_dock.toggleView(False)
 
     def _build_menus(self) -> None:
         # menuBar().addMenu(str) hands the QMenu back with Python ownership; the
@@ -1616,16 +1543,24 @@ class QtMainWindow(QMainWindow):
             return None
 
     def _restore_window_state(self) -> None:
-        """Dock layout + the model table's column widths, from the last session."""
+        """Dock layout + the model table's column widths, from the last session.
+
+        The dock half is the manager's own XML state, not ``QMainWindow``'s —
+        with QtAds the window has no QDockWidgets left to save. A blob written
+        by the pre-QtAds build is simply not this format; ``restoreState``
+        answers False and the panels keep their built-in homes, so the switch
+        needs no migration.
+        """
         state = self._setting_to_bytes(self._load_setting(SETTING_WINDOW_STATE))
         if state is not None:
-            self.restoreState(QByteArray(state))
+            self.dock_manager.restoreState(QByteArray(state))
         columns = self._setting_to_bytes(self._load_setting(SETTING_MODELS_COLUMNS))
         if columns is not None:
             self.models_page.restore_header_state(columns)
 
     def _save_window_state(self) -> None:
-        self._save_setting(SETTING_WINDOW_STATE, self._bytes_to_setting(bytes(self.saveState().data())))
+        dock_state = bytes(self.dock_manager.saveState().data())
+        self._save_setting(SETTING_WINDOW_STATE, self._bytes_to_setting(dock_state))
         self._save_setting(SETTING_MODELS_COLUMNS, self._bytes_to_setting(self.models_page.header_state()))
 
     def set_theme(self, name: str) -> None:
@@ -2185,17 +2120,27 @@ class QtMainWindow(QMainWindow):
         except Exception:
             # A preference that can't be persisted must never block shutdown.
             pass
+        try:
+            # A floated panel is its own top-level window parented to the dock
+            # manager, so closing the main window leaves it on screen. QtAds's
+            # own teardown call hides the manager and every floating container
+            # together; without it the app "won't quit" with a panel torn off.
+            self.dock_manager.hideManagerAndFloatingWidgets()
+        except Exception:
+            pass
         super().closeEvent(event)
 
 
 def default_qpa_platform() -> None:
     """Linux: prefer XCB (XWayland) over native Wayland.
 
-    A floated ``QDockWidget`` is frozen under native Wayland — JL hit this
-    live (release a floating dock and it can no longer be moved or resized):
-    a frameless top-level window can't ask a Wayland compositor to move/
-    resize it, an upstream Qt/Wayland limitation, not something fixable in
-    application code. XCB via XWayland doesn't have the gap.
+    A floated panel is frozen under native Wayland — JL hit this live
+    (release a floating dock and it can no longer be moved or resized): a
+    frameless top-level window can't ask a Wayland compositor to move/resize
+    it, an upstream Qt/Wayland limitation, not something fixable in
+    application code. It outlived the move to QtAds, whose floating
+    containers are the same kind of top-level window, and XCB via XWayland
+    still doesn't have the gap.
 
     ``setdefault`` so an explicit ``QT_QPA_PLATFORM`` (env, or a test's
     ``offscreen``) always wins. The semicolon list, never a bare ``"xcb"``:

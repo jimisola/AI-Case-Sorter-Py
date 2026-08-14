@@ -105,20 +105,100 @@ QMenu::item:selected {{
 }}
 QMenu::separator {{ height: 1px; background-color: {c["border"]}; margin: 4px 0; }}
 
-/* Explicit background, not just on ::title: seen blank/transparent on Wayland
-   after a float -> re-dock cycle, letting whatever sits behind the window
-   show through the gaps between styled children (a known class of Qt/Wayland
-   dock-widget repaint issue). QDockWidget > QWidget covers the content
-   container Qt inserts around whatever widget was set on the dock. */
-QDockWidget {{
+/* Qt Advanced Docking System. QtAds ships its own stylesheet; app.py turns it
+   off (DisableStylesheet) so these rules are the only thing painting panels,
+   which is what makes them follow a theme switch. Selectors are QtAds's own
+   C++ class names — `ads::CDockWidgetTab` is spelled `ads--CDockWidgetTab` in
+   QSS, since `::` there means a subcontrol. Flat and palette-only, same
+   discipline as the rest of this sheet. */
+ads--CDockManager, ads--CDockContainerWidget, ads--CFloatingDockContainer {{
+    background-color: {c["bg_window"]};
+}}
+ads--CDockWidget {{
     background-color: {c["bg_window"]};
     color: {c["text"]};
+    border-color: {c["border"]};
 }}
-QDockWidget > QWidget {{ background-color: {c["bg_window"]}; }}
-QDockWidget::title {{
+ads--CDockAreaWidget {{
+    background-color: {c["bg_window"]};
+}}
+ads--CDockAreaTitleBar {{
     background-color: {c["bg_surface"]};
-    color: {c["text"]};
-    padding: 5px 8px;
+    border-bottom: 1px solid {c["border"]};
+    padding: 0px;
+}}
+
+/* The tab is the drag handle, so the active one has to read as selected. */
+ads--CDockWidgetTab {{
+    background-color: {c["bg_surface"]};
+    color: {c["text_muted"]};
+    border: none;
+    padding: 5px 10px;
+}}
+ads--CDockWidgetTab:hover {{ background-color: {c["bg_card_hover"]}; }}
+ads--CDockWidgetTab[activeTab="true"] {{
+    background-color: {c["bg_card_sel"]};
+    color: {c["text_highlight"]};
+}}
+ads--CDockWidgetTab QLabel {{ color: {c["text_muted"]}; background: transparent; }}
+ads--CDockWidgetTab[activeTab="true"] QLabel {{ color: {c["text_highlight"]}; }}
+
+/* The splitter between panels: unstyled it is plain background, so a panel
+   edge has nothing to grab (same reason QMainWindow::separator was styled). */
+ads--CDockSplitter::handle {{ background-color: {c["border"]}; }}
+ads--CDockSplitter::handle:hover {{ background-color: {c["border_focus"]}; }}
+
+/* The drop-indicator overlay — the affordance QtAds is here for. It paints
+   itself from the widget palette, not QSS; all it needs from us is to be
+   spared the universal QWidget fill at the top of this sheet, which would
+   otherwise put an opaque slab over the panel being dropped onto. */
+ads--CDockOverlay, ads--CDockOverlayCross {{ background: transparent; }}
+
+/* Title-bar and tab buttons. These carry no icon of their own — QtAds sets
+   them from its resources in the stylesheet we disabled, so turning that off
+   without restoring these leaves every close/undock button blank. The `:/ads`
+   resources are compiled into the library and always available. */
+#tabsMenuButton {{
+    qproperty-icon: url(:/ads/images/tabs-menu-button.svg);
+    qproperty-iconSize: 16px;
+}}
+#dockAreaCloseButton, #tabCloseButton {{
+    qproperty-icon: url(:/ads/images/close-button.svg),
+        url(:/ads/images/close-button-disabled.svg) disabled;
+    qproperty-iconSize: 16px;
+}}
+#detachGroupButton {{
+    qproperty-icon: url(:/ads/images/detach-button.svg),
+        url(:/ads/images/detach-button-disabled.svg) disabled;
+    qproperty-iconSize: 16px;
+}}
+#tabsMenuButton, #dockAreaCloseButton, #tabCloseButton, #detachGroupButton {{
+    background: transparent;
+    border: none;
+    padding: 2px;
+}}
+#tabsMenuButton:hover, #dockAreaCloseButton:hover,
+#tabCloseButton:hover, #detachGroupButton:hover {{
+    background-color: {c["bg_card_hover"]};
+    border-radius: 3px;
+}}
+
+/* A torn-off panel is its own window: it gets the title bar treatment too. */
+ads--CFloatingWidgetTitleBar {{
+    background-color: {c["bg_surface"]};
+    qproperty-maximizeIcon: url(:/ads/images/maximize-button.svg);
+    qproperty-normalIcon: url(:/ads/images/restore-button.svg);
+}}
+#floatingTitleCloseButton {{
+    qproperty-icon: url(:/ads/images/close-button.svg);
+    qproperty-iconSize: 16px;
+    border: none;
+    margin: 3px;
+}}
+#floatingTitleMaximizeButton {{
+    qproperty-iconSize: 16px;
+    border: none;
+    margin: 3px;
 }}
 
 QPlainTextEdit#serialLog {{

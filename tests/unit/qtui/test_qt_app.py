@@ -49,7 +49,7 @@ def test_sort_actions_are_disabled_without_a_board(window) -> None:
 
 
 def test_serial_dock_logs_traffic(window) -> None:
-    assert not window.serial_dock.isHidden()
+    assert not window.serial_dock.isClosed()
 
     window.bus.post("serial/rx", "ok")
     window.bus.drain()
@@ -141,31 +141,54 @@ def test_the_history_dock_carries_its_full_name(window) -> None:
     assert window.history_dock.windowTitle() == "Classification History"
 
 
-def test_docks_allow_tabbing_and_carry_the_drag_hint(window) -> None:
-    """JL couldn't drop History next to the Serial Monitor: without
-    AllowTabbedDocks, Qt refuses a drop on an occupied area — which reads as
-    'docking is broken' — and nothing hinted panels can be dragged at all."""
-    from PySide6.QtWidgets import QMainWindow
+def test_panels_are_managed_by_qtads_and_carry_the_drag_hint(window) -> None:
+    """JL couldn't drop History next to the Serial Monitor with stock Qt docks.
+    QtAds owns the docking now: every panel is registered with the one dock
+    manager, and the hint rides the tab — which is the drag handle here."""
+    import PySide6QtAds as ads
 
-    options = window.dockOptions()
-    assert options & QMainWindow.DockOption.AllowTabbedDocks
-    assert options & QMainWindow.DockOption.AllowNestedDocks
+    assert isinstance(window.dock_manager, ads.CDockManager)
+    # The manager is the window's central widget; the pages are ITS central area.
+    assert window.centralWidget() is window.dock_manager
+    assert window.central_dock.isCentralWidget()
+
+    registered = window.dock_manager.dockWidgetsMap()
     for dock in (window.serial_dock, window.history_dock, window.help_dock):
-        assert "Re-dock panels" in dock.toolTip()
+        assert registered[dock.objectName()] is dock
+        assert "Re-dock panels" in dock.tabWidget().toolTip()
+
+
+def test_only_the_serial_panel_is_open_at_startup(window) -> None:
+    # QtAds tracks closed-ness itself: isHidden() is False even for a closed
+    # panel, so isClosed() is the only honest question to ask.
+    assert not window.serial_dock.isClosed()
+    assert window.history_dock.isClosed()
+    assert window.help_dock.isClosed()
 
 
 def test_redock_panels_brings_a_floating_dock_home(window) -> None:
     """Seth floated the history panel and couldn't drag it back — the View
     menu's Re-dock action must always work, no dexterity required."""
-    from PySide6.QtCore import Qt
-
-    window.history_dock.setFloating(True)
+    window.history_dock.toggleView(True)
+    # QtAds's setFloating() takes no argument — it floats, and re-docking is
+    # addDockWidget's job, which is exactly what _redock_panels re-issues.
+    window.history_dock.setFloating()
     assert window.history_dock.isFloating()
 
     window._redock_panels()
 
     assert not window.history_dock.isFloating()
-    assert window.dockWidgetArea(window.history_dock) == Qt.DockWidgetArea.RightDockWidgetArea
+    assert window.history_dock.dockContainer() is window.dock_manager
+
+
+def test_redock_leaves_a_closed_panel_closed(window) -> None:
+    # addDockWidget re-opens a closed dock, so _redock_panels has to skip
+    # them — otherwise Re-dock silently undoes every View-menu toggle.
+    assert window.help_dock.isClosed()
+
+    window._redock_panels()
+
+    assert window.help_dock.isClosed()
 
 
 def test_closing_a_window_stops_its_timers(window_factory, config) -> None:

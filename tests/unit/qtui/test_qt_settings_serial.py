@@ -369,11 +369,11 @@ def test_the_page_opens_the_serial_monitor_dock(window) -> None:
     """Tk parity: its Serial tab had "Open monitor" — a user configuring
     serial is exactly the one who wants to watch the traffic (JL)."""
     section = build_serial_section(window)
-    window.serial_dock.hide()
+    window.serial_dock.toggleView(False)
 
     section.monitor_button.click()
 
-    assert not window.serial_dock.isHidden()
+    assert not window.serial_dock.isClosed()
 
 
 def test_a_monitor_baud_change_reaches_the_settings_combo(window, config) -> None:
