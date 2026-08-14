@@ -21,7 +21,15 @@ from PySide6.QtTest import QTest
 
 from sorter.hardware.serial_emulator import EMULATED_PORT
 from sorter.ml import classifier
-from sorter.qtui.serial_monitor import LINE_ENDINGS, TEXT_FILTER, SerialMonitorWidget, build_serial_monitor
+from sorter.qtui.serial_monitor import (
+    LINE_ENDINGS,
+    SETTING_SERIAL_ZOOM,
+    TEXT_FILTER,
+    ZOOM_DEFAULT,
+    ZOOM_MAX,
+    SerialMonitorWidget,
+    build_serial_monitor,
+)
 
 from .conftest import drain_until
 
@@ -77,6 +85,62 @@ def test_timestamps_toggle_changes_rendering_not_lines(window, monitor) -> None:
     assert list(monitor._lines) == lines_before
     stamped = monitor.output.toPlainText().strip()
     assert re.match(r"^\d{2}:\d{2}:\d{2} <- hello$", stamped)
+
+
+# ----- zoom -----------------------------------------------------------------
+
+
+def test_zoom_defaults_to_100_percent(window, monitor) -> None:
+    assert monitor.zoom_slider.value() == ZOOM_DEFAULT
+    assert monitor.zoom_value_label.text() == "100%"
+    assert monitor.output.font().pointSizeF() == pytest.approx(monitor._base_output_pt)
+
+
+def test_slider_drag_updates_label_live_without_applying(window, monitor) -> None:
+    """``sliderMoved`` (drag) only updates the label; the font resize waits for
+    ``valueChanged`` (drop), per ``setTracking(False)`` — same split as the
+    history view's tile-zoom slider."""
+    before = monitor.output.font().pointSizeF()
+
+    monitor.zoom_slider.sliderMoved.emit(175)
+
+    assert monitor.zoom_value_label.text() == "175%"
+    assert monitor.output.font().pointSizeF() == pytest.approx(before)
+
+
+def test_zoom_scales_output_and_command_font_proportionally(window, monitor) -> None:
+    base_output = monitor._base_output_pt
+    base_command = monitor._base_command_pt
+
+    monitor.zoom_slider.setValue(200)
+
+    assert monitor.output.font().pointSizeF() == pytest.approx(base_output * 2.0)
+    assert monitor.command_edit.font().pointSizeF() == pytest.approx(base_command * 2.0)
+    assert monitor.zoom_value_label.text() == "200%"
+
+
+def test_zoom_persists_and_restores_across_a_rebuilt_monitor(window, config) -> None:
+    first = build_serial_monitor(window)
+    first.zoom_slider.setValue(150)
+
+    from sorter.data.repository import SettingsRepo
+
+    assert SettingsRepo(config.db).get(SETTING_SERIAL_ZOOM) == "150"
+
+    second = build_serial_monitor(window)
+
+    assert second.zoom_slider.value() == 150
+    assert second.output.font().pointSizeF() == pytest.approx(second._base_output_pt * 1.5)
+
+
+def test_palette_reapplication_preserves_the_zoomed_font(window, monitor) -> None:
+    monitor.zoom_slider.setValue(ZOOM_MAX)
+    zoomed_pt = monitor.output.font().pointSizeF()
+
+    window.set_theme("Comic Book")
+    monitor.apply_palette()
+
+    assert monitor.output.font().pointSizeF() == pytest.approx(zoomed_pt)
 
 
 # ----- filtering ----------------------------------------------------------

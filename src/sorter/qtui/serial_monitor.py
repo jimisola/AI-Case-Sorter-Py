@@ -21,6 +21,12 @@ without moving the ones that remain. ``matches()`` is the single predicate,
 applied on arrival, on re-render, and by ``dump()`` — always against the
 board's own text, never the rendered ``<-``/``->``/``--`` prefix or a
 timestamp that is only sometimes shown.
+
+A "Zoom" slider in the header row (50-200%, same drag/release behavior as
+``history_view.py``'s) scales the log and command-input point size — cheap
+enough here that it still only applies on release, for visual parity with
+the history slider rather than out of necessity. Persists under
+``SETTING_SERIAL_ZOOM`` (JL, 2026-08-13).
 """
 
 from __future__ import annotations
@@ -30,7 +36,7 @@ from collections import deque
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer  # ty: ignore[unresolved-import]
-from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor  # ty: ignore[unresolved-import]
+from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor  # ty: ignore[unresolved-import]
 from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QCheckBox,
     QComboBox,
@@ -40,6 +46,7 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -71,6 +78,16 @@ TEXT_FILTER = "Text files — *.txt (*.txt)"
 # Typing in the filter box re-renders the whole scrollback, so coalesce
 # keystrokes instead of doing it per character.
 FILTER_DEBOUNCE_MS = 120
+
+# Zoom slider range (percent of each widget's own base point size) — same
+# range/step as history_view.py's tile zoom, duplicated rather than imported
+# so the two sliders can drift independently (one scales a grid, the other a
+# font; nothing requires their ranges to stay in lock-step).
+ZOOM_MIN = 50
+ZOOM_MAX = 200
+ZOOM_DEFAULT = 100
+ZOOM_STEP = 25
+SETTING_SERIAL_ZOOM = "ui.serial_zoom"
 
 # Line kinds -> the palette role they print in and the prefix they carry.
 KIND_ROLE = {"rx": "text", "tx": "update", "note": "text_muted"}
@@ -122,7 +139,18 @@ class SerialMonitorWidget(QWidget):
         self._filter_timer.setInterval(FILTER_DEBOUNCE_MS)
         self._filter_timer.timeout.connect(self._rerender)
 
+        self._zoom_percent = self._load_zoom_percent()
+
         self._build_ui()
+        # Base point sizes captured once the widgets exist; every zoom is
+        # base × percent/100, never compounded onto a previous zoom. A
+        # SerialMonitorWidget is built for nearly every window in the app (the
+        # dock), so the overwhelmingly common case is 100% — skip the QFont
+        # churn entirely then rather than reassert an unchanged size.
+        self._base_output_pt = self.output.font().pointSizeF()
+        self._base_command_pt = self.command_edit.font().pointSizeF()
+        if self._zoom_percent != ZOOM_DEFAULT:
+            self._apply_font_zoom(self._zoom_percent)
         self.apply_palette()
 
         win.bus.subscribe("serial/rx", self._on_rx)
@@ -172,6 +200,27 @@ class SerialMonitorWidget(QWidget):
         self.pause_check = QCheckBox("Pause", self)
         self.pause_check.toggled.connect(self._on_pause_toggled)
         row.addWidget(self.pause_check)
+
+        zoom_caption = QLabel("Zoom", self)
+        zoom_caption.setObjectName("mutedLabel")
+        row.addWidget(zoom_caption)
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal, self)
+        self.zoom_slider.setObjectName("serialZoomSlider")
+        self.zoom_slider.setRange(ZOOM_MIN, ZOOM_MAX)
+        self.zoom_slider.setPageStep(ZOOM_STEP)
+        self.zoom_slider.setTickInterval(ZOOM_STEP)
+        self.zoom_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.zoom_slider.setFixedWidth(140)
+        self.zoom_slider.setValue(self._zoom_percent)
+        # Same drag/release split as history_view.py's slider: live label
+        # while dragging, font applied only once the handle settles.
+        self.zoom_slider.setTracking(False)
+        self.zoom_slider.sliderMoved.connect(self._on_zoom_slider_moved)
+        self.zoom_slider.valueChanged.connect(self._on_zoom_value_changed)
+        row.addWidget(self.zoom_slider)
+        self.zoom_value_label = QLabel(f"{self._zoom_percent}%", self)
+        self.zoom_value_label.setObjectName("mutedLabel")
+        row.addWidget(self.zoom_value_label)
 
         self.clear_button = QPushButton("Clear", self)
         self.clear_button.clicked.connect(self.clear)
@@ -250,6 +299,57 @@ class SerialMonitorWidget(QWidget):
         self.count_label.setStyleSheet(f"color: {self._role_color('text_muted')};")
         self.refresh_connection()
         self._rerender()
+
+    # ----- zoom ---------------------------------------------------------------
+
+    def _load_zoom_percent(self) -> int:
+        db = getattr(self._win, "db", None)
+        if db is None:
+            return ZOOM_DEFAULT
+        try:
+            from ..data.repository import SettingsRepo
+
+            raw = SettingsRepo(db).get(SETTING_SERIAL_ZOOM, str(ZOOM_DEFAULT))
+        except Exception:
+            return ZOOM_DEFAULT
+        try:
+            value = int(str(raw).strip())
+        except (TypeError, ValueError):
+            return ZOOM_DEFAULT
+        return max(ZOOM_MIN, min(ZOOM_MAX, value))
+
+    def _save_zoom_percent(self, percent: int) -> None:
+        db = getattr(self._win, "db", None)
+        if db is None:
+            return
+        try:
+            from ..data.repository import SettingsRepo
+
+            SettingsRepo(db).set(SETTING_SERIAL_ZOOM, str(percent))
+        except Exception:
+            pass  # a preference that can't be persisted still applies this session
+
+    def _on_zoom_slider_moved(self, value: int) -> None:
+        """Live label only — the font resize waits for release (``valueChanged``)."""
+        self.zoom_value_label.setText(f"{value}%")
+
+    def _on_zoom_value_changed(self, value: int) -> None:
+        self.zoom_value_label.setText(f"{value}%")
+        if value == self._zoom_percent:
+            return
+        self._zoom_percent = value
+        self._apply_font_zoom(value)
+        self._save_zoom_percent(value)
+
+    def _apply_font_zoom(self, percent: int) -> None:
+        """Scale the log and command-input point size from their base sizes."""
+        factor = percent / 100.0
+        for widget, base_pt in ((self.output, self._base_output_pt), (self.command_edit, self._base_command_pt)):
+            if base_pt <= 0:
+                continue
+            font = QFont(widget.font())
+            font.setPointSizeF(base_pt * factor)
+            widget.setFont(font)
 
     # ----- connection state ---------------------------------------------------
 

@@ -28,7 +28,8 @@ from sorter.qtui.history_view import (
     THUMB,
     TILE_H,
     TILE_W,
-    ZOOM_FACTORS,
+    ZOOM_DEFAULT,
+    ZOOM_MAX,
     HistoryPreviewDialog,
     build_history_view,
 )
@@ -185,8 +186,7 @@ def test_case_numbers_survive_a_zoom_replay(window) -> None:
     for index in range(3):
         push(window, view, f"hs{index}", 99.0)
 
-    view.zoom_combo.setCurrentText("150%")
-    view._apply_zoom("150%")
+    view._apply_zoom(150)
 
     assert [entry.number_label.text() for entry in view._entries] == ["3", "2", "1"]
 
@@ -292,10 +292,23 @@ def test_apply_palette_repaints_after_a_theme_switch(window) -> None:
 # ----- zoom --------------------------------------------------------------------------
 
 
+def test_zoom_bar_sits_below_the_tile_grid(qapp, window) -> None:
+    """Seth/JL, 2026-08-13: the zoom bar belongs at the bottom of the dock,
+    not above the tiles."""
+    view = build_history_view(window)
+    view.resize(400, 400)
+    view.show()
+    qapp.processEvents()
+
+    assert view.zoom_slider.y() > view.grid_area.y()
+    assert view.zoom_slider.y() > view.empty_label.y()
+
+
 def test_zoom_defaults_to_100_percent(window) -> None:
     view = build_history_view(window)
 
-    assert view.zoom_combo.currentText() == "100%"
+    assert view.zoom_slider.value() == ZOOM_DEFAULT
+    assert view.zoom_value_label.text() == "100%"
     assert view._tile_w == TILE_W
     assert view._tile_h == TILE_H
     assert view._thumb == THUMB
@@ -305,9 +318,9 @@ def test_zoom_change_scales_tile_footprint_and_thumbnail(window) -> None:
     view = build_history_view(window)
     push(window, view, "9mm", 90.0)
 
-    view.zoom_combo.setCurrentText("200%")
+    view.zoom_slider.setValue(200)
 
-    factor = ZOOM_FACTORS["200%"]
+    factor = 200 / 100.0
     assert view._tile_w == round(TILE_W * factor)
     assert view._tile_h == round(TILE_H * factor)
     assert view._thumb == round(THUMB * factor)
@@ -317,6 +330,18 @@ def test_zoom_change_scales_tile_footprint_and_thumbnail(window) -> None:
     assert (pixmap.width(), pixmap.height()) == (view._thumb, view._thumb)
 
 
+def test_slider_drag_updates_label_live_without_applying(window) -> None:
+    """``sliderMoved`` (drag in progress) only touches the label — the expensive
+    tile rebuild waits for ``valueChanged`` (drop), per ``setTracking(False)``."""
+    view = build_history_view(window)
+    push(window, view, "9mm", 90.0)
+
+    view.zoom_slider.sliderMoved.emit(175)
+
+    assert view.zoom_value_label.text() == "175%"
+    assert view._tile_w == TILE_W  # unchanged — no rebuild yet
+
+
 def test_zoom_change_preserves_records_when_capacity_still_fits(window) -> None:
     """Below the fallback grid's capacity, nothing is discarded by a zoom change."""
     view = build_history_view(window)
@@ -324,7 +349,7 @@ def test_zoom_change_preserves_records_when_capacity_still_fits(window) -> None:
     push(window, view, ".223", 82.0, slot=3)
     push(window, view, "45 ACP", 77.0, slot=0)
 
-    view.zoom_combo.setCurrentText("75%")
+    view.zoom_slider.setValue(75)
 
     labels = [entry.label_label.text() for entry in view._entries]
     assert labels == ["45 ACP", ".223", "9mm"]  # newest-first order kept
@@ -344,7 +369,7 @@ def test_zoom_in_on_a_fixed_size_widget_shrinks_capacity_and_drops_the_oldest(qa
     for index in range(capacity_before):
         push(window, view, f"hs{index}", 99.0)
 
-    view.zoom_combo.setCurrentText("200%")
+    view.zoom_slider.setValue(ZOOM_MAX)
     qapp.processEvents()
 
     assert view._capacity < capacity_before
@@ -357,21 +382,35 @@ def test_zoom_in_on_a_fixed_size_widget_shrinks_capacity_and_drops_the_oldest(qa
 def test_zoom_choice_persists_across_view_instances(window) -> None:
     view = build_history_view(window)
 
-    view.zoom_combo.setCurrentText("150%")
+    view.zoom_slider.setValue(150)
 
     second = build_history_view(window)
-    assert second.zoom_combo.currentText() == "150%"
+    assert second.zoom_slider.value() == 150
     assert second._tile_w == view._tile_w
 
     from sorter.data.repository import SettingsRepo
 
-    assert SettingsRepo(window.db).get(SETTING_HISTORY_ZOOM) == "150%"
+    assert SettingsRepo(window.db).get(SETTING_HISTORY_ZOOM) == "150"
+
+
+def test_legacy_percent_sign_value_migrates_on_load(window) -> None:
+    """A pre-slider install stored ``"150%"`` via the old combo; the sign is
+    stripped so the choice still applies rather than falling back to 100."""
+    from sorter.data.repository import SettingsRepo
+
+    SettingsRepo(window.db).set(SETTING_HISTORY_ZOOM, "150%")
+
+    view = build_history_view(window)
+
+    assert view.zoom_slider.value() == 150
+    assert view.zoom_value_label.text() == "150%"
+    assert view._tile_w == round(TILE_W * 1.5)
 
 
 def test_apply_palette_still_recolors_after_a_zoom_change(window) -> None:
     view = build_history_view(window)
     push(window, view, "9mm", 99.0)
-    view.zoom_combo.setCurrentText("150%")
+    view.zoom_slider.setValue(150)
 
     window.set_theme("Comic Book")
     view.apply_palette()

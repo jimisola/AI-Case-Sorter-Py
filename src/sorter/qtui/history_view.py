@@ -21,13 +21,19 @@ classification lands here at most once per case, not in bulk, so there is no
 batch of frames to justify a worker thread the way the live camera preview
 would.
 
-A slim "Zoom" bar at the top lets the user pick a uniform scale (75/100/150/
-200%) for the tile footprint, thumbnail and entry fonts alike — capacity is
-derived from tile size ÷ widget size, so a bigger tile naturally holds fewer,
-larger records and a smaller tile holds more, smaller ones (Seth, 2026-08-13).
-A zoom change rebuilds every tile at the new size from the recency list,
-applying the same "keep newest" rule as a plain shrink; the choice persists
-via ``SettingsRepo`` under ``SETTING_HISTORY_ZOOM``.
+A slim "Zoom" bar at the bottom (below the tile grid — Seth/JL, 2026-08-13)
+carries a 50-200% slider for the tile footprint,
+thumbnail and entry fonts alike — capacity is derived from tile size ÷ widget
+size, so a bigger tile naturally holds fewer, larger records and a smaller
+tile holds more, smaller ones (Seth, 2026-08-13). The slider drags with
+``setTracking(False)``: a live "%d%%" label follows the handle via
+``sliderMoved``, but the expensive tile rebuild only fires on release
+(``valueChanged``), so dragging through the range doesn't rebuild the grid at
+every intermediate value. A zoom change rebuilds every tile at the new size
+from the recency list, applying the same "keep newest" rule as a plain
+shrink; the choice persists via ``SettingsRepo`` under ``SETTING_HISTORY_ZOOM``
+as a plain integer string (JL, 2026-08-13 — was a combo of preset labels;
+a legacy ``"150%"`` value is migrated by stripping the sign).
 """
 
 from __future__ import annotations
@@ -38,13 +44,13 @@ import numpy as np
 from PySide6.QtCore import Qt, Signal  # ty: ignore[unresolved-import]
 from PySide6.QtGui import QFont, QImage, QPixmap  # ty: ignore[unresolved-import]
 from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -72,16 +78,29 @@ EMPTY_TEXT = "Recent classifications will appear here."
 # every theme, including the hue-free surfaces the tinted themes keep.
 SNAKE_ROLES = ("border_focus", "accent", "accent_dim")
 
-# Uniform tile scale, user-selectable from the zoom bar.
-ZOOM_LEVELS: list[tuple[str, float]] = [
-    ("75%", 0.75),
-    ("100%", 1.0),
-    ("150%", 1.5),
-    ("200%", 2.0),
-]
-ZOOM_FACTORS: dict[str, float] = dict(ZOOM_LEVELS)
-DEFAULT_ZOOM_LABEL = "100%"
+# Uniform tile scale, user-selectable from the zoom slider (percent of the
+# base TILE_W/TILE_H/THUMB sizes above).
+ZOOM_MIN = 50
+ZOOM_MAX = 200
+ZOOM_DEFAULT = 100
+ZOOM_STEP = 25  # pageStep and tick interval
 SETTING_HISTORY_ZOOM = "ui.history_zoom"
+
+
+def _parse_zoom_percent(raw: Any) -> int:
+    """Parse a stored zoom value, clamped to [ZOOM_MIN, ZOOM_MAX].
+
+    Migrates the legacy combo-box format (``"150%"``) by stripping the sign;
+    anything unparsable falls back to :data:`ZOOM_DEFAULT`.
+    """
+    text = str(raw).strip()
+    if text.endswith("%"):
+        text = text[:-1]
+    try:
+        value = int(float(text))
+    except (TypeError, ValueError):
+        return ZOOM_DEFAULT
+    return max(ZOOM_MIN, min(ZOOM_MAX, value))
 
 
 def _bgr_to_pixmap(image: Any, size: int) -> QPixmap:
@@ -285,8 +304,8 @@ class HistoryView(QWidget):
         # this to observe a click without a modal ever opening.
         self.open_preview: Any = self._open_preview_dialog
 
-        self._zoom_label = self._load_zoom_label()
-        self._factor = ZOOM_FACTORS[self._zoom_label]
+        self._zoom_percent = self._load_zoom_percent()
+        self._factor = self._zoom_percent / 100.0
         self._tile_w = round(TILE_W * self._factor)
         self._tile_h = round(TILE_H * self._factor)
         self._thumb = round(THUMB * self._factor)
@@ -294,22 +313,6 @@ class HistoryView(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-
-        zoom_bar = QHBoxLayout()
-        zoom_bar.setContentsMargins(GUTTER, 4, GUTTER, 4)
-        zoom_bar.setSpacing(6)
-        zoom_caption = QLabel("Zoom", self)
-        zoom_caption.setObjectName("mutedLabel")
-        zoom_bar.addWidget(zoom_caption)
-        self.zoom_combo = QComboBox(self)
-        self.zoom_combo.setObjectName("historyZoomCombo")
-        self.zoom_combo.addItems([label for label, _ in ZOOM_LEVELS])
-        self.zoom_combo.setCurrentText(self._zoom_label)
-        self.zoom_combo.setFixedWidth(90)
-        self.zoom_combo.currentTextChanged.connect(self._on_zoom_changed)
-        zoom_bar.addWidget(self.zoom_combo)
-        zoom_bar.addStretch(1)
-        outer.addLayout(zoom_bar)
 
         self.empty_label = QLabel(EMPTY_TEXT, self)
         self.empty_label.setObjectName("mutedLabel")
@@ -326,6 +329,34 @@ class HistoryView(QWidget):
         self._grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.grid_area.hide()
         outer.addWidget(self.grid_area, 1)
+
+        # Zoom bar sits at the *bottom* of the dock (Seth/JL, 2026-08-13) —
+        # below the tile grid, not above it.
+        zoom_bar = QHBoxLayout()
+        zoom_bar.setContentsMargins(GUTTER, 4, GUTTER, 4)
+        zoom_bar.setSpacing(6)
+        zoom_caption = QLabel("Zoom", self)
+        zoom_caption.setObjectName("mutedLabel")
+        zoom_bar.addWidget(zoom_caption)
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal, self)
+        self.zoom_slider.setObjectName("historyZoomSlider")
+        self.zoom_slider.setRange(ZOOM_MIN, ZOOM_MAX)
+        self.zoom_slider.setPageStep(ZOOM_STEP)
+        self.zoom_slider.setTickInterval(ZOOM_STEP)
+        self.zoom_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.zoom_slider.setFixedWidth(140)
+        self.zoom_slider.setValue(self._zoom_percent)
+        # Rebuilding the tile grid is the expensive part; only do it once the
+        # user settles on a value, not on every intermediate pixel of drag.
+        self.zoom_slider.setTracking(False)
+        self.zoom_slider.sliderMoved.connect(self._on_zoom_slider_moved)
+        self.zoom_slider.valueChanged.connect(self._on_zoom_value_changed)
+        zoom_bar.addWidget(self.zoom_slider)
+        self.zoom_value_label = QLabel(f"{self._zoom_percent}%", self)
+        self.zoom_value_label.setObjectName("mutedLabel")
+        zoom_bar.addWidget(self.zoom_value_label)
+        zoom_bar.addStretch(1)
+        outer.addLayout(zoom_bar)
 
         win.bus.subscribe("run/history", self._on_history)
 
@@ -443,36 +474,41 @@ class HistoryView(QWidget):
 
     # ----- zoom --------------------------------------------------------------------
 
-    def _load_zoom_label(self) -> str:
+    def _load_zoom_percent(self) -> int:
         db = getattr(self._win, "db", None)
         if db is None:
-            return DEFAULT_ZOOM_LABEL
+            return ZOOM_DEFAULT
         try:
             from ..data.repository import SettingsRepo
 
-            value = SettingsRepo(db).get(SETTING_HISTORY_ZOOM, DEFAULT_ZOOM_LABEL)
+            raw = SettingsRepo(db).get(SETTING_HISTORY_ZOOM, str(ZOOM_DEFAULT))
         except Exception:
-            return DEFAULT_ZOOM_LABEL
-        return value if value in ZOOM_FACTORS else DEFAULT_ZOOM_LABEL
+            return ZOOM_DEFAULT
+        return _parse_zoom_percent(raw)
 
-    def _save_zoom_label(self, label: str) -> None:
+    def _save_zoom_percent(self, percent: int) -> None:
         db = getattr(self._win, "db", None)
         if db is None:
             return
         try:
             from ..data.repository import SettingsRepo
 
-            SettingsRepo(db).set(SETTING_HISTORY_ZOOM, label)
+            SettingsRepo(db).set(SETTING_HISTORY_ZOOM, str(percent))
         except Exception:
             pass  # a preference that can't be persisted still applies this session
 
-    def _on_zoom_changed(self, label: str) -> None:
-        if label not in ZOOM_FACTORS or label == self._zoom_label:
-            return
-        self._apply_zoom(label)
-        self._save_zoom_label(label)
+    def _on_zoom_slider_moved(self, value: int) -> None:
+        """Live label only — the tile rebuild waits for release (``valueChanged``)."""
+        self.zoom_value_label.setText(f"{value}%")
 
-    def _apply_zoom(self, label: str) -> None:
+    def _on_zoom_value_changed(self, value: int) -> None:
+        self.zoom_value_label.setText(f"{value}%")
+        if value == self._zoom_percent:
+            return
+        self._apply_zoom(value)
+        self._save_zoom_percent(value)
+
+    def _apply_zoom(self, percent: int) -> None:
         """Rebuild every tile at the new size from the recency list.
 
         Existing tiles are the wrong footprint for the new zoom, so rather
@@ -483,8 +519,8 @@ class HistoryView(QWidget):
         """
         records = [tile.record for tile in self._entries]  # newest first
 
-        self._zoom_label = label
-        self._factor = ZOOM_FACTORS[label]
+        self._zoom_percent = percent
+        self._factor = percent / 100.0
         self._tile_w = round(TILE_W * self._factor)
         self._tile_h = round(TILE_H * self._factor)
         self._thumb = round(THUMB * self._factor)
