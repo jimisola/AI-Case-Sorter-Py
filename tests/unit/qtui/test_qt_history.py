@@ -301,6 +301,9 @@ def test_zoom_bar_sits_below_the_tile_grid(qapp, window) -> None:
     qapp.processEvents()
 
     assert view.zoom_slider.y() > view.grid_area.y()
+    # Pinned to the foot even in the empty state: the surplus height goes to
+    # the label/grid, never below the bar (JL: it floated mid-panel).
+    assert view.zoom_slider.geometry().bottom() >= view.height() - view.zoom_slider.height()
     assert view.zoom_slider.y() > view.empty_label.y()
 
 

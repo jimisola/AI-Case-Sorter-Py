@@ -318,7 +318,10 @@ class HistoryView(QWidget):
         self.empty_label.setObjectName("mutedLabel")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setWordWrap(True)
-        outer.addWidget(self.empty_label)
+        # Stretch 1 like the grid below: whichever of the two is visible must
+        # soak up the surplus height, or the layout splits it between the
+        # label and the zoom bar and the bar floats mid-panel (JL screenshot).
+        outer.addWidget(self.empty_label, 1)
 
         self.grid_area = QWidget(self)
         self._grid = QGridLayout(self.grid_area)

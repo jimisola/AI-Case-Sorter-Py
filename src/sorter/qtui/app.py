@@ -307,8 +307,11 @@ class QtMainWindow(QMainWindow):
         # Run state comes from the controller's own events, never from the
         # button handlers — a run can also end on its own (error, package halt).
         self.bus.subscribe("run/started", lambda _p: self._on_run_started())
-        self.bus.subscribe("run/stopped", lambda _p: self._set_running(False))
+        self.bus.subscribe("run/stopped", lambda _p: self._on_run_stopped())
         self.bus.subscribe("run/status", self.set_status)
+        # Manual feed / test cycles report on their own topic; without this
+        # their progress is invisible and the previous status looks stuck.
+        self.bus.subscribe("test/status", self.set_status)
         self.bus.subscribe("run/error", lambda msg: self.set_status(f"Run error: {msg}"))
         self.bus.subscribe("run/result", self._on_run_result)
         self.bus.subscribe("run/history", self._on_run_history)
@@ -500,7 +503,6 @@ class QtMainWindow(QMainWindow):
         column = QVBoxLayout(page)
         column.setContentsMargins(12, 12, 12, 12)
         column.setSpacing(10)
-        column.addLayout(self._build_action_row(page))
 
         splitter = QSplitter(Qt.Orientation.Horizontal, page)
         splitter.addWidget(self._build_preview_column(splitter))
@@ -516,6 +518,9 @@ class QtMainWindow(QMainWindow):
         self.sort_stack.addWidget(splitter)
         self.sort_stack.addWidget(self._build_empty_state_panel(page))
         column.addWidget(self.sort_stack, 1)
+        # At the foot, mirroring the Train page's Training strip (JL): the
+        # working surface first, the launchers under it.
+        column.addLayout(self._build_action_row(page))
         return page
 
     def _build_grid_column(self, parent: QWidget) -> QWidget:
@@ -2001,6 +2006,12 @@ class QtMainWindow(QMainWindow):
         # Counts survive Stop/Start on purpose (Tk parity): operators stop to
         # clear a jam and restart mid-tray. Only the explicit resets clear.
         self._set_running(True)
+
+    def _on_run_stopped(self) -> None:
+        self._set_running(False)
+        # Terminal status, or whatever was in flight ("Stopping…",
+        # "Classifying…") reads as stuck forever (Seth).
+        self.set_status("Run stopped.")
 
     def _set_running(self, running: bool) -> None:
         self._is_running = running

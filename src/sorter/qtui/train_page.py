@@ -154,6 +154,15 @@ class TrainPage(QWidget):
         row = QHBoxLayout(box)
 
         preview = QVBoxLayout()
+        self.crop_label = QLabel(NO_CROP_TEXT, box)
+        self.crop_label.setObjectName("cropPanel")
+        self.crop_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.crop_label.setWordWrap(True)
+        self.crop_label.setFixedSize(CROP_SIZE, CROP_SIZE)
+        preview.addWidget(self.crop_label)
+
+        # Below the image (JL): the eye lands on the case, then the button
+        # that fetches the next one.
         self.feed_row = QHBoxLayout()
         self.feed_button = QPushButton("Feed", box)
         self.feed_button.setObjectName("action")
@@ -161,13 +170,6 @@ class TrainPage(QWidget):
         self.feed_row.addWidget(self.feed_button)
         self.feed_row.addStretch(1)
         preview.addLayout(self.feed_row)
-
-        self.crop_label = QLabel(NO_CROP_TEXT, box)
-        self.crop_label.setObjectName("cropPanel")
-        self.crop_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.crop_label.setWordWrap(True)
-        self.crop_label.setFixedSize(CROP_SIZE, CROP_SIZE)
-        preview.addWidget(self.crop_label)
         preview.addStretch(1)
         row.addLayout(preview)
 

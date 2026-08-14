@@ -521,6 +521,34 @@ def test_run_events_own_the_button_state(window, connected) -> None:
     assert window.action_buttons["Manual feed"].isEnabled()
 
 
+def test_a_stopped_run_replaces_the_in_flight_status(window) -> None:
+    """Seth: the corner label sat on "Stopping…"/"Classifying…" after the run
+    had long ended — nothing terminal ever replaced the transient."""
+    window.bus.post("run/status", "Classifying…")
+    window.bus.post("run/stopped", None)
+    window.bus.drain()
+
+    assert window.statusBar().currentMessage() == "Run stopped."
+
+
+def test_manual_feed_progress_reaches_the_status_bar(window) -> None:
+    window.bus.post("test/status", "Classifying…")
+    window.bus.drain()
+
+    assert window.statusBar().currentMessage() == "Classifying…"
+
+
+def test_the_action_strip_sits_at_the_foot_of_the_sort_page(qapp, window) -> None:
+    # JL: Start / Manual feed / Run options at the bottom, like the Train
+    # page's Training strip — working surface first, launchers under it.
+    window.show_page("Sort")
+    window.resize(1200, 700)
+    window.show()
+    qapp.processEvents()
+
+    assert window.run_button.geometry().top() >= window.sort_stack.geometry().bottom()
+
+
 def test_the_toggle_starts_and_then_stops_the_run(window, connected) -> None:
     window.run_button.click()
 

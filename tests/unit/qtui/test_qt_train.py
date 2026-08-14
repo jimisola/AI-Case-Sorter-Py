@@ -480,7 +480,10 @@ def test_dragging_the_splitter_widens_the_list_and_the_scrollbar_follows(qapp, w
 def shown(qapp, window):
     """The Train page laid out for real — geometry means nothing before this."""
     window.show_page("Train")
-    window.resize(1200, 700)
+    # Tall enough that the fixed-size crop plus its Feed row never squeeze:
+    # with a too-small budget QVBoxLayout overlaps the fixed widget instead
+    # of scrolling, and geometry assertions measure the overlap, not the design.
+    window.resize(1200, 850)
     window.show()
     for _ in range(10):
         qapp.processEvents()
@@ -497,11 +500,12 @@ def test_the_sort_toggle_sits_with_the_training_settings(shown) -> None:
     assert check.right() <= settings.left()  # toggle reads first, then the dialog
 
 
-def test_feed_leads_the_preview_column(shown) -> None:
+def test_feed_sits_below_the_preview(shown) -> None:
+    # JL: the eye lands on the case, then the button that fetches the next.
     feed = shown.feed_button.geometry()
     crop = shown.crop_label.geometry()
 
-    assert feed.bottom() <= crop.top()  # Feed sits on top of the preview
+    assert feed.top() >= crop.bottom()  # Feed sits under the preview
     assert crop.left() <= feed.left() < crop.right()  # in the preview's column
 
 
