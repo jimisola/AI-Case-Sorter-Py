@@ -168,14 +168,15 @@ class TrainPage(QWidget):
         # the label input below run wider than the image.
         column.addWidget(self.crop_label, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        # Right-aligned so Feed sits directly above Save image (JL): the two
-        # buttons the loop alternates between stack on one edge.
+        # Centered directly under the image (JL): Feed belongs to the picture
+        # it refills, not to either edge.
         self.feed_row = QHBoxLayout()
         self.feed_row.addStretch(1)
         self.feed_button = QPushButton("Feed", box)
         self.feed_button.setObjectName("action")
         self.feed_button.clicked.connect(lambda: self.feed())
         self.feed_row.addWidget(self.feed_button)
+        self.feed_row.addStretch(1)
         column.addLayout(self.feed_row)
 
         label_row = QHBoxLayout()
