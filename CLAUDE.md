@@ -686,12 +686,21 @@ registry, not Tk's — one process runs one UI, and the `ui.custom_themes`
 settings row is what the two actually share.
 
 - **Shell (`app.py`).** `QtMainWindow` = an **activity sidebar** (Sort, Train,
-  Models, Community; Settings pinned below the stretch) driving a
-  `QStackedWidget` of pages, plus three **docks** — serial monitor (bottom),
-  classification history and the user guide (right, both closed until asked
-  for) — a status bar (camera/serial indicators, update affordance, sign-in)
-  and File/View/Help menus. It owns the `EventBus`, `Camera`, broker,
-  `RunController` and `AuthManager`, exactly as Tk's `MainWindow` does.
+  AI Config, Models, Community; Settings pinned below the stretch) driving a
+  `QStackedWidget` of pages, plus four **docks** — serial monitor (bottom),
+  classification history, the user guide and the theme picker (right, all
+  three closed until asked for) — a status bar (camera/serial indicators,
+  update affordance, sign-in) and File/View/Help menus. It owns the
+  `EventBus`, `Camera`, broker, `RunController` and `AuthManager`, exactly as
+  Tk's `MainWindow` does. Two entries are mode-driven and mutually exclusive:
+  Train for an owned local model, **AI Config for AI Config mode** — and AI
+  Config has no page of its own, since the one `AiSection` is already mounted
+  in the Settings stack, so `open_activity` navigates to Settings → AI Config
+  instead of re-parenting it.
+  The **Themes dock** is a second face on Settings → Theme, not a second
+  implementation: both pickers drive `set_theme`, `refresh_theme_picker`
+  (the hook `dialog_theme_editor` already looks for) re-reads the registry
+  into both, and the sync blocks signals so a switch applies exactly once.
 - **Docking is Qt Advanced Docking System** (`pyside6-qtads`, the `[qt]`
   extra), not `QDockWidget` — stock Qt's drag-docking was unusable on Linux.
   One `CDockManager` is the window's central widget; the sidebar+pages are

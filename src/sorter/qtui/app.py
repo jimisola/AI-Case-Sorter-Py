@@ -78,7 +78,7 @@ from .dialog_slot_assign import CATCH_ALL_HINT, SlotAssignDialog
 from .dialog_template import EditTemplateDialog, NewTemplateDialog
 from .help_viewer import build_help_window, topic_for
 from .history_view import build_history_view
-from .icons import COMMUNITY, MODELS, SETTINGS, SORT, TRAIN, app_icon
+from .icons import AI_CONFIG, COMMUNITY, MODELS, SETTINGS, SORT, TRAIN, app_icon
 from .icons import icon as vector_icon
 from .models_page import build_models_page
 from .palettes import (
@@ -106,7 +106,16 @@ PLACEHOLDER_TEXT = "Not ported to the Qt spike yet — launch without --qt for t
 # Sidebar: (icon name, page name). Settings is pinned to the bottom, below the
 # stretch. The icons are drawn from qtui/icons.py and inked by the live
 # palette (_paint_sidebar_icons) — emoji read as artwork and themed badly.
-ACTIVITIES = ((SORT, "Sort"), (TRAIN, "Train"), (MODELS, "Models"), (COMMUNITY, "Community"))
+# AI Config sits where Train sits and is its mode-mirror (Seth: "it takes the
+# place of the training screen; it is analogous to training for an LLM").
+AI_CONFIG_ACTIVITY = "AI Config"
+ACTIVITIES = (
+    (SORT, "Sort"),
+    (TRAIN, "Train"),
+    (AI_CONFIG, AI_CONFIG_ACTIVITY),
+    (MODELS, "Models"),
+    (COMMUNITY, "Community"),
+)
 SETTINGS_ACTIVITY = (SETTINGS, "Settings")
 SIDEBAR_ICON_SIZE = 26
 SETTINGS_SECTIONS = ("Camera", "Serial", "Image Processing", "AI Config", "Theme")
@@ -244,6 +253,7 @@ DOCK_HOMES = (
     ("serial_dock", ads.BottomDockWidgetArea),
     ("history_dock", ads.RightDockWidgetArea),
     ("help_dock", ads.RightDockWidgetArea),
+    ("themes_dock", ads.RightDockWidgetArea),
 )
 
 
@@ -419,6 +429,7 @@ class QtMainWindow(QMainWindow):
         self._build_serial_dock()
         self._build_history_dock()
         self._build_help_dock()
+        self._build_themes_dock()
         self._build_menus()
 
         self.camera_label = QLabel(self)
@@ -506,7 +517,7 @@ class QtMainWindow(QMainWindow):
         button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         button.setCheckable(True)
         button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        button.clicked.connect(lambda _checked=False, page=name: self.show_page(page))
+        button.clicked.connect(lambda _checked=False, page=name: self.open_activity(page))
         # The checked state is a different ink, and the group flips two buttons
         # per click — so both ends of the swap repaint themselves.
         button.toggled.connect(lambda _on=False, page=name: self._paint_sidebar_icon(page))
@@ -555,11 +566,12 @@ class QtMainWindow(QMainWindow):
         return page
 
     def _build_grid_column(self, parent: QWidget) -> QWidget:
-        """The slot grid, with the run counter/reset anchored above it.
+        """The slot grid, with the run counter/reset and the template picker above it.
 
         JL (follow-up to the run-options move): the counter and reset button
         felt orphaned floating on the action row — they belong with what
-        they count, not with Start/Stop/Manual feed.
+        they count, not with Start/Stop/Manual feed. Same argument for the
+        template picker: it names the layout these cards *are*.
         """
         holder = QWidget(parent)
         column = QVBoxLayout(holder)
@@ -578,6 +590,7 @@ class QtMainWindow(QMainWindow):
         reset = QPushButton("Reset counts", holder)
         reset.clicked.connect(self.reset_counts)
         header.addWidget(reset)
+        self._add_template_group(holder, header)
         column.addLayout(header)
 
         self.slot_grid = SlotGrid(self.config, holder)
@@ -634,9 +647,10 @@ class QtMainWindow(QMainWindow):
         self.sort_stack.setCurrentIndex(1 if (not connected and fresh_db) else 0)
 
     def _build_action_row(self, page: QWidget) -> QHBoxLayout:
-        """One row: what a run *does* on the left, what it runs *with* on the right."""
+        """The launchers, right-aligned — the Train page's Training strip, mirrored (JL)."""
         actions = QHBoxLayout()
         self.action_buttons: dict[str, QPushButton] = {}
+        actions.addStretch(1)
 
         # One button, two faces (JL): a run is on or it isn't, and the button
         # that ends it is the one that started it. `_update_run_buttons` owns
@@ -665,17 +679,15 @@ class QtMainWindow(QMainWindow):
         self.notes_button.hide()
         actions.addWidget(self.notes_button)
 
-        actions.addStretch(1)
-        self._add_template_group(page, actions)
         self._update_run_buttons()
         return actions
 
     def _add_template_group(self, page: QWidget, bar: QHBoxLayout) -> None:
-        """The template picker, right-aligned on the action row.
+        """The template picker, right-aligned on the slot grid's header row.
 
-        JL: which layout a run uses belongs on the same row as Start, not on a
-        full-width bar of its own — the picker and its two edits are a group,
-        so New/Edit shrink to glyphs with tooltips.
+        JL: which layout a run uses belongs over the cards that layout *is*,
+        after the counters — not down on the launcher strip. The picker and
+        its two edits are a group, so New/Edit shrink to glyphs with tooltips.
         """
         self.template_hint = self._muted_label("", page)
         bar.addWidget(self.template_hint)
@@ -1285,6 +1297,70 @@ class QtMainWindow(QMainWindow):
         self.help_dock = self._build_dock("User Guide", self.help_view, ads.RightDockWidgetArea)
         self.help_dock.toggleView(False)
 
+    def _build_themes_dock(self) -> None:
+        """Every theme in one list, applied on the click (Seth via JL).
+
+        Settings → Theme is where a theme is *configured*; this is where one is
+        *tried*, which is a different activity — you want the whole list in
+        front of you and the app repainting under it. Both drive ``set_theme``
+        and both are re-read by ``refresh_theme_picker``, so neither can drift
+        from the registry or from each other.
+        """
+        panel = QWidget(self)
+        column = QVBoxLayout(panel)
+        column.setContentsMargins(8, 8, 8, 8)
+        column.setSpacing(6)
+        self.theme_list = QListWidget(panel)
+        self.theme_list.setObjectName("themeList")
+        self.theme_list.addItems(theme_names())
+        self.theme_list.setCurrentRow(self._theme_row(self.theme_name))
+        # Connected last, like the combo: seeding the selection is not a choice.
+        self.theme_list.currentTextChanged.connect(self.set_theme)
+        column.addWidget(self.theme_list, 1)
+        self.theme_dock_edit_button = QPushButton("Edit theme…", panel)
+        self.theme_dock_edit_button.clicked.connect(self._open_theme_editor)
+        column.addWidget(self.theme_dock_edit_button)
+
+        self.themes_dock = self._build_dock("Themes", panel, ads.RightDockWidgetArea)
+        self.themes_dock.toggleView(False)
+        # A theme saved from the Tk UI, or from an editor opened before this
+        # panel was, lands in the registry without passing through here.
+        self.themes_dock.viewToggled.connect(self._on_themes_dock_toggled)
+
+    def _on_themes_dock_toggled(self, opened: bool) -> None:
+        if opened:
+            self.refresh_theme_picker()
+
+    @staticmethod
+    def _theme_row(name: str) -> int:
+        names = theme_names()
+        return names.index(name) if name in names else 0
+
+    def refresh_theme_picker(self) -> None:
+        """Re-read the theme registry into both pickers (the theme editor's hook)."""
+        if hasattr(self, "theme_combo"):
+            blocked = self.theme_combo.blockSignals(True)
+            self.theme_combo.clear()
+            self.theme_combo.addItems(theme_names())
+            self.theme_combo.blockSignals(blocked)
+        if hasattr(self, "theme_list"):
+            blocked = self.theme_list.blockSignals(True)
+            self.theme_list.clear()
+            self.theme_list.addItems(theme_names())
+            self.theme_list.blockSignals(blocked)
+        self._sync_theme_pickers()
+
+    def _sync_theme_pickers(self) -> None:
+        """Point both pickers at the live theme without re-applying it."""
+        if hasattr(self, "theme_combo"):
+            blocked = self.theme_combo.blockSignals(True)
+            self.theme_combo.setCurrentText(self.theme_name)
+            self.theme_combo.blockSignals(blocked)
+        if hasattr(self, "theme_list"):
+            blocked = self.theme_list.blockSignals(True)
+            self.theme_list.setCurrentRow(self._theme_row(self.theme_name))
+            self.theme_list.blockSignals(blocked)
+
     def _build_menus(self) -> None:
         # menuBar().addMenu(str) hands the QMenu back with Python ownership; the
         # menus have to be kept alive here or shiboken deletes them.
@@ -1307,6 +1383,9 @@ class QtMainWindow(QMainWindow):
         help_toggle = self.help_dock.toggleViewAction()
         help_toggle.setText("User Guide panel")
         self.menus["View"].addAction(help_toggle)
+        themes_toggle = self.themes_dock.toggleViewAction()
+        themes_toggle.setText("Themes")
+        self.menus["View"].addAction(themes_toggle)
         self.menus["View"].addSeparator()
         # The always-works escape hatch (Seth: floated the history panel and
         # couldn't get it back): drag-to-dock takes dexterity and has failed
@@ -1320,6 +1399,8 @@ class QtMainWindow(QMainWindow):
         guide.triggered.connect(self.open_help)
         check = self.menus["Help"].addAction("Check for updates…")
         check.triggered.connect(lambda: self.open_update_dialog(check=True))
+        support = self.menus["Help"].addAction("Export support package…")
+        support.triggered.connect(self._open_support_dialog)
         self.menus["Help"].addSeparator()
         about = self.menus["Help"].addAction("About")
         about.triggered.connect(self._show_about)
@@ -1327,6 +1408,20 @@ class QtMainWindow(QMainWindow):
         license_action.triggered.connect(self._show_license)
 
     # ----- navigation ---------------------------------------------------------
+
+    def open_activity(self, name: str) -> None:
+        """What a sidebar click does. Every activity is a page — except AI Config.
+
+        The AI settings section is one widget, already parented into the
+        Settings stack; a second mount would double-parent it, and a second
+        instance would double the state it writes. So the entry navigates to
+        Settings → AI Config instead, which leaves Settings the checked
+        button — honest about where the user actually landed.
+        """
+        if name == AI_CONFIG_ACTIVITY:
+            self._open_settings_section(AI_CONFIG_ACTIVITY)
+            return
+        self.show_page(name)
 
     def show_page(self, name: str) -> None:
         self.pages.setCurrentWidget(self._pages_by_name[name])
@@ -1352,6 +1447,12 @@ class QtMainWindow(QMainWindow):
         from .dialog_about import build_about_dialog
 
         build_about_dialog(self).exec()
+
+    def _open_support_dialog(self) -> None:
+        """Help → Export support package…: the report to paste on Discord."""
+        from .dialog_support import open_support_dialog
+
+        open_support_dialog(self)
 
     def _show_license(self) -> None:
         from .dialog_about import build_license_dialog
@@ -1477,15 +1578,22 @@ class QtMainWindow(QMainWindow):
         return ModelRepo(self.db).get(model_id) if model_id is not None else None
 
     def _apply_mode_visibility(self) -> None:
-        """Train is for a local model this user owns — see models.is_trainable."""
+        """The mode owns this pair: Train for an owned local model (see
+        models.is_trainable), AI Config for AI Config mode — the same "no
+        active model" test settings_ai gates its own fields on."""
         from ..data.models import is_trainable
 
-        self._set_activity_visible("Train", is_trainable(self._active_model()))
+        model = self._active_model()
+        self._set_activity_visible("Train", is_trainable(model))
+        self._set_activity_visible(AI_CONFIG_ACTIVITY, model is None)
 
     def _set_activity_visible(self, name: str, visible: bool) -> None:
         button = self.sidebar_buttons[name]
         button.setVisible(visible)
-        if not visible and self.pages.currentWidget() is self._pages_by_name[name]:
+        # AI Config has no page of its own (see open_activity), so there is
+        # nothing to bounce off when it goes away.
+        page = self._pages_by_name.get(name)
+        if not visible and page is not None and self.pages.currentWidget() is page:
             self.sidebar_buttons["Sort"].setChecked(True)
             self.show_page("Sort")
 
@@ -1568,6 +1676,9 @@ class QtMainWindow(QMainWindow):
         resolved = resolve_theme(name)
         self._apply_theme(resolved)
         self._save_setting(SETTING_THEME, resolved)
+        # Whichever picker was used, the other one follows — signals blocked,
+        # so the follower never re-applies what just happened.
+        self._sync_theme_pickers()
 
     def _apply_theme(self, name: str) -> None:
         self.theme_name = name

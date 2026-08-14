@@ -587,6 +587,50 @@ def test_train_is_hidden_in_ai_config_mode(window) -> None:
     assert window.sidebar_buttons["Train"].isHidden()
 
 
+def test_ai_config_takes_the_train_slot_in_ai_config_mode(window) -> None:
+    """Seth: "it takes the place of the training screen; it is analogous to
+    training for an LLM" — so the two are mode-mirrors of each other."""
+    assert not window.sidebar_buttons["AI Config"].isHidden()
+    assert window.sidebar_buttons["Train"].isHidden()
+    names = list(window.sidebar_buttons)
+    assert names.index("AI Config") == names.index("Train") + 1
+
+
+def test_ai_config_gives_way_to_train_for_a_local_model(window, config) -> None:
+    seed_model(config, {"9mm FC": 1})
+
+    mode_changed(window)
+
+    assert window.sidebar_buttons["AI Config"].isHidden()
+    assert not window.sidebar_buttons["Train"].isHidden()
+
+
+def test_ai_config_opens_the_settings_section_it_already_owns(window) -> None:
+    """One AiSection instance, mounted once: the sidebar entry navigates to
+    Settings → AI Config rather than re-parenting that widget into a page."""
+    window.sidebar_buttons["AI Config"].click()
+
+    assert window.pages.currentWidget() is window._pages_by_name["Settings"]
+    assert window.settings_list.currentItem().text() == "AI Config"
+    assert window.settings_pages.currentWidget() is window.ai_section
+    # Settings is where the user landed, and the sidebar says so.
+    assert window.sidebar_buttons["Settings"].isChecked()
+    assert not window.sidebar_buttons["AI Config"].isChecked()
+
+
+def test_hiding_ai_config_leaves_the_settings_page_alone(window, config) -> None:
+    """It has no page to bounce off — the section's own notice explains why
+    its fields went flat, and a forced jump to Sort would be a jump the user
+    didn't ask for."""
+    window.sidebar_buttons["AI Config"].click()
+    seed_model(config, {"9mm FC": 1})
+
+    mode_changed(window)
+
+    assert window.sidebar_buttons["AI Config"].isHidden()
+    assert window.pages.currentWidget() is window._pages_by_name["Settings"]
+
+
 def test_community_follows_auth_state(window) -> None:
     # Signed out (the fixture never constructs an AuthManager): hidden, and
     # the status-bar button offers sign-in.
@@ -771,7 +815,7 @@ def test_auto_select_control_persists(window, config) -> None:
 
 
 def action_row(window):
-    """The one row the run controls and the template picker share."""
+    """The launcher strip at the foot of the Sort page."""
     column = window._pages_by_name["Sort"].layout()
     for index in range(column.count()):
         row = column.itemAt(index).layout()
@@ -780,25 +824,59 @@ def action_row(window):
     raise AssertionError("the run button is not on any row of the Sort page")
 
 
+def grid_header_row(window):
+    """The row above the slot cards: Slots · counters · template picker."""
+    holder = window.slot_grid.parentWidget()
+    header = holder.layout().itemAt(0).layout()
+    assert header is not None, "the slot column's header row is gone"
+    return header
+
+
 def row_widgets(row) -> list:
     return [row.itemAt(i).widget() for i in range(row.count())]
 
 
-def test_the_run_controls_and_the_template_picker_share_one_row(window) -> None:
+def test_the_run_controls_are_right_aligned_on_the_strip(window) -> None:
+    """JL: the launchers cluster on the right, like the Train page's Training
+    strip — stretch first, buttons after, nothing floating mid-row."""
     row = action_row(window)
-    widgets = row_widgets(row)
 
+    assert row.itemAt(0).spacerItem() is not None, "the strip does not start with the stretch"
+    widgets = row_widgets(row)
+    assert widgets[0] is None  # the spacer's slot
     for widget in (
+        window.run_button,
         window.action_buttons["Manual feed"],
         window.run_options_button,
+        window.notes_button,
+    ):
+        assert widget in widgets
+    # No second stretch: one after the buttons would re-centre the cluster.
+    assert sum(1 for i in range(row.count()) if row.itemAt(i).spacerItem() is not None) == 1
+    # Nothing of the template group is left down here.
+    assert window.template_combo not in widgets
+
+
+def test_the_template_picker_rides_the_slot_grid_header(window) -> None:
+    """JL: the template names the layout the cards *are*, so it belongs over
+    them — right-aligned after the run counters, not on the launcher strip."""
+    header = row_widgets(grid_header_row(window))
+
+    for widget in (
+        window.template_hint,
         window.template_combo,
         window.template_new_button,
         window.template_edit_button,
     ):
-        assert widget in widgets
+        assert widget in header
+    # After the counters it came to join, and after the single stretch that
+    # pins the whole cluster right.
+    assert header.index(window.master_count_label) < header.index(window.template_combo)
+    stretches = [i for i in range(grid_header_row(window).count()) if grid_header_row(window).itemAt(i).spacerItem()]
+    assert len(stretches) == 1
+    assert stretches[0] < header.index(window.template_combo)
 
-    # And it is the only row above the splitter — the standalone template bar
-    # is gone, not merely emptied.
+    # And the Sort page still has exactly one row of its own under the splitter.
     column = window._pages_by_name["Sort"].layout()
     assert sum(1 for i in range(column.count()) if column.itemAt(i).layout() is not None) == 1
 

@@ -19,7 +19,16 @@ from PySide6.QtGui import QPixmap
 
 
 def test_sidebar_activities(window) -> None:
-    assert list(window.sidebar_buttons) == ["Sort", "Train", "Models", "Community", "Settings"]
+    # AI Config sits between Train and Models: it is Train's mode-mirror, and
+    # takes its place in the sidebar when no local model is active (Seth).
+    assert list(window.sidebar_buttons) == [
+        "Sort",
+        "Train",
+        "AI Config",
+        "Models",
+        "Community",
+        "Settings",
+    ]
     assert window.sidebar_buttons["Sort"].isChecked()
     assert window.pages.currentWidget() is window._pages_by_name["Sort"]
 
@@ -69,13 +78,21 @@ def test_menus(window) -> None:
         "Serial Monitor",
         "Classification History",
         "User Guide panel",
+        "Themes",
         "Re-dock panels",
     ]
     assert window.serial_dock.toggleViewAction() in window.menus["View"].actions()
     assert window.history_dock.toggleViewAction() in window.menus["View"].actions()
     assert window.help_dock.toggleViewAction() in window.menus["View"].actions()
+    assert window.themes_dock.toggleViewAction() in window.menus["View"].actions()
     help_texts = [a.text() for a in window.menus["Help"].actions() if a.text()]
-    assert help_texts == ["User Guide", "Check for updates…", "About", "License"]
+    assert help_texts == [
+        "User Guide",
+        "Check for updates…",
+        "Export support package…",
+        "About",
+        "License",
+    ]
 
 
 def test_theme_section_hosts_the_theme_combo(window) -> None:
@@ -153,7 +170,7 @@ def test_panels_are_managed_by_qtads_and_carry_the_drag_hint(window) -> None:
     assert window.central_dock.isCentralWidget()
 
     registered = window.dock_manager.dockWidgetsMap()
-    for dock in (window.serial_dock, window.history_dock, window.help_dock):
+    for dock in (window.serial_dock, window.history_dock, window.help_dock, window.themes_dock):
         assert registered[dock.objectName()] is dock
         assert "Re-dock panels" in dock.tabWidget().toolTip()
 
@@ -164,6 +181,7 @@ def test_only_the_serial_panel_is_open_at_startup(window) -> None:
     assert not window.serial_dock.isClosed()
     assert window.history_dock.isClosed()
     assert window.help_dock.isClosed()
+    assert window.themes_dock.isClosed()
 
 
 def test_redock_panels_brings_a_floating_dock_home(window) -> None:

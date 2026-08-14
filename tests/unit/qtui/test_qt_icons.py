@@ -25,6 +25,7 @@ def test_every_name_is_declared(qapp) -> None:
         icons.APP,
         icons.SORT,
         icons.TRAIN,
+        icons.AI_CONFIG,
         icons.MODELS,
         icons.COMMUNITY,
         icons.SETTINGS,

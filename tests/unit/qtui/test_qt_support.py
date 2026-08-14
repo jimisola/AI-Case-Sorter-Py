@@ -180,9 +180,23 @@ def test_save_cancelled_writes_nothing(window, tmp_path: Path) -> None:
 
 
 def test_entry_point_builds_against_the_window(window, monkeypatch) -> None:
-    """``open_support_dialog`` is what app.py will wire to the Help menu."""
+    """``open_support_dialog`` is what app.py wires to the Help menu."""
     opened: list[SupportDialog] = []
     monkeypatch.setattr(SupportDialog, "exec", lambda self: opened.append(self))
     open_support_dialog(window)
+    assert len(opened) == 1
+    assert opened[0].parent() is window
+
+
+def test_the_help_menu_exports_a_support_package(window, monkeypatch) -> None:
+    """Seth's route to it: Help → Export support package…, above About."""
+    opened: list[SupportDialog] = []
+    monkeypatch.setattr(SupportDialog, "exec", lambda self: opened.append(self))
+    texts = [a.text() for a in window.menus["Help"].actions() if a.text()]
+    assert texts.index("Export support package…") < texts.index("About")
+
+    actions = {a.text(): a for a in window.menus["Help"].actions() if a.text()}
+    actions["Export support package…"].trigger()
+
     assert len(opened) == 1
     assert opened[0].parent() is window

@@ -20,6 +20,7 @@ from PySide6.QtSvg import QSvgRenderer  # ty: ignore[unresolved-import]
 APP = "app"
 SORT = "sort"
 TRAIN = "train"
+AI_CONFIG = "ai_config"
 MODELS = "models"
 COMMUNITY = "community"
 SETTINGS = "settings"
@@ -74,6 +75,16 @@ _SVGS: dict[str, str] = {
         <path d="M19.6 2.4C19.6 4.7 19.6 4.7 21.9 4.7 19.6 4.7 19.6 4.7 19.6 7
                  19.6 4.7 19.6 4.7 17.3 4.7 19.6 4.7 19.6 4.7 19.6 2.4Z"
               stroke-width="1.5"/>
+        """
+    ),
+    # A prompt bubble: the chat-shaped sibling of TRAIN, since AI Config is
+    # what takes the Train activity's place in AI Config mode (Seth).
+    AI_CONFIG: _svg(
+        """
+        <path d="M5.2 4.6h13.6a1.7 1.7 0 0 1 1.7 1.7v8.4a1.7 1.7 0 0 1-1.7 1.7h-8.3l-4.1 3.3v-3.3h-1.2
+                 a1.7 1.7 0 0 1-1.7-1.7V6.3a1.7 1.7 0 0 1 1.7-1.7Z"/>
+        <path d="M8.5 8.6 10.9 10.7 8.5 12.8" stroke-width="1.5"/>
+        <path d="M12.6 13h4" stroke-width="1.5"/>
         """
     ),
     # Three cubes stacked on a platform: the model library as things on a shelf.
