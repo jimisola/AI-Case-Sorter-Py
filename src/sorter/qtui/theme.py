@@ -9,6 +9,8 @@ Key roles are documented in ``qtui/palettes.py``'s ``_DARK`` dict.
 
 from __future__ import annotations
 
+from PySide6.QtGui import QColor  # ty: ignore[unresolved-import]
+
 # A QGroupBox's frame starts this far below its top edge — the title sits in
 # that margin. A splitter dividing two group boxes offsets its handle by the
 # same amount (`#groupSplitter` below), or the divider runs above the borders
@@ -21,8 +23,6 @@ INDICATOR_SIZE = 14
 
 # Only these roles are read, so a palette that is missing one (a hand-edited
 # settings row) falls back rather than raising mid-stylesheet.
-from PySide6.QtGui import QColor  # ty: ignore[unresolved-import]
-
 _FALLBACK = {
     "bg_window": "#131313",
     "bg_surface": "#1c1c1c",
