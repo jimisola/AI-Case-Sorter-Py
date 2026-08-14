@@ -30,6 +30,12 @@ that splitter widens, which is what makes a 150-class model readable — and
 the training launcher on its own strip at the foot. Clicking a counts row
 still saves-and-feeds, as Tk's cards do.
 
+The page is a two-card stack (Sort's empty-state pattern): the capture
+surface, or — when the active model can't be trained here — a panel saying
+why and offering the way out. The sidebar's Train button is always there
+(app.py's ``_apply_mode_visibility``), so this page is what has to answer a
+user who clicked it in AI Config mode or on a community model.
+
 Everything the worker needs is snapshotted on the main thread — it never
 reads a widget or the Config.
 """
@@ -59,6 +65,7 @@ from PySide6.QtWidgets import (  # ty: ignore[unresolved-import]
     QListWidgetItem,
     QPushButton,
     QSplitter,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -89,6 +96,18 @@ FOREIGN_MODEL_TEXT = (
     "and import the archive back as your own model."
 )
 
+# The unavailable panel. Train is always in the sidebar now, so these are what
+# a click on it has to answer: why not, and what to do instead. Same two cases
+# `is_trainable` splits on — no local model at all, or someone else's.
+UNAVAILABLE_TITLE_AI = "Training needs a local model"
+UNAVAILABLE_TEXT_AI = (
+    "Classification is running over HTTP: the AI Config server does the recognising, "
+    "so there is no model on this machine to train.\n\nActivate or create a local model "
+    "on the Models page to train one here."
+)
+UNAVAILABLE_TITLE_FOREIGN = "This model is managed by its publisher"
+MODELS_JUMP_TEXT = "Open the Models page"
+
 
 class TrainPage(QWidget):
     """The capture loop, the counts list, and the training launcher."""
@@ -114,7 +133,15 @@ class TrainPage(QWidget):
         # Test seam: the trainer script the manager spawns (None = the real one).
         self.training_script: Path | None = None
 
-        column = QVBoxLayout(self)
+        # Index 0 is the working page, 1 the "why not" panel — see
+        # `_apply_availability`, which is the only thing that switches them.
+        self.stack = QStackedWidget(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(self.stack)
+
+        content = QWidget(self.stack)
+        column = QVBoxLayout(content)
         column.setContentsMargins(12, 12, 12, 12)
         column.setSpacing(8)
         column.addLayout(self._build_top_row())
@@ -136,6 +163,8 @@ class TrainPage(QWidget):
         self.body_splitter.setSizes([10000, 10000])
         column.addWidget(self.body_splitter, 1)
         column.addWidget(self._build_training_group())
+        self.stack.addWidget(content)
+        self.stack.addWidget(self._build_unavailable_panel())
 
         # A run ending re-enables the Train button even if the console is left
         # open; the manager posts these from its wait thread.
@@ -254,6 +283,39 @@ class TrainPage(QWidget):
         row.addWidget(self.train_button)
         return box
 
+    def _build_unavailable_panel(self) -> QWidget:
+        """Why Train can't run in this mode, and the one button out of it.
+
+        Same shape as the Sort page's first-run panel (app._build_empty_state_panel):
+        a title, the reason, and the action that resolves it.
+        """
+        panel = QWidget(self.stack)
+        column = QVBoxLayout(panel)
+        column.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        column.setSpacing(10)
+
+        self.unavailable_title = QLabel("", panel)
+        self.unavailable_title.setObjectName("emptyStateTitle")
+        self.unavailable_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        column.addWidget(self.unavailable_title)
+
+        self.unavailable_text = QLabel("", panel)
+        self.unavailable_text.setObjectName("mutedLabel")
+        self.unavailable_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.unavailable_text.setWordWrap(True)
+        self.unavailable_text.setMaximumWidth(560)
+        column.addWidget(self.unavailable_text, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        self.unavailable_button = QPushButton(MODELS_JUMP_TEXT, panel)
+        self.unavailable_button.clicked.connect(self._open_models_page)
+        column.addWidget(self.unavailable_button, 0, Qt.AlignmentFlag.AlignHCenter)
+        return panel
+
+    def _open_models_page(self) -> None:
+        go = getattr(self._win, "go_to_activity", None)
+        if go is not None:
+            go("Models")
+
     def _build_counts_group(self) -> QGroupBox:
         box = QGroupBox("Image counts", self)
         self.counts_group = box
@@ -297,6 +359,7 @@ class TrainPage(QWidget):
         or a community import, so nothing about this is cached.
         """
         model = self.active_model()
+        self._apply_availability(model)
         if model is None:
             self.active_label.setText(AI_MODE_TEXT)
             self.label_combo.clear()
@@ -322,6 +385,24 @@ class TrainPage(QWidget):
             counts.setdefault(label, count)
         self._render_counts(counts)
         self._update_buttons(model)
+
+    def _apply_availability(self, model: Model | None) -> None:
+        """Working page or explainer, decided by the same ``is_trainable`` the
+        sidebar mutes Train on — so the button's ink and the page always agree."""
+        if is_trainable(model):
+            self.stack.setCurrentIndex(0)
+            return
+        if model is None:
+            self.unavailable_title.setText(UNAVAILABLE_TITLE_AI)
+            self.unavailable_text.setText(UNAVAILABLE_TEXT_AI)
+        else:
+            self.unavailable_title.setText(UNAVAILABLE_TITLE_FOREIGN)
+            self.unavailable_text.setText(FOREIGN_MODEL_TEXT.format(name=model.name))
+        self.stack.setCurrentIndex(1)
+
+    def is_available(self) -> bool:
+        """Whether the capture surface is showing rather than the explainer."""
+        return self.stack.currentIndex() == 0
 
     def _refill_labels(self, labels: list[str]) -> None:
         current = self.label_combo.currentText()

@@ -19,8 +19,8 @@ from PySide6.QtGui import QPixmap
 
 
 def test_sidebar_activities(window) -> None:
-    # AI Config sits between Train and Models: it is Train's mode-mirror, and
-    # takes its place in the sidebar when no local model is active (Seth).
+    # AI Config sits between Train and Models: it is Train's mode-mirror. The
+    # two coexist — Train is never hidden, only muted (JL).
     assert list(window.sidebar_buttons) == [
         "Sort",
         "Train",
@@ -39,6 +39,38 @@ def test_sidebar_switches_pages(window, name: str) -> None:
 
     assert window.pages.currentWidget() is window._pages_by_name[name]
     assert window.sidebar_buttons[name].isChecked()
+
+
+def test_a_muted_activity_is_inked_apart_from_its_neighbours(window, config) -> None:
+    """The stylesheet can't reach a QIcon, so the property and the icon ink
+    are set together (``_set_activity_unavailable``) and must not drift.
+
+    Compared as rendered pixels, not by identity: a QIcon built from the same
+    SVG is a different object every time.
+    """
+    from sorter.qtui.app import SIDEBAR_ICON_SIZE
+    from sorter.qtui.icons import TRAIN
+    from sorter.qtui.icons import icon as vector_icon
+
+    def rendered(role: str):
+        return vector_icon(TRAIN, window.palette_colors[role], SIDEBAR_ICON_SIZE).pixmap(SIDEBAR_ICON_SIZE).toImage()
+
+    train = window.sidebar_buttons["Train"]
+    inked = train.icon().pixmap(SIDEBAR_ICON_SIZE).toImage()
+
+    assert train.property("unavailable") is True
+    assert inked == rendered("text_subtle")  # dimmer than an ordinary...
+    assert inked != rendered("text_muted")  # ...unchecked neighbour
+
+    # And the muting is undone, not merely applied, when the mode allows it.
+    from .conftest import seed_model
+
+    seed_model(config, {"9mm FC": 1})
+    window.bus.post("mode/changed", None)
+    window.bus.drain()
+
+    assert train.property("unavailable") is False
+    assert train.icon().pixmap(SIDEBAR_ICON_SIZE).toImage() == rendered("text_muted")
 
 
 def test_sidebar_fits_the_widest_label(window) -> None:

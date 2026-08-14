@@ -339,19 +339,23 @@ changed since increment 3, by surface:
   Label + Save → readouts — with the image counts beside it behind a 50/50
   splitter (they reflow into columns as it widens, which is what makes a
   150-class model readable) and a Training strip at the foot pairing "Sort
-  while training" with Training settings… / Start training.
-- **Models and Community share one idiom.** Row-scoped actions (✓ activate,
-  ✎ edit, × delete; ✓ only on the synthetic AI Config row) ride in the row
-  as fixed-size icon buttons, sortable columns above, selection-scoped
+  while training" with Training settings… / Start training. Behind a stack:
+  when the active model isn't trainable here, the page is a guidance panel
+  saying which case it is and jumping to Models.
+- **Models and Community share one idiom.** Row-scoped actions ride in the
+  row: on Models, activation *is* the Active column's radio, with ✎ edit and
+  × delete as fixed-size icon buttons beside it (the AI Config row has the
+  radio alone). Sortable columns above, selection-scoped
   Images…/Headstamps…/Evaluate…/Export… on the bar below. Community's row
   button carries the whole lifecycle — install → update → remove — and a
   second click queues behind a running download.
 - **Sidebar.** Sort / Train / Models / Community with Settings pinned below,
   now inked from hand-authored SVGs by the live palette (the emoji wishlist
-  item, done), plus an **AI Config** activity that appears in Train's place
-  in AI Config mode and navigates to Settings → AI Config (Seth: "it takes
-  the place of the training screen; it is analogous to training for an
-  LLM").
+  item, done), plus an **AI Config** activity that appears beside a muted
+  Train in AI Config mode and navigates to Settings → AI Config (Seth: "it
+  takes the place of the training screen; it is analogous to training for an
+  LLM"). Train itself is never hidden — JL didn't discover it existed — only
+  inked `text_subtle`, with the page behind it saying why.
 - **Image processing follows the active model.** The primer-mask and crop
   (Hough) settings have lived on the model row since the WinForms port;
   nothing read them. The page now reads/writes the active
@@ -484,9 +488,9 @@ IDE 2):
 1. **Left activity sidebar → `QStackedWidget`**, not a top tab row. Four
    activities — Sort, Train, Models, Community — plus a Settings entry
    pinned at the bottom (the Qt Creator mode-selector / Telegram pattern).
-   Mode-driven visibility (Train only for owned models, Community only when
-   signed in) maps to hiding/showing sidebar entries, same `mode/changed`
-   event as today.
+   Mode-driven state (Community shown only when signed in; Train muted
+   rather than hidden when the active model isn't the user's) rides the same
+   `mode/changed` event as today.
 2. **Sort is a dashboard, not a form.** Live camera preview *in* the Sort
    view (operators want to see what the machine sees while it runs), a
    prominent Start/Stop, the slot-card grid with live counts, and the
@@ -569,6 +573,8 @@ revisitable; "Open" = needs a decision.
 | Community row button removes the local copy when installed and current (Tk: download only) | Changed — closes the install→update→remove loop | `community_page.py` |
 | A second download click queues rather than being ignored | Changed — JL; queue position shown as "(2 of N)" | `community_page.py` |
 | AI Config is a sidebar activity that navigates to Settings → AI Config (it has no page of its own) | Changed — Seth; mirrors Train's slot in the other mode | `app.py` |
+| Train is always in the sidebar, muted (not disabled) when the active model isn't trainable; its page explains why (Tk hides the tab) | Changed — JL never discovered Train existed while it was hidden | `app.py`, `train_page.py` |
+| Models activation is the Active column's radio, not a per-row ✓ button plus "● ACTIVE" text (Tk: a card's Activate button) | Changed — JL: all-green rows read as "everything is active", and active was said three ways | `models_page.py` |
 | Themes are also a panel, applying on click, alongside Settings → Theme | Changed — trying a theme and configuring one are different activities | `app.py` |
 | Panels are QtAds, with "Re-dock panels" as a guaranteed escape hatch | Changed — stock `QDockWidget` drag-docking was unusable on JL's box | `app.py` |
 

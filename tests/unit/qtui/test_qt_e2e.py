@@ -352,10 +352,11 @@ def test_demo_c_model_lifecycle(config, window, monkeypatch, tmp_path) -> None:
     created = next(m for m in ModelRepo(config.db).list() if m.name == "Demo model")
     assert created.model_mode == "convnext_small"
 
-    # 2. Activate it: the Train activity appears, the library marks the row.
+    # 2. Activate it: the Train activity un-mutes, the library checks the row.
     select_model(page, created.id)
     activate_row(page, created.id)
-    assert drain_until(window, lambda: not window.sidebar_buttons["Train"].isHidden())
+    assert drain_until(window, lambda: not window.sidebar_buttons["Train"].property("unavailable"))
+    assert page.active_radio(created.id).isChecked()
     assert SettingsRepo(config.db).get_active_model_id() == created.id
 
     # 3. Headstamps, through the manager the Models page opens.
@@ -406,13 +407,19 @@ def test_demo_c_model_lifecycle(config, window, monkeypatch, tmp_path) -> None:
     activate_row(page, imported.id)
     assert drain_until(window, lambda: SettingsRepo(config.db).get_active_model_id() == imported.id)
     assert window.slot_grid.cards[1].names_label.text() == EMPTY_HINT
-    assert not window.sidebar_buttons["Train"].isHidden()
+    assert not window.sidebar_buttons["Train"].property("unavailable")
 
-    # 7. Back to AI Config mode: Train goes away again.
+    # 7. Back to AI Config mode: Train stays in the sidebar but goes muted,
+    #    and its page explains why (JL: hidden activities are undiscoverable).
     select_model(page, -1)  # the synthetic "Use AI Config" row
     activate_row(page, -1)
-    assert drain_until(window, lambda: window.sidebar_buttons["Train"].isHidden())
+    assert drain_until(window, lambda: window.sidebar_buttons["Train"].property("unavailable"))
+    assert not window.sidebar_buttons["Train"].isHidden()
     assert SettingsRepo(config.db).get_active_model_id() is None
+
+    window.sidebar_buttons["Train"].click()
+    assert window.pages.currentWidget() is window._pages_by_name["Train"]
+    assert not window.train_page.is_available()
 
 
 def select_model(page: Any, model_id: int) -> None:
@@ -424,10 +431,10 @@ def select_model(page: Any, model_id: int) -> None:
 
 
 def activate_row(page: Any, model_id: int) -> None:
-    """Activate a model the way the library does it: that row's own button."""
-    widget = page.row_actions(model_id)
-    assert widget is not None, f"no action buttons on row {model_id}"
-    widget.activate_button.click()
+    """Activate a model the way the library does it: that row's Active radio."""
+    radio = page.active_radio(model_id)
+    assert radio is not None, f"no active radio on row {model_id}"
+    radio.click()
 
 
 # ----- (c2) sorting templates carry a whole layout ----------------------------

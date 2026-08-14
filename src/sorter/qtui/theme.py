@@ -71,9 +71,9 @@ QMainWindow::separator {{
 }}
 QMainWindow::separator:hover {{ background-color: {c["border_focus"]}; }}
 
-/* The two label colors below are also what inks the activity icons — a
+/* The three label colors below are also what inks the activity icons — a
    stylesheet can't reach a QIcon, so app._paint_sidebar_icon renders them
-   from the same two roles. Change one here and change it there. */
+   from the same three roles. Change one here and change it there. */
 #sidebar {{ background-color: {c["bg_surface"]}; }}
 #sidebar QToolButton {{
     background: transparent;
@@ -87,6 +87,13 @@ QMainWindow::separator:hover {{ background-color: {c["border_focus"]}; }}
     background-color: {c["bg_card_sel"]};
     color: {c["text_highlight"]};
 }}
+/* "Leads somewhere, but not usable in this mode" — Train with no trainable
+   model active. Deliberately NOT :disabled: the click still works, and the
+   page it opens is what explains the state (app._set_activity_unavailable).
+   The :checked twin is spelled out because the rule above would otherwise
+   out-specify this one while the muted activity is the open page. */
+#sidebar QToolButton[unavailable="true"],
+#sidebar QToolButton[unavailable="true"]:checked {{ color: {c["text_subtle"]}; }}
 QMenuBar {{
     background-color: {c["bg_surface"]};
     color: {c["text"]};

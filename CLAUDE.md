@@ -701,11 +701,17 @@ settings row is what the two actually share.
   three closed until asked for) — a status bar (camera/serial indicators,
   update affordance, identity + sign-in) and File/View/Help menus. It owns the
   `EventBus`, `Camera`, broker, `RunController` and `AuthManager`, exactly as
-  Tk's `MainWindow` does. Two entries are mode-driven and mutually exclusive:
-  Train for an owned local model, **AI Config for AI Config mode** — and AI
-  Config has no page of its own, since the one `AiSection` is already mounted
-  in the Settings stack, so `open_activity` navigates to Settings → AI Config
-  instead of re-parenting it.
+  Tk's `MainWindow` does. Mode drives two entries, and they now **coexist**:
+  **AI Config appears in AI Config mode** (it has no page of its own — the one
+  `AiSection` is already mounted in the Settings stack, so `open_activity`
+  navigates to Settings → AI Config rather than re-parenting it), while
+  **Train is never hidden**. When the active model isn't trainable
+  (`models.is_trainable`) `_set_activity_unavailable` sets the dynamic
+  property `unavailable` on the button — restyled `text_subtle` by
+  `qtui/theme.py` and re-inked by `_paint_sidebar_icon`, since a stylesheet
+  can't reach a QIcon — and leaves it **enabled**: the click must still work,
+  because `train_page`'s stacked explainer panel is what answers it. Hiding
+  it was how JL came not to know Train existed.
   The **Themes dock** is a second face on Settings → Theme, not a second
   implementation: both pickers drive `set_theme`, `refresh_theme_picker`
   (the hook `dialog_theme_editor` already looks for) re-reads the registry
@@ -730,7 +736,21 @@ settings row is what the two actually share.
   (`settings_{camera,serial,imageproc,ai}.py`) and dialogs (`dialog_*.py`)
   each own their widgets and expose a `build_*(win)` factory taking the
   window; `app.py` only wires them together. Settings sections are listed in
-  `SETTINGS_SECTIONS` and reached by name (`_open_settings_section`).
+  `SETTINGS_SECTIONS` and reached by name (`_open_settings_section`);
+  `go_to_activity(name)` is the equivalent for a page, and what an in-page
+  "take me there" button should use — `open_activity` alone leaves the
+  sidebar pointing at where the user was.
+- **A surface that can't do its job explains itself where it is.** Sort's
+  first-run panel and Train's unavailable panel are both a `QStackedWidget`
+  over the page's own content, swapped by a re-evaluate on `mode/changed` (or
+  an indicator paint), never a modal and never a disabled sidebar entry.
+  `models_page`'s Active column is the same instinct: activation is stated
+  once, by the radio in the column named for it — not by a green ✓ per row,
+  a disabled button *and* an "● ACTIVE" cell. The radios are
+  `autoExclusive(False)` and driven from the DB with signals blocked
+  (`_refresh_row_controls`): Qt owning the exclusivity would let a click
+  uncheck a row before the DB agreed, and no button group survives
+  `_pin_ai_row` rebuilding the item widgets anyway.
 - **The notify/confirm seam.** Anything that would open a native modal —
   `win.notify`, a page's `confirm` / `ask_text` / `ask_open_path` /
   `ask_save_path` / `ask_import_choice` — is an **instance attribute**, not a

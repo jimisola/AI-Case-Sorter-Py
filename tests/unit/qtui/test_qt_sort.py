@@ -583,26 +583,34 @@ def mode_changed(window) -> None:
     window.bus.drain()
 
 
-def test_train_is_hidden_in_ai_config_mode(window) -> None:
-    assert window.sidebar_buttons["Train"].isHidden()
+def test_train_is_muted_but_present_in_ai_config_mode(window) -> None:
+    """JL never discovered Train existed while it was hidden. It stays in the
+    sidebar at all times; unavailability is ink plus an explainer, and the
+    click keeps working — so `setEnabled(False)` is exactly what this isn't."""
+    button = window.sidebar_buttons["Train"]
+
+    assert not button.isHidden()
+    assert button.isEnabled()
+    assert button.property("unavailable") is True
 
 
-def test_ai_config_takes_the_train_slot_in_ai_config_mode(window) -> None:
+def test_ai_config_sits_beside_a_muted_train_in_ai_config_mode(window) -> None:
     """Seth: "it takes the place of the training screen; it is analogous to
-    training for an LLM" — so the two are mode-mirrors of each other."""
+    training for an LLM". The two are still mode-mirrors — they just coexist
+    now rather than one replacing the other (JL)."""
     assert not window.sidebar_buttons["AI Config"].isHidden()
-    assert window.sidebar_buttons["Train"].isHidden()
+    assert not window.sidebar_buttons["Train"].isHidden()
     names = list(window.sidebar_buttons)
     assert names.index("AI Config") == names.index("Train") + 1
 
 
-def test_ai_config_gives_way_to_train_for_a_local_model(window, config) -> None:
+def test_ai_config_gives_way_to_a_live_train_for_a_local_model(window, config) -> None:
     seed_model(config, {"9mm FC": 1})
 
     mode_changed(window)
 
     assert window.sidebar_buttons["AI Config"].isHidden()
-    assert not window.sidebar_buttons["Train"].isHidden()
+    assert not window.sidebar_buttons["Train"].property("unavailable")
 
 
 def test_ai_config_opens_the_settings_section_it_already_owns(window) -> None:
@@ -676,15 +684,16 @@ def test_identity_label_is_hidden_when_signed_out(window) -> None:
     assert window.identity_label.text() == ""
 
 
-def test_train_appears_for_a_model_this_user_owns(window, config) -> None:
+def test_train_goes_live_for_a_model_this_user_owns(window, config) -> None:
     seed_model(config, {"9mm FC": 1})
 
     mode_changed(window)
 
-    assert not window.sidebar_buttons["Train"].isHidden()
+    assert not window.sidebar_buttons["Train"].property("unavailable")
+    assert window.train_page.is_available()
 
 
-def test_train_stays_hidden_for_a_community_model(window, config) -> None:
+def test_train_stays_muted_for_a_community_model(window, config) -> None:
     from sorter.data.repository import ModelRepo
 
     repo = ModelRepo(config.db)
@@ -695,10 +704,12 @@ def test_train_stays_hidden_for_a_community_model(window, config) -> None:
 
     mode_changed(window)
 
-    assert window.sidebar_buttons["Train"].isHidden()
+    assert not window.sidebar_buttons["Train"].isHidden()
+    assert window.sidebar_buttons["Train"].property("unavailable") is True
 
 
-def test_hiding_the_current_activity_falls_back_to_sort(window, config) -> None:
+def test_a_muted_train_keeps_its_page_when_the_mode_changes(window, config) -> None:
+    """Nothing bounces the user off Train anymore — the page is the explainer."""
     seed_model(config, {"9mm FC": 1})
     mode_changed(window)
     window.sidebar_buttons["Train"].click()
@@ -707,6 +718,20 @@ def test_hiding_the_current_activity_falls_back_to_sort(window, config) -> None:
 
     SettingsRepo(config.db).clear_active_model()
     mode_changed(window)
+
+    assert window.pages.currentWidget() is window._pages_by_name["Train"]
+    assert not window.train_page.is_available()
+
+
+def test_hiding_the_current_activity_falls_back_to_sort(window) -> None:
+    """Community is the only activity that still comes and goes (auth)."""
+    window.community_page.is_signed_in = lambda: True
+    window._apply_auth_visibility()
+    window.sidebar_buttons["Community"].click()
+    assert window.pages.currentWidget() is window._pages_by_name["Community"]
+
+    window.community_page.is_signed_in = lambda: False
+    window._apply_auth_visibility()
 
     assert window.pages.currentWidget() is window._pages_by_name["Sort"]
     assert window.sidebar_buttons["Sort"].isChecked()

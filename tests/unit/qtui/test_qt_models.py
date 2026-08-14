@@ -33,7 +33,7 @@ from sorter.qtui.models_page import (
     ACTION_BUTTON_HEIGHT,
     ACTION_BUTTON_WIDTH,
     ACTIONS_COLUMN,
-    ACTIVE_MARK,
+    ACTIVE_COLUMN,
     AI_CONFIG_HINT,
     AI_CONFIG_NAME,
     AI_CONFIG_SENTINEL_ID,
@@ -107,10 +107,11 @@ def names(page: Any) -> list[str]:
 
 
 def active_names(page: Any) -> list[str]:
+    """Whose Active radio is checked — the only place activation is stated now."""
     return [
         cell(page, row, "Model")
         for row in range(page.tree.topLevelItemCount())
-        if cell(page, row, "Active") == ACTIVE_MARK
+        if active_radio(page, page.tree.topLevelItem(row).data(0, Qt.ItemDataRole.UserRole)).isChecked()
     ]
 
 
@@ -133,6 +134,13 @@ def row_actions(page: Any, model_id: int) -> Any:
     widget = page.row_actions(model_id)
     assert widget is not None, f"no action buttons on row {model_id}"
     return widget
+
+
+def active_radio(page: Any, model_id: int) -> Any:
+    """A row's Active-column radio — same rule: never held across a sort."""
+    radio = page.active_radio(model_id)
+    assert radio is not None, f"no active radio on row {model_id}"
+    return radio
 
 
 def make_model(config: Any, name: str, **fields: Any) -> Model:
@@ -500,9 +508,9 @@ def test_activate_flips_the_setting_and_posts_mode_changed(page, window, config)
     assert fresh_active_id(config) == model.id
     assert drain_until(window, lambda: posted == [{"active_model_id": model.id}])
     assert active_names(page) == ["Range brass"]
-    # The window reacts to the same event the Tk tab posts: Train is for a
-    # local model this user owns.
-    assert not window.sidebar_buttons["Train"].isHidden()
+    # The window reacts to the same event the Tk tab posts: Train is live for
+    # a local model this user owns, and muted (never hidden) otherwise.
+    assert not window.sidebar_buttons["Train"].property("unavailable")
 
 
 def test_activating_the_ai_row_returns_to_ai_config_mode(page, window, config) -> None:
@@ -514,22 +522,27 @@ def test_activating_the_ai_row_returns_to_ai_config_mode(page, window, config) -
 
     assert fresh_active_id(config) is None
     assert active_names(page) == [AI_CONFIG_NAME]
-    assert drain_until(window, lambda: window.sidebar_buttons["Train"].isHidden())
+    assert drain_until(window, lambda: window.sidebar_buttons["Train"].property("unavailable"))
 
 
-def test_activate_is_disabled_for_the_row_that_is_already_active(page, config) -> None:
+def test_only_the_active_rows_radio_is_checked(page, config) -> None:
     model = make_model(config, "Range brass")
     page.refresh()
     select(page, model.id)
     page.activate_selected()
 
-    active = row_actions(page, model.id)
-    assert not active.activate_button.isEnabled()
-    assert active.activate_button.toolTip() == TOOLTIP_ACTIVE
-    # The row that isn't active still offers it — the AI row included.
-    ai = row_actions(page, AI_CONFIG_SENTINEL_ID)
-    assert ai.activate_button.isEnabled()
-    assert ai.activate_button.toolTip() == TOOLTIP_ACTIVATE_AI
+    active = active_radio(page, model.id)
+    assert active.isChecked()
+    assert active.toolTip() == TOOLTIP_ACTIVE
+    # Still clickable, not greyed out: clicking it re-asserts (see below).
+    assert active.isEnabled()
+    # Every row that isn't active offers activation — the AI row included.
+    other = active_radio(page, next(i for i, _m in page._rows if i not in (model.id, AI_CONFIG_SENTINEL_ID)))
+    assert not other.isChecked()
+    assert other.toolTip() == TOOLTIP_ACTIVATE
+    ai = active_radio(page, AI_CONFIG_SENTINEL_ID)
+    assert not ai.isChecked()
+    assert ai.toolTip() == TOOLTIP_ACTIVATE_AI
 
 
 def test_the_ai_row_has_no_model_actions(page) -> None:
@@ -538,56 +551,104 @@ def test_the_ai_row_has_no_model_actions(page) -> None:
     assert not page.buttons["Export…"].isEnabled()
 
 
-# ----- the row's own action buttons -------------------------------------------
+# ----- the Active column's radio ----------------------------------------------
 
 
-def test_every_model_row_carries_three_fixed_size_buttons(page, config) -> None:
+def test_no_row_states_activation_anywhere_but_the_active_column(page, config) -> None:
+    """JL: a green ✓ on every row read as "everything is active", and
+    "● ACTIVE" said a third time what the column and the button already did."""
     model = make_model(config, "Range brass")
     page.refresh()
+    select(page, model.id)
+    page.activate_selected()
 
-    widget = row_actions(page, model.id)
-    assert [b.text() for b in widget.buttons()] == ["✓", "✎", "×"]
-    # Fixed in BOTH dimensions: a glyph or state change must not resize a
-    # button, its column, or the row under it (community_page.py's finding).
-    for button in widget.buttons():
-        assert button.size().toTuple() == (ACTION_BUTTON_WIDTH, ACTION_BUTTON_HEIGHT)
-        assert button.minimumSize() == button.maximumSize()
-    assert [b.toolTip() for b in widget.buttons()] == [TOOLTIP_ACTIVATE, TOOLTIP_EDIT, TOOLTIP_DELETE]
-    assert widget.delete_button.objectName() == "danger"
+    assert not any(cell(page, row, "Active") for row in range(page.tree.topLevelItemCount()))
+    assert not any(b.objectName() == "action" for b in row_actions(page, model.id).buttons())
+    assert page.tree.itemWidget(page.tree.topLevelItem(0), ACTIVE_COLUMN) is not None
 
 
-def test_the_ai_row_offers_only_activation(page) -> None:
-    widget = row_actions(page, AI_CONFIG_SENTINEL_ID)
-
-    assert [b.text() for b in widget.buttons()] == ["✓"]
-    assert widget.edit_button is None and widget.delete_button is None
-    # It is the active mode on a fresh DB, so its one button says so.
-    assert not widget.activate_button.isEnabled()
-    assert widget.activate_button.toolTip() == TOOLTIP_ACTIVE_AI
-
-
-def test_a_row_button_activates_its_own_row_not_the_selected_one(page, window, config) -> None:
+def test_a_row_radio_activates_its_own_row_not_the_selected_one(page, window, config) -> None:
     target = make_model(config, "Range brass")
     other = make_model(config, "Match prep")
     page.refresh()
     select(page, other.id)
 
-    row_actions(page, target.id).activate_button.click()
+    active_radio(page, target.id).click()
 
     assert fresh_active_id(config) == target.id
     assert active_names(page) == ["Range brass"]
-    assert drain_until(window, lambda: not window.sidebar_buttons["Train"].isHidden())
+    assert drain_until(window, lambda: not window.sidebar_buttons["Train"].property("unavailable"))
 
 
-def test_the_ai_rows_button_returns_to_ai_config_mode(page, window, config) -> None:
+def test_clicking_the_checked_radio_changes_nothing_and_stays_checked(page, window, config) -> None:
+    """Autoexclusive is off, so Qt has already unchecked it by the time the
+    click reaches us — the DB is what puts it back (``toggle_active_row``)."""
+    model = make_model(config, "Range brass")
+    page.refresh()
+    select(page, model.id)
+    page.activate_selected()
+    window.bus.drain()  # the real activation's event, out of the way
+    posted: list[Any] = []
+    window.bus.subscribe("mode/changed", posted.append)
+
+    active_radio(page, model.id).click()
+
+    assert active_radio(page, model.id).isChecked()
+    assert fresh_active_id(config) == model.id
+    assert active_names(page) == ["Range brass"]
+    window.bus.drain()
+    assert posted == []  # nothing was re-activated
+
+
+def test_the_ai_rows_radio_returns_to_ai_config_mode(page, window, config) -> None:
     seed_model(config, {"9mm FC": 1}, name="Local")
     page.refresh()
 
-    row_actions(page, AI_CONFIG_SENTINEL_ID).activate_button.click()
+    active_radio(page, AI_CONFIG_SENTINEL_ID).click()
 
     assert fresh_active_id(config) is None
     assert active_names(page) == [AI_CONFIG_NAME]
-    assert drain_until(window, lambda: window.sidebar_buttons["Train"].isHidden())
+    assert drain_until(window, lambda: window.sidebar_buttons["Train"].property("unavailable"))
+
+
+def test_the_radios_stand_down_while_an_archive_is_in_flight(page, config) -> None:
+    model = make_model(config, "Range brass")
+    page.refresh()
+
+    page._set_busy(True)
+    assert not active_radio(page, model.id).isEnabled()
+
+    page._set_busy(False)
+    assert active_radio(page, model.id).isEnabled()
+
+
+# ----- the row's own action buttons -------------------------------------------
+
+
+def test_every_model_row_carries_two_fixed_size_buttons(page, config) -> None:
+    model = make_model(config, "Range brass")
+    page.refresh()
+
+    widget = row_actions(page, model.id)
+    assert [b.text() for b in widget.buttons()] == ["✎", "×"]
+    # Fixed in BOTH dimensions: a glyph or state change must not resize a
+    # button, its column, or the row under it (community_page.py's finding).
+    for button in widget.buttons():
+        assert button.size().toTuple() == (ACTION_BUTTON_WIDTH, ACTION_BUTTON_HEIGHT)
+        assert button.minimumSize() == button.maximumSize()
+    assert [b.toolTip() for b in widget.buttons()] == [TOOLTIP_EDIT, TOOLTIP_DELETE]
+    assert widget.delete_button.objectName() == "danger"
+
+
+def test_the_ai_row_has_no_row_buttons(page) -> None:
+    widget = row_actions(page, AI_CONFIG_SENTINEL_ID)
+
+    assert widget.buttons() == []
+    assert widget.edit_button is None and widget.delete_button is None
+    # It is the active mode on a fresh DB, and its radio is what says so.
+    radio = active_radio(page, AI_CONFIG_SENTINEL_ID)
+    assert radio.isChecked()
+    assert radio.toolTip() == TOOLTIP_ACTIVE_AI
 
 
 def test_the_active_rows_delete_button_is_disabled(page, config, window) -> None:
@@ -658,10 +719,10 @@ def test_a_row_edit_button_opens_the_editor_for_its_own_row(page, config, monkey
     assert page.selected_id() == target.id
 
 
-def test_a_row_button_still_targets_its_own_model_after_a_sort(page, window, config) -> None:
+def test_a_row_control_still_targets_its_own_model_after_a_sort(page, window, config) -> None:
     """``_pin_ai_row`` takes a row out of the tree and puts it back, which
-    destroys its item widget — the buttons must be re-installed, and still
-    bound to the row they sit in, after any header click."""
+    destroys its item widgets — the radio and the buttons must be re-installed,
+    and still bound to the row they sit in, after any header click."""
     zed = make_model(config, "Zed model")
     make_model(config, "Alpha model")
     page.refresh()
@@ -671,10 +732,11 @@ def test_a_row_button_still_targets_its_own_model_after_a_sort(page, window, con
     assert names(page)[0] == AI_CONFIG_NAME  # still pinned
     assert names(page)[1] == "Zed model"
 
-    row_actions(page, zed.id).activate_button.click()
+    active_radio(page, zed.id).click()
 
     assert fresh_active_id(config) == zed.id
     assert active_names(page) == ["Zed model"]
+    assert row_actions(page, zed.id).edit_button is not None
 
 
 def test_the_row_buttons_stand_down_while_an_archive_is_in_flight(page, config) -> None:
@@ -702,9 +764,10 @@ def test_the_actions_column_holds_exactly_its_buttons(page, config) -> None:
 
     widget = row_actions(page, model.id)
     # resizeColumnToContents measures cell text, never item widgets, so the
-    # autosize pass must not be what decides this column's width.
+    # autosize pass must not be what decides either widget column's width.
     assert page.tree.header().sectionSize(ACTIONS_COLUMN) >= widget.sizeHint().width()
-    assert page.tree.header().sectionSize(ACTIONS_COLUMN) >= 3 * ACTION_BUTTON_WIDTH
+    assert page.tree.header().sectionSize(ACTIONS_COLUMN) >= 2 * ACTION_BUTTON_WIDTH
+    assert page.tree.header().sectionSize(ACTIVE_COLUMN) >= active_radio(page, model.id).sizeHint().width()
 
 
 # ----- ownership -------------------------------------------------------------

@@ -539,11 +539,14 @@ class QtMainWindow(QMainWindow):
     def _paint_sidebar_icon(self, name: str) -> None:
         """Ink one sidebar icon for its current state, from the live palette.
 
-        The two colors are the ones theme.py's ``#sidebar QToolButton`` rules
-        put on the label, so icon and text always agree.
+        The three colors are the ones theme.py's ``#sidebar QToolButton``
+        rules put on the label, so icon and text always agree.
         """
         button = self.sidebar_buttons[name]
-        role = "text_highlight" if button.isChecked() else "text_muted"
+        if button.property("unavailable"):
+            role = "text_subtle"
+        else:
+            role = "text_highlight" if button.isChecked() else "text_muted"
         button.setIcon(vector_icon(self._sidebar_icon_names[name], self.palette_colors[role], SIDEBAR_ICON_SIZE))
 
     def _paint_sidebar_icons(self) -> None:
@@ -633,9 +636,20 @@ class QtMainWindow(QMainWindow):
         column.addWidget(self.empty_state_camera_button)
         return panel
 
+    def go_to_activity(self, name: str) -> None:
+        """Navigate as if the sidebar button had been clicked, checked state included.
+
+        What an in-page "take me there" button wants: ``open_activity`` alone
+        switches the page but leaves the sidebar pointing at where the user
+        was.
+        """
+        button = self.sidebar_buttons.get(name)
+        if button is not None:
+            button.setChecked(True)
+        self.open_activity(name)
+
     def _open_settings_section(self, name: str) -> None:
-        self.sidebar_buttons["Settings"].setChecked(True)
-        self.show_page("Settings")
+        self.go_to_activity("Settings")
         items = self.settings_list.findItems(name, Qt.MatchFlag.MatchExactly)
         if items:
             self.settings_list.setCurrentItem(items[0])
@@ -1589,14 +1603,36 @@ class QtMainWindow(QMainWindow):
         return ModelRepo(self.db).get(model_id) if model_id is not None else None
 
     def _apply_mode_visibility(self) -> None:
-        """The mode owns this pair: Train for an owned local model (see
-        models.is_trainable), AI Config for AI Config mode — the same "no
-        active model" test settings_ai gates its own fields on."""
+        """The mode inks Train and shows/hides AI Config.
+
+        **Train is never hidden** (JL: a hidden activity is one nobody finds).
+        When the active model can't be trained here it goes muted instead —
+        still clickable, and the page it opens says why (train_page's
+        unavailable panel). AI Config still appears for AI Config mode, the
+        same "no active model" test settings_ai gates its own fields on; the
+        two now coexist rather than replacing each other.
+        """
         from ..data.models import is_trainable
 
         model = self._active_model()
-        self._set_activity_visible("Train", is_trainable(model))
+        self._set_activity_unavailable("Train", not is_trainable(model))
         self._set_activity_visible(AI_CONFIG_ACTIVITY, model is None)
+
+    def _set_activity_unavailable(self, name: str, unavailable: bool) -> None:
+        """Ink a sidebar button as "leads somewhere, but not usable right now".
+
+        A dynamic property rather than ``setEnabled(False)``: the click has to
+        keep working, since the explainer it opens is the whole point. Qt only
+        re-reads a property-keyed rule on a re-polish, so ask for one.
+        """
+        button = self.sidebar_buttons[name]
+        button.setProperty("unavailable", bool(unavailable))
+        style = button.style()
+        style.unpolish(button)
+        style.polish(button)
+        # The icon is a QIcon, which no stylesheet reaches — same split as
+        # checked/unchecked (see _paint_sidebar_icon).
+        self._paint_sidebar_icon(name)
 
     def _set_activity_visible(self, name: str, visible: bool) -> None:
         button = self.sidebar_buttons[name]

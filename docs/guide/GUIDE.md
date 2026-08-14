@@ -49,15 +49,17 @@ The sidebar switches between the things you do, one button each:
 | Button | What it is |
 |--------|-----------|
 | **Sort** | The [Sort dashboard](#sort-dashboard) — where sorting happens. |
-| **Train** | The [Train](#train) screen. Shown only when the active model is one you own; a model downloaded from the community is maintained by its publisher and can't be trained here. |
-| **AI Config** | Shown *instead of* Train when no local model is active. It takes you to [Settings → AI Config](#ai-config), which is the equivalent step for that mode — teaching the classifier what to look for. |
+| **Train** | The [Train](#train) screen. Always here — when the active model can't be trained on this machine the button is dimmed, and clicking it opens a page explaining why and what to do instead. |
+| **AI Config** | Shown *alongside* a dimmed Train when no local model is active. It takes you to [Settings → AI Config](#ai-config), which is the equivalent step for that mode — teaching the classifier what to look for. |
 | **Models** | The [model library](#models). |
 | **Community** | The [community catalogue](#community). Shown only while signed in. |
 | **Settings** | Pinned at the bottom, separate from the activities above it: everything you configure once and rarely touch again. |
 
-Which of Train and AI Config you see follows the **active model** (see
-[Models](#models)): a model you own shows Train, AI Config mode shows AI
-Config, and a community model shows neither.
+Train and AI Config both follow the **active model** (see [Models](#models)):
+a model you own gives you a live Train button, AI Config mode adds the AI
+Config entry and dims Train, and a community model dims Train too. A dimmed
+button still works — it is the page behind it that explains the state, never
+a dead end.
 
 ### Status bar
 
@@ -291,8 +293,22 @@ exactly as it does offline.
 
 The Train screen is the loop that builds a training set: feed a case,
 capture it, label it, save it — and, when you have enough images, train a
-model from them. It is available for models you own; a community model
-belongs to its publisher and is trained by them.
+model from them.
+
+### When Train isn't available
+
+Train is always in the sidebar, but it needs a local model of *your own* to
+work on. When the active model isn't one, the button is dimmed and the page
+says which of the two cases you are in:
+
+- **AI Config mode** — classification is running over HTTP, so there is no
+  model on this machine to train. Activate or create a local model on the
+  [Models](#models) page.
+- **A community model** — the checkpoint belongs to its publisher and they
+  keep updating it. To build on it, export it from the Models page and
+  import the archive back as your own model.
+
+Either way the page carries a button straight to the model library.
 
 ### Capturing images
 
@@ -356,27 +372,33 @@ The table lists each model's name, whether it is active, its cartridge, type
 training images it has, whether it has been trained, and when. Click a
 column heading to sort by it.
 
+The **Active** column is the control, not just a marker: each row carries a
+radio button, and the filled one is the model the app classifies with.
+Clicking another row's radio activates that model — that is the whole
+activation step. Clicking the one that is already filled does nothing.
+
 Above the table: filters by **cartridge** and **type**, a search box, and
 **New cartridge**, **New model** and **Import…**.
 
 The **"Use AI Config"** row sits at the top of the list, whenever the filters
-and the search box leave it there. Activating it puts the app in AI Config
-mode — classification goes to the HTTP server configured in [Settings → AI
-Config](#ai-config) instead of a local model.
+and the search box leave it there. It has an Active radio like any other row;
+picking it puts the app in AI Config mode — classification goes to the HTTP
+server configured in [Settings → AI Config](#ai-config) instead of a local
+model.
 
 ### Row actions
 
-The three small buttons at the right of every row act on *that* row,
-whatever is selected:
+The two small buttons at the right of every row act on *that* row, whatever
+is selected:
 
 | Button | Action |
 |--------|--------|
-| **✓** | Make this the active model. Greyed out on the row that already is. |
 | **✎** | Edit the model — name, cartridge, model size, primer settings, and the community feedback opt-in where it applies. |
 | **×** | Delete the model and its folder. Greyed out on the active model: activate something else first. |
 
-The "Use AI Config" row has only **✓** — there is no model behind it to edit
-or delete.
+Activating is not among them — that is the Active column's radio, above.
+The "Use AI Config" row has neither button: there is no model behind it to
+edit or delete.
 
 ### Managing a model
 

@@ -31,9 +31,12 @@ from sorter.data.repository import HeadstampRepo, ModelRepo, SettingsRepo
 from sorter.qtui.dialog_training_config import NUMERIC_FIELDS, TrainingConfigDialog
 from sorter.qtui.train_page import (
     CAPTURED_TEXT,
+    FOREIGN_MODEL_TEXT,
     NO_BROKER_TOOLTIP,
     NO_TORCH_TEXT,
     PREDICTED_TEXT,
+    UNAVAILABLE_TITLE_AI,
+    UNAVAILABLE_TITLE_FOREIGN,
 )
 from sorter.training.dataset import parse_label
 
@@ -477,8 +480,14 @@ def test_dragging_the_splitter_widens_the_list_and_the_scrollbar_follows(qapp, w
 
 
 @pytest.fixture
-def shown(qapp, window):
-    """The Train page laid out for real — geometry means nothing before this."""
+def shown(qapp, window, config):
+    """The Train page laid out for real — geometry means nothing before this.
+
+    A trainable model is activated first: without one the page shows the
+    unavailable explainer instead, and every assertion below would be
+    measuring a hidden widget.
+    """
+    activate(config)
     window.show_page("Train")
     # Tall enough that the fixed-size crop plus its Feed row never squeeze:
     # with a too-small budget QVBoxLayout overlaps the fixed widget instead
@@ -678,6 +687,38 @@ def test_ai_config_mode_empties_the_page(page, window, config) -> None:
 
     assert "AI Config" in page.active_label.text()
     assert not page.train_button.isEnabled()
+
+
+def test_ai_config_mode_explains_why_training_is_unavailable(page, window, config) -> None:
+    """The Train button is always in the sidebar now, so a click in AI Config
+    mode has to land somewhere that says why (JL)."""
+    assert not page.is_available()
+    assert page.unavailable_title.text() == UNAVAILABLE_TITLE_AI
+    assert "over HTTP" in page.unavailable_text.text()
+    assert "Models page" in page.unavailable_text.text()
+
+    activate(config, {"9mm FC": 1})
+    window.bus.post("mode/changed", {"active_model_id": 1})
+
+    assert drain_until(window, page.is_available)
+
+
+def test_a_community_model_explains_the_export_import_route(page, window, config) -> None:
+    activate(config, {"9mm FC": 1}, name="Someone else's", model_type="CommunityManaged")
+    page.refresh()
+
+    assert not page.is_available()
+    assert page.unavailable_title.text() == UNAVAILABLE_TITLE_FOREIGN
+    assert page.unavailable_text.text() == FOREIGN_MODEL_TEXT.format(name="Someone else's")
+
+
+def test_the_explainers_button_jumps_to_the_models_page(page, window) -> None:
+    assert not page.is_available()
+
+    page.unavailable_button.click()
+
+    assert window.pages.currentWidget() is window._pages_by_name["Models"]
+    assert window.sidebar_buttons["Models"].isChecked()
 
 
 def test_mode_changed_refreshes_the_active_model(page, window, config) -> None:
