@@ -15,11 +15,18 @@ help maps to them; `tests/unit/ui/test_help.py` pins the anchors), and
 they were the direct cause of a full retroactive documentation sweep on
 2026-08-14, and the guide misdirecting an operator is a user-facing defect.
 
+**The published site is user-facing only.** `mkdocs.yml`'s nav is the whole
+of it — home, `install.md`, `getting-started.md`, `guide/GUIDE.md`,
+`troubleshooting.md` — and `mkdocs-pdf.yml` renders the same pages as one PDF
+per release. Contributor documents stay in `docs/` and go in `exclude_docs`
+(`ui-modernization.md` is the only one so far); a decision record reaching an
+operator as a chapter of the manual is what that list exists to stop.
+
 ---
 
 ## 1. What this project is
 
-The **AI Case Sorter** is a cross-platform (Windows + Linux/Ubuntu) desktop
+The **AI Case Sorter** is a cross-platform (Windows + Linux/Ubuntu + macOS) desktop
 application that drives a physical machine which sorts spent brass cartridge
 casings by **headstamp** (the stamp on the base of the case). A camera
 photographs each case, an image classifier predicts the headstamp, and a
@@ -306,6 +313,10 @@ between them from the Sort page's template dropdown.
   (feed one), `xf:<slot>` (force feed + sort), bare `<slot>` (sort imaged case),
   `sortto:<slot>` (move arm), `getconfig` (JSON board state), `version`, `stop`,
   `<key>:<value>` (set board param). `try_open()` does a version handshake.
+  `is_probe_candidate` gates the startup auto-connect walk on macOS only:
+  Bluetooth/debug pseudo-ports are skipped (probing one wastes a handshake
+  timeout and can wake a paired headset); Settings → Serial still lists
+  everything, and a saved port is always probed.
   Responses are matched as **anchored tokens** — the line, stripped and
   lowercased, equals `ok`/`done`/`error`/`waiting` or begins with it followed
   by a non-alphanumeric delimiter — so `error: broken sensor` routes as the
@@ -330,8 +341,8 @@ between them from the Sort page's template dropdown.
   and testing without hardware.
 - **`camera.py`** — `Camera`: `cv2.VideoCapture` with a background **grab thread**
   keeping the latest frame; platform backends (CAP_DSHOW on Windows w/ optional
-  pygrabber for friendly names + resolution probing, CAP_V4L2 on Linux, MJPG for
-  ≥1080p). `list_cameras_with_metadata` enumerates for Settings → Camera.
+  pygrabber for friendly names + resolution probing, CAP_V4L2 on Linux,
+  CAP_AVFOUNDATION on macOS, MJPG for ≥1080p). `list_cameras_with_metadata` enumerates for Settings → Camera.
   Enumeration is deliberately noisy about what it *rejects*: only real V4L2
   capture nodes are probed (a UVC camera also exposes a metadata node, which
   OpenCV can only fail to open, loudly), and a device that overruns
@@ -364,7 +375,10 @@ between them from the Sort page's template dropdown.
   expose the decision alone, so the UI can ask "does this need PyTorch?" and
   "can this model actually classify?" before starting a run — keep them in
   lock-step with `classify_active` or the install gate (§5) drifts from reality.
-- **`local_inference.py`** — lazy-imports torch; picks the device once; caches
+- **`local_inference.py`** — lazy-imports torch; picks the device once
+  (CUDA → MPS on Apple Silicon → CPU, each GPU probed before commit;
+  `device_description()` is the status bar's read-only view of the pick —
+  it never imports torch, so it is UI-thread-safe like `is_installed()`); caches
   loaded models by `(path, mtime)`; runs all inference through a single-threaded
   executor to keep cuDNN state warm. Detects the checkpoint's classifier layout
   and rebuilds the ConvNeXt head. Loads checkpoints with
@@ -505,15 +519,20 @@ called `sorter/qtui/` until 2026-08-14, beside a Tkinter one that held the
 `docs/ui-modernization.md` is the decision record for the port, the
 retirement and the rename.
 
-`QtMainWindow` (`app.py`) is the shell: an **activity sidebar** in two groups —
-the always-live surfaces (`ACTIVITIES`: Sort, Models, Community), a hairline
-(`sidebar_separator`, objectName `sidebarSeparator`, coloured from the
-palette's `border` role by `ui/theme.py` alone, so a theme switch needs no
-hook), then the mode pair (`MODE_ACTIVITIES`: Train, AI Config); Settings
-stays pinned below the stretch — driving a `QStackedWidget` of pages, plus
+`QtMainWindow` (`app.py`) is the shell: an **activity sidebar** in three
+groups — the always-live surfaces (`ACTIVITIES`: Sort, Models, Community), the
+mode pair (`MODE_ACTIVITIES`: Train, AI Config), then Settings — split by two
+hairlines (`sidebar_separator` and `sidebar_settings_separator`, both
+objectName `sidebarSeparator`, coloured from the palette's `border` role by
+`ui/theme.py` alone, so a theme switch needs no hook). **Every entry is in the
+flow, with the stretch last**: Settings used to be pinned below the stretch
+and went off-screen on a short window — driving a `QStackedWidget` of pages, plus
 four **docks** — serial monitor (bottom), classification history, the user
 guide and the theme picker (right, all three closed until asked for) — a
-status bar (camera/serial indicators, update affordance, identity + sign-in)
+status bar (camera/serial indicators, an inference-device indicator —
+`refresh_device_indicator`, fed by `local_inference.device_description()`,
+warmed off-thread at startup by `_warm_device_indicator` and hidden in AI
+Config mode — update affordance, identity + sign-in)
 and File/View/Help menus. It owns the `EventBus`, `Camera`, `SerialBroker`,
 `RunController` and `AuthManager`, auto-connects serial/camera on startup, and
 runs the bus drain loop. `run_worker(fn, on_done, on_error)` is the standard
@@ -1080,7 +1099,9 @@ flowchart TD
   (the API returns 404 for both). If the repo must stay private, distribution
   has to move off GitHub — see `installer/README.md`.
 - **CI** (`.github/workflows/build.yml`) runs `pytest` across a
-  [3.12, 3.13, 3.14] × [Linux, Windows] matrix on every push and PR, plus a
+  [3.12, 3.13, 3.14] × [Linux, Windows, macOS] matrix on every push and PR
+  (the macOS leg runs on Apple Silicon and covers the CPU inference path,
+  not MPS — Actions offers no GPU-backed MPS guarantee), plus a
   `launcher-smoke` job that actually runs `start.sh`/`start.bat` end to end.
   Still run `pytest` locally before pushing — faster feedback than waiting on
   CI. **There is no Xvfb anywhere:** every leg sets
