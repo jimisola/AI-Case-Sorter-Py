@@ -158,10 +158,15 @@ the oldest tile in place, and a coloured border trails the most recent few
 so you can see where "now" is. That is deliberate — it means you can watch
 one position and see cases go past, instead of chasing a scrolling list.
 
-**Zoom** (at the bottom of the panel, 50–200%) sets the tile size. Bigger
-tiles are easier to read across a bench; smaller tiles mean more of them fit,
-since the panel holds however many tiles fit its area. Click any tile to
-open that case's image full size.
+The panel holds **however many tiles fit it**, and it recounts whenever its
+size changes: widen the window or drag the panel wider and there are more
+columns; narrow it and the tiles that no longer fit are dropped, oldest
+first. Nothing is ever hidden behind a scrollbar — what you can see is all
+of it, which is what makes watching one position work.
+
+**Zoom** (at the bottom of the panel, 50–200%) sets the tile size, and feeds
+the same count: bigger tiles are easier to read across a bench, smaller tiles
+mean more of them fit. Click any tile to open that case's image full size.
 
 ### Themes panel
 

@@ -7,7 +7,14 @@ images must never scroll or shift position, or the operator can't track a
 case by where it sits.
 New records overwrite the oldest cell in place; capacity is however many
 tiles fit the space the host gives the widget, reflowing on resize (wider
-window → more columns). The recency trail uses the same neutral (hue-free)
+window → more columns) and dropping what no longer fits. **Nothing here
+scrolls** — that is the whole design, and it takes two things the panel
+cannot arrange on its own: its dock is built with QtAds' scroll area turned
+off (``app._build_dock(..., scroll_area=False)``), or the widget is handed
+its preferred size and never learns the panel shrank; and the tile grid runs
+with ``SetNoConstraint`` so fixed-size tiles don't publish the whole grid as
+this panel's minimum width. Both were missing, and a narrowed window got
+scrollbars over a stale layout instead of a reflow (issue #101). The recency trail uses the same neutral (hue-free)
 palette roles the rest of the chrome uses for focus/selection — see
 CLAUDE.md's "Hue is meaning" note.
 
@@ -43,7 +50,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QFont, QImage, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
@@ -52,6 +59,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QSlider,
     QVBoxLayout,
     QWidget,
@@ -302,6 +310,9 @@ class HistoryView(QWidget):
         self._capacity = 0
         self._cols = 1
         self._rows = 1
+        # False until the grid area has been given room for at least one tile;
+        # see `_recompute_capacity` for what it gates.
+        self._sized = False
         # Swappable like ImagePreviewDialog's notify/confirm: a test replaces
         # this to observe a click without a modal ever opening.
         self.open_preview: Any = self._open_preview_dialog
@@ -329,6 +340,14 @@ class HistoryView(QWidget):
         self._grid = QGridLayout(self.grid_area)
         self._grid.setContentsMargins(GUTTER, GUTTER, GUTTER, GUTTER)
         self._grid.setSpacing(GUTTER)
+        # The tiles are fixed-size, so by default the grid would publish the
+        # whole grid as this panel's minimum and the dock could never be made
+        # smaller than the widest layout it had ever held. Capacity is derived
+        # from the space we are *given*, so the grid must not be the thing that
+        # decides how much space that is (issue #101).
+        self._grid.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        self.grid_area.setMinimumSize(1, 1)
+        self.grid_area.installEventFilter(self)
         # Pin tiles to the top-left so partial fills look like the Windows
         # monitor, not a centered cloud.
         self._grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
@@ -371,14 +390,35 @@ class HistoryView(QWidget):
         super().resizeEvent(event)
         self._recompute_capacity()
 
+    def eventFilter(self, watched: Any, event: Any) -> bool:
+        """Recompute when the *grid area* is resized, not when this view is.
+
+        Capacity is read off ``grid_area``, whose size the outer layout sets
+        some time after this view's own ``resizeEvent`` — early enough in a
+        drag-resize, too late when a closed dock is opened at its final size.
+        Watching the widget we actually measure removes the ordering question
+        (issue #101).
+        """
+        if watched is self.grid_area and event.type() == QEvent.Type.Resize:
+            self._recompute_capacity()
+        return super().eventFilter(watched, event)
+
     def _recompute_capacity(self) -> None:
         width = self.grid_area.width()
         height = self.grid_area.height()
-        if width < self._tile_w + GUTTER or height < self._tile_h + GUTTER:
+        if width >= self._tile_w + GUTTER and height >= self._tile_h + GUTTER:
+            # Room for at least one tile is what proves the layout has run.
+            self._sized = True
+        if not self._sized:
             # Not laid out yet (hidden dock, unshown test widget): keep a
             # usable buffer instead of collapsing to one cell.
             cols, rows = FALLBACK_COLS, FALLBACK_ROWS
         else:
+            # Once a real size has been seen, every later one is answered
+            # honestly — a panel narrowed past a single tile gets one clipped
+            # column, not the fallback grid. Falling back *here* is what let a
+            # 40-tile layout sit in a panel that had just said it has room for
+            # none, which is the shape the scrollbars grew out of (issue #101).
             cols = max(1, width // (self._tile_w + GUTTER))
             rows = max(1, height // (self._tile_h + GUTTER))
         capacity = cols * rows

@@ -456,3 +456,79 @@ def test_manual_feed_cycle_lands_in_the_history_view(window, config, monkeypatch
     assert drain_until(window, lambda: len(view._entries) == 1)
     assert view._entries[0].label_label.text() == "9mm FC"
     assert view._entries[0].slot_label.text() == "Slot 2"
+
+
+# ----- the panel as the user meets it: docked, and resized (issue #101) --------
+
+
+def _reveal_history(qapp, window) -> Any:
+    """Open the real dock and let the layout settle. Returns the live view.
+
+    ``show()`` is what makes the dock geometry real — an unshown window never
+    resizes its panels, and the panel's whole job here is to answer the size
+    it is given.
+    """
+    window.show()
+    window.reveal_dock(window.history_dock)
+    qapp.processEvents()
+    return window.history_view
+
+
+def test_the_docked_panel_never_scrolls(qapp, window) -> None:
+    """QtAds wraps a panel's widget in a QScrollArea by default, which hands
+    the widget its preferred size and scrolls the difference — so it is never
+    told the panel shrank, and the tiles it can't show grow scrollbars instead
+    of reflowing."""
+    from PySide6.QtWidgets import QScrollArea
+
+    _reveal_history(qapp, window)
+
+    ancestor = window.history_view.parentWidget()
+    while ancestor is not None:
+        assert not isinstance(ancestor, QScrollArea), "the history panel is inside a scroll area again"
+        ancestor = ancestor.parentWidget()
+
+
+def test_narrowing_the_window_reflows_the_docked_panel(qapp, window) -> None:
+    window.resize(1400, 900)
+    view = _reveal_history(qapp, window)
+    for index in range(40):
+        push(window, view, f"9mm {index}", 90.0)
+    qapp.processEvents()
+    before = view._capacity
+    assert before > 1, "the panel started with room for more than one tile"
+
+    window.resize(700, 480)
+    qapp.processEvents()
+
+    assert view._capacity < before, "capacity did not follow the window down"
+    assert len(view._entries) == view._capacity
+    # Newest survive, as on any other shrink.
+    assert view._entries[0].label_label.text() == "9mm 39"
+
+
+def test_the_tile_grid_does_not_set_the_panels_minimum_width(qapp, window) -> None:
+    """Fixed-size tiles would otherwise publish the whole grid as a minimum,
+    and the dock could never be narrowed past the widest layout it had held."""
+    window.resize(1400, 900)
+    view = _reveal_history(qapp, window)
+    for index in range(20):
+        push(window, view, f"9mm {index}", 90.0)
+    qapp.processEvents()
+
+    # The chrome (zoom bar) sets the floor; the grid must not push it past a
+    # single tile's column however many tiles are laid out.
+    assert view.minimumSizeHint().width() < 2 * (TILE_W + GUTTER)
+
+
+def test_a_panel_narrower_than_one_tile_keeps_a_single_column(qapp, window) -> None:
+    """The fallback grid is for "not laid out yet", not for "very small"."""
+    view = _reveal_history(qapp, window)
+    push(window, view, "9mm", 90.0)
+    qapp.processEvents()
+
+    view.grid_area.resize(40, 300)
+    qapp.processEvents()
+
+    assert view._cols == 1
+    assert view._capacity < FALLBACK_COLS * FALLBACK_ROWS

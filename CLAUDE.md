@@ -621,6 +621,13 @@ Themes panel in `app.py`. Dialogs are `dialog_*.py`.
   manager's own XML (`ui.window_state`). QtAds obviates the
   `QMainWindowLayout` workarounds this UI used to carry — don't reintroduce
   repaint/collapse/resize-nudge handling for docks.
+  A fourth difference, and the one that bites content which lays *itself*
+  out: **`setWidget` wraps the widget in a `QScrollArea` by default**
+  (`AutoScrollArea`), so the widget is handed its own preferred size and the
+  panel scrolls the difference — it never learns the panel got smaller.
+  `_build_dock(..., scroll_area=False)` turns that off, which is what the
+  classification history needs (#101) and what any future size-driven panel
+  will need too.
 - **One module per surface.** Activity pages, Settings sections and dialogs
   each own their widgets and expose a `build_*(win)` factory taking the
   window; `app.py` only wires them together. Settings sections are listed in
