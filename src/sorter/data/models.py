@@ -204,6 +204,48 @@ class ImageProcessingConfig:
 
 
 @dataclass
+class CheckpointEnv:
+    """The library versions a model's checkpoint was built with (issue #77).
+
+    PyTorch guarantees that a *newer* torch reads an *older* checkpoint, never
+    the reverse — so what a model imposes on a machine is a **floor**, not a
+    match, and this is the only place that floor is written down. Empty
+    strings mean "not recorded": every checkpoint trained before this shipped,
+    and everything the wider ecosystem produces.
+
+    Recorded at training time and carried through the export manifest, so the
+    floor survives a ZIP round trip and can be read without unpickling a
+    checkpoint — which would need the very torch that may be too old.
+    """
+
+    torch: str = ""
+    torchvision: str = ""
+    numpy: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> CheckpointEnv:
+        """Read either spelling.
+
+        A checkpoint payload spells these `torch_version` etc. — flat keys
+        beside `classes` and `image_size` — while our own JSON nests them under
+        their bare names. Both arrive here.
+        """
+        if not data:
+            return cls()
+
+        def _pick(name: str) -> str:
+            return str(data.get(name) or data.get(f"{name}_version") or "")
+
+        return cls(torch=_pick("torch"), torchvision=_pick("torchvision"), numpy=_pick("numpy"))
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def is_empty(self) -> bool:
+        return not (self.torch or self.torchvision or self.numpy)
+
+
+@dataclass
 class AIModelConfig:
     """OpenAI-compatible HTTP endpoint settings, persisted per-model."""
 
@@ -352,6 +394,7 @@ class Model:
     feedback_loop_confidence_floor: int = 95
     feedback_loop_upload_mode: str = "Manual"
     model_path: str | None = None
+    checkpoint_env: CheckpointEnv = field(default_factory=CheckpointEnv)
 
     @classmethod
     def from_row(cls, row: Any) -> Model:
@@ -363,6 +406,18 @@ class Model:
             try:
                 return json.loads(s)
             except (TypeError, ValueError):
+                return None
+
+        def _optional(name: str) -> str | None:
+            """A column that may predate the caller's schema.
+
+            A `sqlite3.Row` raises IndexError for a column it doesn't carry,
+            and a row can reach here from a query written before a migration
+            added one.
+            """
+            try:
+                return row[name]
+            except (IndexError, KeyError):
                 return None
 
         return cls(
@@ -391,6 +446,9 @@ class Model:
                 feedback_enabled=bool(row["feedback_loop_enabled"]),
             ),
             model_path=row["model_path"],
+            # Added by migration 0006, so a row read through an older shape
+            # simply has none — the same "not recorded" the dataclass means.
+            checkpoint_env=CheckpointEnv.from_dict(_parse(_optional("checkpoint_env_json"))),
         )
 
 

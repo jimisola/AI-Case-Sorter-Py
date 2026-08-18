@@ -82,6 +82,82 @@ class LocalInferenceError(Exception):
     pass
 
 
+# Three unrelated failures with one cause — the checkpoint was built with a
+# newer stack than this machine has — and three unrecognisable tracebacks
+# (issue #77):
+#
+#   1. torch reads an older checkpoint, never a newer one. The reverse is
+#      not supported and never has been, so what a model imposes is a floor.
+#   2. numpy 2.0 renamed `numpy.core` to `numpy._core`. Any numpy object
+#      pickled under numpy >= 2 raises ModuleNotFoundError under 1.x, and
+#      `weights_only=True` does not save you: torch's allowlist *permits*
+#      numpy arrays, so such a checkpoint unpickles far enough to hit it.
+#   3. torchvision renames state_dict keys between releases, and `_load`
+#      uses strict=True deliberately (see there), so drift is a hard failure.
+#
+# None of the three messages names PyTorch. `_incompatibility_message` is
+# where that gets said instead, from the provenance the checkpoint carries
+# when it has any and from the shape of the failure when it doesn't.
+_NUMPY_RENAME_MARKERS = ("numpy._core", "numpy.core")
+
+
+def checkpoint_env(ckpt: Any) -> dict[str, str]:
+    """The versions a loaded checkpoint payload records, empty when it has none.
+
+    Only checkpoints this app trained after #77 carry these. Everything older,
+    and everything from the wider ecosystem, returns `{}` — which is why
+    `_incompatibility_message` has an inference path at all.
+    """
+    if not isinstance(ckpt, dict):
+        return {}
+    found = {}
+    for key in ("torch_version", "torchvision_version", "numpy_version"):
+        value = ckpt.get(key)
+        if isinstance(value, str) and value:
+            found[key] = value
+    return found
+
+
+def _describe_env(env: dict[str, str]) -> str:
+    parts = [f"PyTorch {env['torch_version']}"] if env.get("torch_version") else []
+    extra = [
+        f"torchvision {env[key]}" if key == "torchvision_version" else f"numpy {env[key]}"
+        for key in ("torchvision_version", "numpy_version")
+        if env.get(key)
+    ]
+    if extra:
+        parts.append(f"({', '.join(extra)})")
+    return " ".join(parts)
+
+
+def _incompatibility_message(model_path: str, exc: BaseException, env: dict[str, str], have: str) -> str:
+    """Say what actually went wrong, with an action, instead of a traceback.
+
+    `env` is the checkpoint's recorded provenance — empty for every model in
+    circulation before #77, which is the case this has to handle well rather
+    than merely survive. With no version to quote, the failure's own shape is
+    still enough to say which way the incompatibility runs.
+    """
+    name = Path(model_path).name
+    text = str(exc)
+    if any(marker in text for marker in _NUMPY_RENAME_MARKERS):
+        cause = (
+            f"“{name}” was saved with numpy 2 or newer, which renamed the module this "
+            "machine's numpy 1.x is looking for."
+        )
+        action = "Update PyTorch and numpy (they are installed together) and try again."
+    elif env.get("torch_version"):
+        cause = f"“{name}” was built with {_describe_env(env)}; this machine has PyTorch {have}."
+        action = "Update PyTorch to load it."
+    else:
+        cause = (
+            f"“{name}” could not be loaded by PyTorch {have}. It records no version of its own, "
+            "and this failure is what a checkpoint built with a newer PyTorch looks like."
+        )
+        action = "Updating PyTorch is the thing to try; if it persists, the file may be damaged."
+    return f"{cause}\n\n{action}\n\nUnderlying error: {text}"
+
+
 def _torch():
     """Lazy importer. Raises LocalInferenceError with a friendly message if missing."""
     global _torch_mod, _models_mod, _F_mod, _env_dumped
@@ -357,7 +433,16 @@ def _load(model_path: str) -> _LoadedModel:
         # fails closed (refuses to load) rather than running code; allowlist the
         # specific safe type with torch.serialization.add_safe_globals(...) only
         # if a real file needs it.
-        ckpt = torch.load(str(path), map_location="cpu", weights_only=True)
+        have = str(getattr(torch, "__version__", "an unknown version"))
+        try:
+            ckpt = torch.load(str(path), map_location="cpu", weights_only=True)
+        except LocalInferenceError:
+            raise
+        except Exception as exc:
+            # Nothing has been read, so there is no recorded provenance to
+            # quote — the message is inferred from the failure alone.
+            raise LocalInferenceError(_incompatibility_message(model_path, exc, {}, have)) from exc
+        env = checkpoint_env(ckpt)
         classes = list(ckpt.get("classes") or [])
         base = ckpt.get("base") or "convnext_tiny"
         if not classes:
@@ -378,8 +463,13 @@ def _load(model_path: str) -> _LoadedModel:
         )
         # strict=True so a head/backbone mismatch raises here instead of
         # silently leaving random head weights (which produces garbage
-        # predictions at confident-looking probabilities).
-        net.load_state_dict(cleaned, strict=True)
+        # predictions at confident-looking probabilities). A key renamed
+        # between torchvision releases lands here too, which is why the
+        # failure is translated rather than raised as it comes.
+        try:
+            net.load_state_dict(cleaned, strict=True)
+        except Exception as exc:
+            raise LocalInferenceError(_incompatibility_message(model_path, exc, env, have)) from exc
         net.to(device).eval()
 
         # The trainer (both ours and the legacy app's) writes the image size it

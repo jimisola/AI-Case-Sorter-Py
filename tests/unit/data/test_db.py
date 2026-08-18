@@ -30,7 +30,10 @@ MIGRATION_NAMES = [
     "0003_headstamp_parents_slot",
     "0004_slot_templates",
     "0005_models_columns",
+    "0006_models_checkpoint_env",
 ]
+# The steps that widen `models` through the same idempotent helper.
+MODEL_COLUMN_MIGRATIONS = ("0005_models_columns", "0006_models_checkpoint_env")
 MIGRATION_SET = "casesorter"
 
 
@@ -297,21 +300,26 @@ def test_the_tracking_table_not_the_stamp_decides_what_runs(tmp_path: Path) -> N
             "CREATE TABLE _sqlite_migrations (id INTEGER PRIMARY KEY, migration_set TEXT, name TEXT, applied_at TEXT)"
         )
         fixture.execute("CREATE UNIQUE INDEX idx_sqlite_migrations ON _sqlite_migrations(migration_set, name)")
-        fixture.execute(
-            "INSERT INTO _sqlite_migrations (migration_set, name, applied_at) VALUES (?, ?, 'earlier')",
-            (MIGRATION_SET, MIGRATION_NAMES[-1]),
-        )
+        # Both `models`-column steps, not just the last one: they share the
+        # same idempotent helper, so leaving either unrecorded would widen the
+        # table and tell us nothing about who decided to.
+        for name in MODEL_COLUMN_MIGRATIONS:
+            fixture.execute(
+                "INSERT INTO _sqlite_migrations (migration_set, name, applied_at) VALUES (?, ?, 'earlier')",
+                (MIGRATION_SET, name),
+            )
     fixture.close()
 
     db = Database(db_path)
     db.ensure_initialized()
 
-    # The recorded models step was skipped, so the table kept its legacy shape...
+    # The recorded models steps were skipped, so the table kept its legacy shape...
     assert columns(db.conn, "models") == LEGACY_MODEL_COLUMNS
-    # ...while every unrecorded step still ran (the pre-recorded row keeps its
-    # earlier rowid, so it lists first).
+    # ...while every unrecorded step still ran (the pre-recorded rows keep their
+    # earlier rowids, so they list first).
     assert "parent_id" in columns(db.conn, "headstamps")
-    assert [name for name, _ in _applied_migrations(db)] == [MIGRATION_NAMES[-1], *MIGRATION_NAMES[:-1]]
+    remaining = [name for name in MIGRATION_NAMES if name not in MODEL_COLUMN_MIGRATIONS]
+    assert [name for name, _ in _applied_migrations(db)] == [*MODEL_COLUMN_MIGRATIONS, *remaining]
 
 
 def test_a_fresh_db_records_every_step_and_stamps_current(tmp_path: Path) -> None:

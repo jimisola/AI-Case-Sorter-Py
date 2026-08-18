@@ -84,9 +84,48 @@ def checkpoint_problem(db: Database | None) -> str | None:
     checkpoint that disappears mid-run.
     """
     model = active_model(db)
-    if model is None or has_local_checkpoint(model):
+    if model is None:
         return None
-    return _checkpoint_detail(model)
+    if not has_local_checkpoint(model):
+        return _checkpoint_detail(model)
+    return torch_floor_problem(model)
+
+
+def torch_floor_problem(model: Model | None) -> str | None:
+    """Why the installed PyTorch can't load `model`, if it can't (issue #77).
+
+    A checkpoint is readable by its own torch or a newer one, never an older
+    one, so a model that records what it was built with imposes a floor. This
+    is the pre-flight form of that: it answers before a case is fed, from the
+    model row alone, where `local_inference._load` can only answer after the
+    file has already failed to open.
+
+    Silent — returns None — whenever it cannot be sure: no recorded floor
+    (everything trained before #77), no torch installed (the install gate owns
+    that), or a version either side that won't parse. A missing answer here
+    costs a clearer message; a wrong one costs a run that was fine.
+    """
+    required = model.checkpoint_env.torch if model is not None else ""
+    if not required:
+        return None
+    have = local_inference.installed_version()
+    if have is None:
+        return None
+    from packaging.version import InvalidVersion, Version
+
+    try:
+        if Version(have) >= Version(required):
+            return None
+    except InvalidVersion:
+        return None
+    name = (model.name if model is not None else "") or "This model"
+    return (
+        f"“{name}” was trained with PyTorch {required}, and this machine has {have}.\n\n"
+        "PyTorch reads a checkpoint written by its own version or an older one, never a "
+        "newer one, so this model cannot be loaded until PyTorch is updated.\n\n"
+        "Update it from the PyTorch prompt the app shows when a local model needs it, or "
+        "switch to a different model on the Models page."
+    )
 
 
 def _checkpoint_summary(model: Model) -> str:

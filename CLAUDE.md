@@ -214,7 +214,7 @@ sanctioned way for worker threads to update the UI.
   transactions / SAVEPOINTs). Schema: idempotent DDL plus ordered migration
   steps run through `sqlite_utils.Migrations` (`MIGRATIONS`), whose
   `_sqlite_migrations` tracking table is what decides run-once — `PRAGMA
-  user_version` (`SCHEMA_VERSION = 5`) is stamped informationally, never
+  user_version` (`SCHEMA_VERSION = 6`) is stamped informationally, never
   downgraded. A legacy DB has no tracking table, so every step runs on first
   open whatever the stamp claims; **every step is therefore presence-guarded
   and idempotent** (that same property repairs databases stamped current by a
@@ -364,6 +364,13 @@ between them from the Sort page's template dropdown.
   expose the decision alone, so the UI can ask "does this need PyTorch?" and
   "can this model actually classify?" before starting a run — keep them in
   lock-step with `classify_active` or the install gate (§5) drifts from reality.
+  `checkpoint_problem` also asks `torch_floor_problem`: a model records the
+  torch it was built with (`Model.checkpoint_env`, #77), and torch reads an
+  older checkpoint but never a newer one, so that is a **floor** the machine
+  has to meet. It is deliberately silent whenever it can't be sure — no
+  recorded floor, no torch installed, an unparseable version — because a
+  missing answer costs a clearer message while a wrong one costs a run that
+  was fine.
 - **`local_inference.py`** — lazy-imports torch; picks the device once; caches
   loaded models by `(path, mtime)`; runs all inference through a single-threaded
   executor to keep cuDNN state warm. Detects the checkpoint's classifier layout
@@ -374,6 +381,13 @@ between them from the Sort page's template dropdown.
   UI thread) and is what the install gate uses; `is_available()` actually
   imports torch and on first call runs the device probe + benchmark dump, which
   would freeze the UI if called from a button handler.
+  A load that fails is **translated, not re-raised** (#77): three unrelated
+  tracebacks — an unpickling error, `ModuleNotFoundError: numpy._core`, and
+  `Missing key(s) in state_dict` — all mean "built with a newer stack than this
+  machine has", and none of them says so. `_incompatibility_message` names both
+  versions from the checkpoint's own provenance, and infers the direction from
+  the failure's shape when there is none, which is every model that predates
+  #77 and everything from the wider ecosystem.
 - **`api_client.py`** — stateless HTTP client (`classify`, `get_headstamps`)
   against an OpenAI-compatible server. JPEG-encodes the frame to a base64 data
   URL, renders the `{{headstamps}}` prompt placeholder, parses `choices[0]...`
@@ -393,8 +407,16 @@ between them from the Sort page's template dropdown.
   `convnext_{tiny,small,base,large}` via torchvision pretrained weights; AdamW +
   cosine LR, optional focal loss, label smoothing, stochastic depth, SWA, mixed
   precision. Saves a dict checkpoint: `{model_state_dict, classes, base,
-  image_size, ...}` via `torch.save`. Module-level dataset classes so Windows
-  `spawn` DataLoader workers can pickle them.
+  image_size, torch_version, torchvision_version, numpy_version, ...}` via
+  `torch.save`. Module-level dataset classes so Windows `spawn` DataLoader
+  workers can pickle them.
+  **The payload stays tensors and Python primitives** — `checkpoint_env()` is
+  three strings for exactly that reason. A numpy object among them survives
+  `weights_only=True` (torch's allowlist permits arrays) and then raises
+  `ModuleNotFoundError: numpy._core` on any reader running numpy 1.x, so the
+  invariant is pinned twice: `tests/unit/ml/test_checkpoint_env.py` reads the
+  trainer's source (the only thing possible where torch is absent by design)
+  and `tests/integration/test_checkpoint_payload.py` does a real round trip.
 - **`training/dataset.py`** — filename convention helpers. Training images are
   `{label}__{ticks}.jpg` where `ticks` is the **.NET `DateTime.Ticks`** value
   (for interop with the legacy Windows app). `save_training_image`,
@@ -428,6 +450,11 @@ between them from the Sort page's template dropdown.
   tells a caller which path an archive will take; `update_existing=False`
   forces a separate copy. `community_download=True` marks the install as the
   publisher's, and an update never downgrades that (§5, *Model ownership*).
+  The manifest also carries `checkpoint_env` — the torch/torchvision/numpy the
+  model was built with (#77) — so the floor survives the round trip without
+  unpickling the `.pth`, which would need the very torch that may be too old.
+  An archive recording none doesn't erase an installed copy's, the same rule
+  `model_path` follows.
 
 ### Self-update (`sorter/update/`; see §7 for the full flow)
 - **`updater.py`** — GitHub Releases check, version comparison, and download →

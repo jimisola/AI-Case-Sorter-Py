@@ -9,7 +9,7 @@ Progress markers are emitted as JSON-line tokens on stdout for the
 
     [PROGRESS] {"event": "start", "epochs": 15, "classes": 7, "images": 320}
     [PROGRESS] {"event": "epoch", "epoch": 1, "train_loss": 0.42, "train_acc": 0.87, ...}
-    [PROGRESS] {"event": "done", "best_val_acc": 0.94}
+    [PROGRESS] {"event": "done", "best_val_acc": 0.94, "env": {"torch": "2.13.0", ...}}
 
 Run as a subprocess via `manager.spawn(...)`. Can also be invoked directly:
 
@@ -58,6 +58,26 @@ def _emit(event: str, **payload: Any) -> None:
     payload["event"] = event
     sys.stdout.write("[PROGRESS] " + json.dumps(payload, separators=(",", ":")) + "\n")
     sys.stdout.flush()
+
+
+def checkpoint_env() -> dict[str, str]:
+    """The versions this checkpoint is being built with (issue #77).
+
+    Torch reads an older checkpoint, never a newer one, so these are the floor
+    a machine has to meet to load what this run produces. Three plain strings:
+    the payload has to stay tensors and Python primitives, or `weights_only=True`
+    — the setting that makes an untrusted checkpoint safe to open — refuses to
+    read what we wrote. `numpy` is here because numpy 2 renamed `numpy.core` to
+    `numpy._core`, which no `weights_only` setting rescues an older reader from.
+    """
+    import numpy
+    import torchvision  # ty: ignore[unresolved-import]
+
+    return {
+        "torch_version": str(torch.__version__),
+        "torchvision_version": str(torchvision.__version__),
+        "numpy_version": str(numpy.__version__),
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -390,6 +410,10 @@ def main() -> int:
             # Record the resize target so inference uses the same scale
             # the model was trained at (default 232; user can override).
             "image_size": int(args.imgsize),
+            # What this checkpoint needs to load, in the only place that
+            # knows it (issue #77). Plain strings, so `weights_only=True`
+            # still reads them — see `checkpoint_env()`.
+            **checkpoint_env(),
         }
         # val_acc and val_loss are always assigned together from the same
         # `_run_epoch(...)` call above (both stay None when there's no
@@ -435,11 +459,20 @@ def main() -> int:
                 "classes": dataset.classes,
                 "base": args.model_name,
                 "image_size": int(args.imgsize),
+                **checkpoint_env(),
             },
             swa_path,
         )
 
-    _emit("done", best_val_acc=best_acc if best_acc >= 0 else None, best_val_loss=best_loss)
+    # The env travels on the completion marker as well as inside the file: the
+    # app stores it on the model row, and reading it back out of the checkpoint
+    # would need the very torch that may be too old.
+    _emit(
+        "done",
+        best_val_acc=best_acc if best_acc >= 0 else None,
+        best_val_loss=best_loss,
+        env=checkpoint_env(),
+    )
     return 0
 
 

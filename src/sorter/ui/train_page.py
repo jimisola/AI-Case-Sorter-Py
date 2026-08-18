@@ -70,7 +70,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import paths
-from ..data.models import Model, is_trainable
+from ..data.models import CheckpointEnv, Model, is_trainable
 from ..data.repository import HeadstampRepo, ModelRepo, SettingsRepo
 from ..hardware import image_proc
 from ..ml import classifier, local_inference
@@ -763,6 +763,12 @@ class TrainPage(QWidget):
         if model is not None and Path(output).exists():
             model.model_path = output
             model.last_training_date = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
+            # What the run was built with, straight off the completion marker.
+            # Recorded here rather than read back out of the checkpoint, which
+            # would need the very torch a stale machine may not have (#77).
+            env = payload.get("env")
+            if isinstance(env, dict):
+                model.checkpoint_env = CheckpointEnv.from_dict(env)
             self.models.update(model)
         self.refresh()
 

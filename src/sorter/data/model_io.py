@@ -40,6 +40,7 @@ from .. import paths
 from .models import (
     SUPPORTED_MODEL_MODES,
     AIModelConfig,
+    CheckpointEnv,
     Headstamp,
     ImageProcessingConfig,
     Model,
@@ -205,6 +206,9 @@ def model_from_export_dict(d: dict[str, Any]) -> Model:
             feedback_enabled=fb_enabled,
         ),
         model_path=None,
+        # Absent from every archive written before #77 and from anything the
+        # legacy app exports, which is exactly the "not recorded" case.
+        checkpoint_env=CheckpointEnv.from_dict(_g(d, "checkpoint_env", "CheckpointEnv")),
     )
 
 
@@ -408,6 +412,11 @@ def _merge_onto_installed(incoming: Model, existing: Model, *, name: str) -> Mod
     # Overwritten during extraction if the archive ships a checkpoint; keep
     # the installed one so an images-only archive doesn't orphan the model.
     incoming.model_path = existing.model_path
+    # The env describes a checkpoint, so it follows the same rule: an archive
+    # that records nothing (every pre-#77 export, and everything the legacy app
+    # writes) must not erase what the installed copy already knows.
+    if incoming.checkpoint_env.is_empty():
+        incoming.checkpoint_env = existing.checkpoint_env
     # The publisher offers the feedback loop, the user opts in — an update
     # can't opt them back in, and can't keep it on if the publisher stopped
     # offering it.
