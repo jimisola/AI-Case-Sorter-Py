@@ -992,6 +992,60 @@ def test_a_second_run_is_refused_while_one_is_live(trainable, page, window, tmp_
     dialog.close()
 
 
+def test_the_console_can_be_saved_where_the_user_asks(trainable, page, window, tmp_path) -> None:
+    """ "Send me the training log" is the usual next question on Discord."""
+    page.training_script = write_stub_trainer(
+        tmp_path,
+        """
+        print("[INFO] Device: CPU")
+        emit("done", best_val_acc=0.8, best_val_loss=0.2)
+        """,
+    )
+    page.start_training()
+    dialog = page.progress_dialog
+    assert dialog is not None
+    assert drain_until(window, lambda: dialog.finished_run)
+    assert page.training_manager.wait(timeout=15)
+
+    target = tmp_path / "sent-to-discord.log"
+    dialog._choose_save_path = lambda: str(target)
+    dialog.save_log()
+
+    assert "[INFO] Device: CPU" in target.read_text(encoding="utf-8")
+    assert str(target) in dialog.console_text()
+    dialog.close()
+
+
+def test_cancelling_the_save_writes_nothing(trainable, page, window, tmp_path) -> None:
+    page.training_script = write_stub_trainer(tmp_path, 'emit("done", best_val_acc=0.1)')
+    page.start_training()
+    dialog = page.progress_dialog
+    assert dialog is not None
+    assert drain_until(window, lambda: dialog.finished_run)
+    assert page.training_manager.wait(timeout=15)
+
+    dialog._choose_save_path = lambda: ""
+    dialog.save_log()
+
+    assert not list(tmp_path.glob("*.log"))
+    dialog.close()
+
+
+def test_the_run_says_where_its_log_file_is(trainable, page, window, tmp_path) -> None:
+    """The console is transient; the file is what survives the window closing."""
+    page.training_script = write_stub_trainer(tmp_path, 'emit("done", best_val_acc=0.1)')
+    page.start_training()
+    dialog = page.progress_dialog
+    assert dialog is not None
+    assert drain_until(window, lambda: dialog.finished_run)
+    assert page.training_manager.wait(timeout=15)
+
+    log_path = page.training_manager.log_path
+    assert log_path is not None and log_path.exists()
+    assert str(log_path) in dialog.console_text()
+    dialog.close()
+
+
 def test_spawn_failure_reports_and_closes_the_console(trainable, page, window, monkeypatch) -> None:
     """A process that never starts must not leave a console with nothing to say."""
 

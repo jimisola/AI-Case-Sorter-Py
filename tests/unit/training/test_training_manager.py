@@ -173,3 +173,85 @@ def test_cannot_spawn_two_concurrent_jobs(tmp_path: Path) -> None:
     finally:
         mgr.cancel()
         mgr.wait(timeout=10)
+
+
+# ----- the run's log file (issue #100) ----------------------------------------
+
+
+def test_the_run_is_written_to_a_log_file(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CASESORTER_DATA_DIR", str(tmp_path / "data"))
+    script_body = """
+        import json, sys
+        print("[SETUP] PyTorch 9.9.9")
+        print("[INFO] Device: CPU")
+        sys.stderr.write("a warning" + chr(10))
+        sys.stdout.write('[PROGRESS] {"event": "done", "best_val_acc": 0.9}' + chr(10))
+    """
+    mgr, _, sinks = _run(tmp_path, script_body)
+
+    assert mgr.log_path is not None
+    text = mgr.log_path.read_text(encoding="utf-8")
+    assert "[SETUP] PyTorch 9.9.9" in text
+    assert "[INFO] Device: CPU" in text
+    # stderr is in the same file, marked — a traceback is the reason to read it.
+    assert "[stderr] a warning" in text
+    # The markers are kept verbatim: the file is the console, not a summary.
+    assert '[PROGRESS] {"event": "done"' in text
+    assert "# exit code: 0" in text
+    # And the window is told where it went.
+    assert any(str(mgr.log_path) in str(line) for line in sinks["log"])
+
+
+def test_the_log_file_lands_under_the_data_root(tmp_path: Path, monkeypatch) -> None:
+    from sorter import paths
+
+    monkeypatch.setenv("CASESORTER_DATA_DIR", str(tmp_path / "data"))
+    mgr, _, _ = _run(tmp_path, "print('hello')")
+
+    assert mgr.log_path is not None
+    assert mgr.log_path.parent == paths.logs_dir()
+    assert mgr.log_path.name.startswith("training-")
+
+
+def test_an_unwritable_log_costs_the_file_not_the_run(tmp_path: Path, monkeypatch) -> None:
+    """Same rule the launcher follows: the log is never why a launch fails."""
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    # A *file* where the logs directory should be: mkdir raises, and nothing
+    # downstream may care.
+    (data_root / "logs").write_text("in the way", encoding="utf-8")
+    monkeypatch.setenv("CASESORTER_DATA_DIR", str(data_root))
+
+    mgr, _, sinks = _run(tmp_path, "print('still ran')")
+
+    assert mgr.log_path is None
+    assert any("still ran" in str(line) for line in sinks["log"])
+
+
+def test_old_training_logs_are_pruned(tmp_path: Path, monkeypatch) -> None:
+    from sorter import paths
+    from sorter.training import manager as manager_module
+
+    monkeypatch.setenv("CASESORTER_DATA_DIR", str(tmp_path / "data"))
+    logs = paths.logs_dir()
+    logs.mkdir(parents=True, exist_ok=True)
+    for index in range(manager_module.MAX_TRAINING_LOGS + 5):
+        (logs / f"training-2020010{index // 10}-0000{index % 10}.log").write_text("old", encoding="utf-8")
+
+    _run(tmp_path, "print('new run')")
+
+    # The pruning happens before the new file is opened, so the new one is extra.
+    assert len(manager_module.training_logs()) == manager_module.MAX_TRAINING_LOGS + 1
+
+
+def test_training_logs_lists_newest_first(tmp_path: Path, monkeypatch) -> None:
+    from sorter import paths
+    from sorter.training import manager as manager_module
+
+    monkeypatch.setenv("CASESORTER_DATA_DIR", str(tmp_path / "data"))
+    logs = paths.logs_dir()
+    logs.mkdir(parents=True, exist_ok=True)
+    for stamp in ("20260101-000000", "20260301-000000", "20260201-000000"):
+        (logs / f"training-{stamp}.log").write_text("x", encoding="utf-8")
+
+    assert [p.name for p in manager_module.training_logs()][0] == "training-20260301-000000.log"

@@ -24,6 +24,7 @@ from sorter.ui.dialog_support import SupportDialog, build_support_dialog, open_s
 from sorter.ui.support_bundle import (
     CONFIG_MEMBER,
     REPORT_MEMBER,
+    TRAINING_LOG_MEMBER,
     collect_data,
     collect_report,
     write_bundle,
@@ -200,3 +201,54 @@ def test_the_help_menu_exports_a_support_package(window, monkeypatch) -> None:
 
     assert len(opened) == 1
     assert opened[0].parent() is window
+
+
+# ----- the last training run (issue #100) -------------------------------------
+
+
+def _write_training_log(text: str, *, stamp: str = "20260818-120000") -> Path:
+    from sorter.training.manager import training_log_path
+
+    paths.logs_dir().mkdir(parents=True, exist_ok=True)
+    path = training_log_path(stamp)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_the_report_says_there_is_no_training_log_yet(config) -> None:
+    assert collect_data(config, config.db)["training_log"] == {"available": "none"}
+
+
+def test_the_newest_training_log_is_named_and_bundled(config, tmp_path: Path) -> None:
+    _write_training_log("[INFO] Device: CPU\n", stamp="20260101-000000")
+    newest = _write_training_log("[INFO] Device: CUDA\n[INFO] Detected GPU: card\n", stamp="20260301-000000")
+
+    data = collect_data(config, config.db)
+    assert data["training_log"]["file"] == newest.name
+    assert data["training_log"]["older_runs_kept"] == 1
+
+    out = write_bundle(tmp_path / "pkg.zip", config, config.db)
+    with zipfile.ZipFile(out) as archive:
+        assert TRAINING_LOG_MEMBER in archive.namelist()
+        assert "Detected GPU: card" in archive.read(TRAINING_LOG_MEMBER).decode("utf-8")
+
+
+def test_a_bundled_log_carries_no_absolute_paths(config, tmp_path: Path) -> None:
+    """The report's promise — no absolute paths, nothing naming the machine —
+    has to survive a raw log being added beside it."""
+    data_root = paths.app_data_dir()
+    _write_training_log(f"# command: python train.py --image_dir {data_root}/models/3/images\n")
+
+    out = write_bundle(tmp_path / "pkg.zip", config, config.db)
+    with zipfile.ZipFile(out) as archive:
+        log = archive.read(TRAINING_LOG_MEMBER).decode("utf-8")
+
+    assert str(data_root) not in log
+    assert str(Path.home()) not in log
+    assert "<data>/models/3/images" in log
+
+
+def test_a_bundle_without_a_training_log_still_writes(config, tmp_path: Path) -> None:
+    out = write_bundle(tmp_path / "pkg.zip", config, config.db)
+    with zipfile.ZipFile(out) as archive:
+        assert TRAINING_LOG_MEMBER not in archive.namelist()

@@ -373,6 +373,21 @@ model:
   console for it. Closing the console mid-run asks first, and confirming
   cancels the run — the console is the only thing it reports to.
 
+The console **opens with what the run is using**: the PyTorch version, whether
+CUDA was found, which GPU (and how much memory it has) or that it is training
+on the CPU, then every setting the run was given. That block is the first
+thing to quote when a run is slower than expected or a result looks wrong.
+
+Every run is also written to a file, so the console closing doesn't lose it:
+`training-<date>.log` in the `logs` folder under your data folder (**File →
+Open data folder**), and the console's first line says exactly where. The last
+few runs are kept. Two shortcuts for sending one on:
+
+- **Save log…** on the console writes what you are looking at wherever you
+  choose;
+- **Help → Export support package…** puts the most recent run's log in the ZIP
+  as `training.log`, with your folder paths replaced by placeholders.
+
 Training needs PyTorch. If it isn't installed, the app offers to install it
 here.
 
@@ -603,12 +618,15 @@ options, training configuration, image processing, serial and camera
 settings, and the AI Config setup.
 
 **Copy to clipboard** gives you the text to paste on the community Discord
-when asking for help. **Save package…** writes a ZIP holding the same report
-plus a machine-readable `config.json`.
+when asking for help. **Save package…** writes a ZIP holding the same report,
+a machine-readable `config.json`, and — if you have trained a model — the most
+recent run's log as `training.log`.
 
 It is safe to share: the API key is reported only as "set" or "not set",
 nothing is read from the sign-in cache, and file paths are shown relative to
-the data folder, so your home directory never appears.
+the data folder, so your home directory never appears. The training log gets
+the same treatment: your folder paths are replaced by `<data>`, `<app>` and
+`<home>` before it goes in.
 
 ### Updates
 

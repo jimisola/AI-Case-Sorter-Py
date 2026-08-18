@@ -26,9 +26,11 @@ from typing import Any
 from .. import __version__, paths
 from ..data.models import Model, is_foreign_model
 from ..data.repository import ModelRepo, SettingsRepo
+from ..training import manager
 
 REPORT_MEMBER = "report.txt"
 CONFIG_MEMBER = "config.json"
+TRAINING_LOG_MEMBER = "training.log"
 
 # The masked spellings the report/JSON use for the API key. Tests assert on
 # these; nothing else may carry the key's value.
@@ -129,7 +131,51 @@ def collect_data(config: Any, db: Any) -> dict[str, Any]:
             "image_quality": api.get("image_quality"),
             "image_scale": api.get("image_scale"),
         },
+        "training_log": _training_log_summary(),
     }
+
+
+def _training_log_summary() -> dict[str, Any]:
+    """What the most recent training run left behind (issue #100).
+
+    The report names it; ``write_bundle`` puts the file itself in the ZIP. Only
+    the newest — the whole point is "here is the run you are asking about",
+    not an archive.
+    """
+    logs = manager.training_logs()
+    if not logs:
+        return {"available": "none"}
+    newest = logs[0]
+    try:
+        size = newest.stat().st_size
+    except OSError:
+        size = 0
+    return {
+        "available": TRAINING_LOG_MEMBER,
+        "file": newest.name,
+        "size_bytes": size,
+        "older_runs_kept": len(logs) - 1,
+    }
+
+
+def _redact_text(text: str) -> str:
+    """Strip machine-identifying prefixes out of a log before it is shared.
+
+    The structured report never contains an absolute path (``_redact_path``),
+    and a raw log must not be the hole in that: a training command line carries
+    the data root, and the data root usually carries the user's name.
+    """
+    replacements = [
+        (str(paths.app_data_dir()), "<data>"),
+        (str(paths.app_root()), "<app>"),
+        (str(Path.home()), "<home>"),
+    ]
+    # Longest first: the data root often sits inside the home directory, and
+    # replacing the shorter one first would leave "<home>/.local/share/…".
+    for needle, token in sorted(replacements, key=lambda pair: len(pair[0]), reverse=True):
+        if needle and needle != os.sep:
+            text = text.replace(needle, token)
+    return text
 
 
 def _value(raw: Any) -> str:
@@ -162,6 +208,7 @@ def render_report(data: dict[str, Any]) -> str:
         ("Serial", data["serial"], ""),
         ("Camera", data["camera"], ""),
         ("AI Config (HTTP classification)", data["ai_config"], ""),
+        ("Last training run", data["training_log"], ""),
     ]
     lines: list[str] = ["AI Case Sorter — support report"]
     for title, body, empty_text in sections:
@@ -176,7 +223,13 @@ def collect_report(config: Any, db: Any) -> str:
 
 
 def write_bundle(path: str | os.PathLike[str], config: Any, db: Any) -> Path:
-    """Write the support ZIP (``report.txt`` + ``config.json``) atomically."""
+    """Write the support ZIP atomically.
+
+    ``report.txt`` + ``config.json``, plus ``training.log`` — the most recent
+    training run's console — when there is one (issue #100). The log is passed
+    through ``_redact_text`` on the way in, so the ZIP keeps the promise the
+    report makes: no absolute paths, nothing naming the machine.
+    """
     out = Path(path)
     data = collect_data(config, db)
     tmp = out.with_suffix(out.suffix + ".tmp")
@@ -184,7 +237,21 @@ def write_bundle(path: str | os.PathLike[str], config: Any, db: Any) -> Path:
         with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as archive:
             archive.writestr(REPORT_MEMBER, render_report(data))
             archive.writestr(CONFIG_MEMBER, json.dumps(data, indent=2))
+            log = _newest_training_log()
+            if log is not None:
+                archive.writestr(TRAINING_LOG_MEMBER, log)
         os.replace(tmp, out)
     finally:
         tmp.unlink(missing_ok=True)
     return out
+
+
+def _newest_training_log() -> str | None:
+    """The most recent training log, redacted. None when there isn't one."""
+    logs = manager.training_logs()
+    if not logs:
+        return None
+    try:
+        return _redact_text(logs[0].read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return None
