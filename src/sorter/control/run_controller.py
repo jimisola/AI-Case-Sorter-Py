@@ -23,6 +23,8 @@ from .events import EventBus
 
 SlotCallback = Callable[[int], None]
 
+DISCONNECT_ERROR = "Serial disconnected"
+
 
 class RunController:
     def __init__(self, *, config: Config, broker, camera, bus: EventBus, db: Any = None) -> None:
@@ -94,6 +96,17 @@ class RunController:
         if label and self.config.use_parent_classifications:
             return self.config.parent_for_headstamp(label)
         return None
+
+    def _board_error(self, timeout_message: str) -> str:
+        """What to report when a board command didn't complete.
+
+        A dropped link answers nothing, so every command "times out" on one —
+        and a timeout is also what a merely slow board produces. Ask the broker
+        which it was rather than making the operator guess (issue #35).
+        """
+        if not getattr(self.broker, "is_connected", True):
+            return DISCONNECT_ERROR
+        return timeout_message
 
     def _above_floor(self, confidence: float) -> bool:
         floor = self.config.run_confidence_floor
@@ -359,7 +372,7 @@ class RunController:
         try:
             self.bus.post("test/status", "Feeding…")
             if not self.broker.feed_one():
-                return _fail("Feed timeout")
+                return _fail(self._board_error("Feed timeout"))
 
             self.bus.post("test/status", "Capturing & cropping…")
             frame = self.camera.capture_frame()
@@ -470,7 +483,7 @@ class RunController:
             # next case into the imaging area before responding 'done'. The
             # next iteration's capture will see that next case.
             if not self.broker.sort_and_move(slot):
-                result["error"] = "Sort timeout"
+                result["error"] = self._board_error("Sort timeout")
                 return result
             # Tally the batch only once the case has physically dropped.
             self._commit_package_count(slot, label, above_floor)
@@ -513,7 +526,7 @@ class RunController:
             # position 5's case at the given slot. Handles both the
             # empty-wheel first call and the normal primed state.
             if not self.broker.force_sort_and_move(slot_to_send):
-                result["error"] = "Feed timeout"
+                result["error"] = self._board_error("Feed timeout")
                 self.bus.post("run/result", result)
                 self.bus.post("run/error", result["error"])
                 return result
@@ -576,7 +589,7 @@ class RunController:
             prime_slot = self._last_classified_slot
             self.bus.post("run/status", f"Priming feed (slot {prime_slot})…")
             if not self.broker.force_sort_and_move(prime_slot):
-                self.bus.post("run/error", "Initial feed timeout")
+                self.bus.post("run/error", self._board_error("Initial feed timeout"))
                 return
 
             while not self._stop_event.is_set():

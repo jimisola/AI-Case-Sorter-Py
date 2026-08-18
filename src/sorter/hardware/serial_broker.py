@@ -5,8 +5,10 @@ the public command surface (feed_one, force_sort_and_move, sort_and_move,
 get_config, update_init_settings, etc.).
 
 Threading model: one reader thread, one ping thread, writes serialized with a lock.
-Each callback is invoked on the reader thread; UI layers should post into an
-EventBus and drain it on the UI thread.
+Callbacks are invoked on the reader thread — except `on_disconnect`, which fires
+on whichever thread first noticed the link die (the reader, or a caller whose
+write failed). UI layers should post into an EventBus and drain it on the UI
+thread, so the difference doesn't reach a widget either way.
 """
 
 from __future__ import annotations
@@ -73,6 +75,7 @@ class SerialBroker:
         self._sp: serial.Serial | None = None
         self._write_lock = threading.Lock()
         self._port_lock = threading.Lock()
+        self._state_lock = threading.Lock()
         self._last_activity = time.monotonic()
 
         self._reader_thread: threading.Thread | None = None
@@ -89,6 +92,7 @@ class SerialBroker:
         self.on_response: list[Callback] = []
         self.on_received: list[Callback] = []  # every line, raw
         self.on_sent: list[Callback] = []  # every outbound command (with newline stripped)
+        self.on_disconnect: list[Callback] = []  # the link died; payload is why
 
     # ----- lifecycle ----------------------------------------------------------
 
@@ -177,8 +181,11 @@ class SerialBroker:
         self._ping_thread.start()
 
     def stop(self) -> None:
-        self.is_connected = False
+        # Set before the port closes: the reader is very likely mid-read and
+        # will fail on the close, and this is what tells `_mark_disconnected`
+        # that failure was asked for rather than the cable coming out.
         self._stop_event.set()
+        self.is_connected = False
         with self._port_lock:
             if self._sp is not None:
                 try:
@@ -191,27 +198,59 @@ class SerialBroker:
     def close(self) -> None:
         self.stop()
 
+    def _mark_disconnected(self, reason: str) -> None:
+        """Flip to disconnected and announce it — at most once, and never for a
+        `stop()` we asked for.
+
+        Both the reader thread and a failing write can notice the same dropped
+        link, so the transition is what fires the callbacks, not the noticing.
+        """
+        with self._state_lock:
+            was_connected = self.is_connected
+            self.is_connected = False
+            announce = was_connected and not self._stop_event.is_set()
+        if announce:
+            self._fire(self.on_disconnect, reason)
+
     # ----- low-level send/read ------------------------------------------------
 
-    def send_command(self, command: str) -> None:
-        if not command.endswith("\n"):
-            command += "\n"
+    def _write(self, payload: str) -> bool:
+        """Write `payload` verbatim under the write lock. False if the link died.
+
+        The disconnect is announced *after* the lock is released — an
+        `on_disconnect` handler is free to talk to the broker, and firing it
+        from inside the lock would let it deadlock against this write.
+        """
+        failure = ""
         with self._write_lock:
             if self._sp is None or not self._sp.is_open:
-                return
+                return False
             try:
-                self._sp.write(command.encode("ascii", errors="ignore"))
+                self._sp.write(payload.encode("ascii", errors="ignore"))
                 self._sp.flush()
-            except (serial.SerialException, OSError):
-                self.is_connected = False
-                return
-            self._last_activity = time.monotonic()
-        stripped = command.rstrip("\n")
-        for cb in list(self.on_sent):
-            try:
-                cb(stripped)
-            except Exception:
-                pass
+            except (serial.SerialException, OSError) as exc:
+                failure = f"write failed on {self.port}: {exc}"
+            else:
+                self._last_activity = time.monotonic()
+        if failure:
+            self._mark_disconnected(failure)
+            return False
+        return True
+
+    def send_command(self, command: str) -> bool:
+        """Send one protocol command. False when it never reached the wire.
+
+        The return value is what keeps the helpers below from waiting on a
+        board that was never asked: a write that failed has no answer coming,
+        and waiting out the timeout for it is the "generic timeout" issue #35
+        is about.
+        """
+        if not command.endswith("\n"):
+            command += "\n"
+        if not self._write(command):
+            return False
+        self._fire(self.on_sent, command.rstrip("\n"))
+        return True
 
     def send_raw(self, text: str) -> None:
         """Write `text` byte-for-byte — nothing appended, nothing normalised.
@@ -220,16 +259,8 @@ class SerialBroker:
         goes through `send_command`, which owns the trailing newline the
         firmware expects; keep it that way.
         """
-        with self._write_lock:
-            if self._sp is None or not self._sp.is_open:
-                return
-            try:
-                self._sp.write(text.encode("ascii", errors="ignore"))
-                self._sp.flush()
-            except (serial.SerialException, OSError):
-                self.is_connected = False
-                return
-            self._last_activity = time.monotonic()
+        if not self._write(text):
+            return
         self._fire(self.on_sent, text.rstrip("\r\n"))
 
     def purge_responses(self) -> None:
@@ -260,13 +291,14 @@ class SerialBroker:
                     continue
                 self._buf += line if line.endswith("\n") else line + "\n"
                 self._process_buffer()
-            except (serial.SerialException, OSError, TypeError, AttributeError):
+            except (serial.SerialException, OSError, TypeError, AttributeError) as exc:
                 # TypeError/AttributeError covers the pyserial race where
                 # stop() closes the port (self.fd -> None) while readline()
                 # is mid-read — os.read(None, ...) raises TypeError instead
                 # of OSError. Treat it as a clean disconnect so the reader
-                # thread doesn't crash on shutdown / reconnect.
-                self.is_connected = False
+                # thread doesn't crash on shutdown / reconnect; `stop()` sets
+                # the stop event first, so that case announces nothing.
+                self._mark_disconnected(f"read failed on {self.port}: {exc}")
                 time.sleep(0.3)
 
     def _ping_loop(self) -> None:
@@ -321,33 +353,51 @@ class SerialBroker:
         return event.wait(timeout=timeout_s)
 
     def _await_topic(self, topic_handlers: list[Callback], timeout_s: float) -> bool:
+        """Wait for one response line, or for the link to die.
+
+        A disconnect wakes the wait immediately and returns False: a dead port
+        will never answer, and sitting out the full timeout is what made an
+        unplugged cable indistinguishable from a slow board (issue #35).
+        """
         done = threading.Event()
+        hit = False
 
         def _hit(_payload: str) -> None:
+            nonlocal hit
+            hit = True
+            done.set()
+
+        def _abandon(_reason: str) -> None:
             done.set()
 
         topic_handlers.append(_hit)
+        self.on_disconnect.append(_abandon)
         try:
-            return done.wait(timeout=timeout_s)
+            done.wait(timeout=timeout_s)
+            return hit
         finally:
-            try:
-                topic_handlers.remove(_hit)
-            except ValueError:
-                pass
+            for handlers, handler in ((topic_handlers, _hit), (self.on_disconnect, _abandon)):
+                try:
+                    handlers.remove(handler)
+                except ValueError:
+                    pass
 
     def feed_one(self) -> bool:
         """xf:0 — feed a single case. Returns True on done."""
-        self.send_command("xf:0")
+        if not self.send_command("xf:0"):
+            return False
         return self._await_topic(self.on_done, FEED_TIMEOUT_S)
 
     def force_sort_and_move(self, slot: int) -> bool:
         """xf:<slot> — force feed to a specific slot."""
-        self.send_command(f"xf:{int(slot)}")
+        if not self.send_command(f"xf:{int(slot)}"):
+            return False
         return self._await_topic(self.on_done, FORCE_FEED_TIMEOUT_S)
 
     def sort_and_move(self, slot: int) -> bool:
         """<slot> — sort the just-fed case to the given slot."""
-        self.send_command(str(int(slot)))
+        if not self.send_command(str(int(slot))):
+            return False
         return self._await_topic(self.on_done, SORT_TIMEOUT_S)
 
     def move_sorter_to_slot(self, slot: int) -> None:

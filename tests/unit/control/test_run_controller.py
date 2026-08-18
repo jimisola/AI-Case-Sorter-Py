@@ -8,7 +8,7 @@ import numpy as np
 
 from sorter.community.feedback import FeedbackService
 from sorter.control.events import EventBus
-from sorter.control.run_controller import RunController
+from sorter.control.run_controller import DISCONNECT_ERROR, RunController
 from sorter.data.config import Config
 from sorter.data.db import Database
 from sorter.hardware.serial_emulator import EmulatorBroker
@@ -348,3 +348,41 @@ def test_refresh_and_clear_wish_list(tmp_path, monkeypatch) -> None:
     assert _feedback(ctrl).wish_list() == ["fc"]
     ctrl.clear_wish_list()
     assert _feedback(ctrl).wish_list() == []
+
+
+# ----- a dropped link is not a timeout (issue #35) ----------------------------
+
+
+def test_run_once_names_the_disconnect_instead_of_a_sort_timeout(tmp_path) -> None:
+    ctrl, cfg, _ = _make_controller(tmp_path)
+    cfg.set_run_confidence_floor(0)
+    ctrl.broker.simulate_disconnect("cable pulled")
+
+    with patch("sorter.ml.classifier.classify_active", return_value=("WIN", 90)):
+        result = ctrl.run_once()
+
+    assert result["ok"] is False
+    assert result["error"] == DISCONNECT_ERROR
+
+
+def test_cycle_once_names_the_disconnect_instead_of_a_feed_timeout(tmp_path) -> None:
+    ctrl, _, _ = _make_controller(tmp_path)
+    ctrl.broker.simulate_disconnect()
+
+    result = ctrl.cycle_once()
+
+    assert result["error"] == DISCONNECT_ERROR
+
+
+def test_a_live_board_still_reports_a_timeout_as_a_timeout(tmp_path) -> None:
+    # The distinction only means something if the timeout half survives: a
+    # board that is connected but silent must not be blamed on the cable.
+    ctrl, cfg, _ = _make_controller(tmp_path)
+    cfg.set_run_confidence_floor(0)
+    with (
+        patch("sorter.ml.classifier.classify_active", return_value=("WIN", 90)),
+        patch.object(ctrl.broker, "sort_and_move", return_value=False),
+    ):
+        result = ctrl.run_once()
+
+    assert result["error"] == "Sort timeout"
