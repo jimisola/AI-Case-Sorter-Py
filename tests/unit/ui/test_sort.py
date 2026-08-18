@@ -449,6 +449,20 @@ def test_start_routes_a_local_model_without_torch_through_the_gate(window, conne
     assert connected.started == 1
 
 
+def test_start_tells_the_gate_whose_checkpoint_it_is_about_to_load(window, connected, config, monkeypatch) -> None:
+    """An outdated torch blocks a downloaded model and only offers for your own,
+    so the gate can't decide without the model (CVE-2026-24747)."""
+    model_id = seed_model(config, {"WIN": 1})
+    seen: list[object] = []
+    monkeypatch.setattr(window, "ensure_torch", lambda proceed, **kw: seen.append(kw.get("model")) or True)
+    monkeypatch.setattr(classifier, "checkpoint_problem", lambda _db: None)
+    monkeypatch.setattr(classifier, "uses_local_inference", lambda _db: True)
+
+    window.start_run()
+
+    assert seen and getattr(seen[0], "id", None) == model_id
+
+
 def test_start_refuses_ai_config_mode_without_credentials(window, connected, config, monkeypatch) -> None:
     notices = []
     monkeypatch.setattr(window, "notify", lambda title, text: notices.append(title))
