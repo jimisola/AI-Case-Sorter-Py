@@ -9,6 +9,7 @@ runs the same on a CI box with no camera at all.
 from __future__ import annotations
 
 import inspect
+import logging
 import os
 import sys
 import time
@@ -28,6 +29,27 @@ linux_only = pytest.mark.skipif(
     not sys.platform.startswith("linux"),
     reason="V4L2 node filtering is Linux-only (fcntl/ioctl)",
 )
+
+
+@pytest.mark.parametrize(
+    ("platform", "backend_name"),
+    [
+        ("win32", "CAP_DSHOW"),
+        ("linux", "CAP_V4L2"),
+        ("darwin", "CAP_AVFOUNDATION"),
+    ],
+)
+def test_each_platform_gets_its_explicit_backend(
+    monkeypatch: pytest.MonkeyPatch, platform: str, backend_name: str
+) -> None:
+    """CAP_ANY autoprobing is what the explicit backends exist to avoid (#36)."""
+    monkeypatch.setattr(camera.sys, "platform", platform)
+    assert camera._preferred_backend() == getattr(camera.cv2, backend_name)
+
+
+def test_an_unknown_platform_falls_back_to_cap_any(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(camera.sys, "platform", "sunos5")
+    assert camera._preferred_backend() == camera.cv2.CAP_ANY
 
 
 def _fake_v4l2(
@@ -196,17 +218,18 @@ def test_a_device_that_answers_in_time_is_listed_without_comment(
 
 
 def test_a_device_that_blows_the_budget_is_dropped_but_reported(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """The silence here is what made a camera 60 ms over budget so hard to explain."""
     monkeypatch.setattr(camera, "_candidate_indices", lambda _max: [0, 4])
     monkeypatch.setattr(camera, "camera_names", lambda: {0: "Built-in", 4: "Vitade AF"})
     _fake_captures(monkeypatch, {0: 0.0, 4: 1.0})
 
-    found = camera.list_cameras_with_metadata(probe_timeout_s=0.2)
+    with caplog.at_level(logging.WARNING, logger=camera.__name__):
+        found = camera.list_cameras_with_metadata(probe_timeout_s=0.2)
 
     assert [c["index"] for c in found] == [0]
-    err = capsys.readouterr().err
+    err = caplog.text
     assert "index 4" in err
     assert "Vitade AF" in err, "name it, so the reader knows which camera went missing"
     assert "0.2" in err, "quote the budget it missed"

@@ -56,7 +56,8 @@ that follows the active model below it.
 | *(separator line)* | Below it, the two ways a classifier is taught. |
 | **Train** | The [Train](#train) screen — teaching a local model of your own. |
 | **AI Config** | The [AI Config](#ai-config) screen — the equivalent step when an HTTP server does the recognising: teaching *it* what to look for. |
-| **Settings** | Pinned at the bottom, separate from the activities above it: everything you configure once and rarely touch again. |
+| *(separator line)* | Below it, the app itself rather than a way of working. |
+| **Settings** | Everything you configure once and rarely touch again. |
 
 Train and AI Config are always both there, and exactly one of them is in use
 at a time — which one follows the **active model** (see [Models](#models)):
@@ -80,6 +81,12 @@ Along the bottom, from left to right:
 - **● Camera** and **● Serial** — connection indicators. Green means
   connected, and the serial one names the port, speed and the firmware
   version it handshook with.
+- **Inference: MPS · Apple M4** (for example) — where classification runs
+  when a local model is active: a CUDA GPU, an Apple GPU (MPS), or the CPU,
+  with the hardware's name. Appears shortly after startup once the model's
+  engine has loaded (or after the first classification if PyTorch was just
+  installed). Absent in AI Config mode, where classification is an HTTP
+  call to your configured server rather than a local computation.
 - **Update to *version*** or **Restart to update** — appears only when there
   is an app update to fetch or a downloaded one waiting. See
   [updates](#updates).
@@ -534,7 +541,12 @@ device and resolution are shown beneath the controls.
 Connects the app to the sorting machine over the board's UART protocol.
 
 - **Port** — pick a detected serial port, or **Emulated** to run against the
-  built-in board emulator with no hardware attached.
+  built-in board emulator with no hardware attached. Every detected port is
+  listed here, but the automatic probe at startup is choosier: on macOS it
+  skips Bluetooth and debug pseudo-ports (they can never be the board, and
+  opening one can wake a paired headset), naming them in the serial monitor.
+  A port you picked once is always probed, and connecting manually from here
+  works for any port.
 - **Baud** and **probe timeout** — connection parameters; the defaults match
   the firmware. The baud picker is shared with the [Serial
   Monitor](#serial-monitor)'s.

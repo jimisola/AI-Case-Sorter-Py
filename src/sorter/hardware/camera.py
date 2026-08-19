@@ -1,6 +1,7 @@
 """Cross-platform camera capture via OpenCV.
 
-Uses CAP_DSHOW on Windows and CAP_V4L2 on Linux to avoid backend hangs.
+Uses CAP_DSHOW on Windows, CAP_V4L2 on Linux and CAP_AVFOUNDATION on macOS
+to avoid backend hangs.
 A single grab thread keeps the latest frame in a slot; UI tabs poll it.
 
 Includes a metadata probe (list_cameras_with_metadata) that returns each
@@ -11,6 +12,7 @@ when available) and the resolutions the device accepts.
 from __future__ import annotations
 
 import ctypes
+import logging
 import os
 import sys
 import threading
@@ -19,6 +21,8 @@ from typing import TypedDict
 
 import cv2
 import numpy as np
+
+log = logging.getLogger(__name__)
 
 # Resolutions probed by `list_cameras_with_metadata`. Add more here if the
 # operator's camera advertises something not in the list.
@@ -64,6 +68,8 @@ def _preferred_backend() -> int:
         return cv2.CAP_DSHOW
     if sys.platform.startswith("linux"):
         return cv2.CAP_V4L2
+    if sys.platform == "darwin":
+        return cv2.CAP_AVFOUNDATION
     return cv2.CAP_ANY
 
 
@@ -404,12 +410,12 @@ def list_cameras_with_metadata(max_index: int = 10, probe_timeout_s: float = PRO
         if t.is_alive():
             # A device that opens and then times out used to vanish from the
             # list in silence, which is exactly what made a camera 60 ms over
-            # budget so hard to account for. bootstrap.py pipes stderr into
-            # launch.log, so this lands where someone would go looking.
-            print(
-                f"[camera] index {idx} ({names.get(idx, 'unnamed')}) did not finish "
-                f"probing within {probe_timeout_s:g}s — not listing it",
-                file=sys.stderr,
+            # budget so hard to account for.
+            log.warning(
+                "index %s (%s) did not finish probing within %gs — not listing it",
+                idx,
+                names.get(idx, "unnamed"),
+                probe_timeout_s,
             )
         if result["opened"]:
             out.append(
