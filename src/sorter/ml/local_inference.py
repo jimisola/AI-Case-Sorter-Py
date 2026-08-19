@@ -37,6 +37,7 @@ device confirmation) are intentionally retained.
 from __future__ import annotations
 
 import concurrent.futures
+import logging
 import threading
 import time
 from dataclasses import dataclass
@@ -44,6 +45,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+log = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 _cache: dict[tuple[str, int], _LoadedModel] = {}
@@ -169,6 +172,16 @@ def _torch():
         import importlib
 
         importlib.invalidate_caches()
+        # On Apple Silicon, let an MPS op gap fall back to CPU per-op instead
+        # of raising mid-run: MPS historically surfaces unsupported ops at
+        # inference time, not at load (#36). Must be set before torch imports;
+        # setdefault so an explicit =0 in the environment still wins.
+        import sys as _sys
+
+        if _sys.platform == "darwin":
+            import os as _os
+
+            _os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
         try:
             # torch/torchvision are the optional `[ml]` extra — genuinely
             # absent from this dev/CI environment by design; the except below
@@ -195,34 +208,60 @@ def _torch():
     return _torch_mod, _models_mod, _F_mod
 
 
+def _mps_available(torch_mod: Any) -> bool:
+    """Whether this torch build ships a usable MPS backend (Apple GPU).
+
+    Guarded attribute access: CPU-only and CUDA builds may lack
+    `torch.backends.mps` entirely, and that must read as "no", not raise.
+    """
+    try:
+        mps = getattr(torch_mod.backends, "mps", None)
+        return bool(mps is not None and mps.is_available())
+    except Exception:
+        return False
+
+
 def _pick_device(torch_mod: Any) -> Any:
     """One-shot device selection, mirroring the reference AI server.
+
+    Probe order: CUDA, then MPS (Apple Silicon), then CPU. Both GPU branches
+    use the same probe-then-commit pattern — allocate a small tensor and
+    force a sync, falling back to CPU if anything raises. The MPS probe
+    genuinely earns its keep: MPS historically has op gaps that raise at
+    inference time rather than at load (#36).
 
     Stores the chosen torch.device in module-level `_device_cache` so
     classify() never has to re-probe.
     """
     global _device_cache
-    import sys
 
-    if not torch_mod.cuda.is_available():
-        _device_cache = torch_mod.device("cpu")
-        print("[device] CUDA unavailable; using CPU", file=sys.stderr, flush=True)
+    if torch_mod.cuda.is_available():
+        try:
+            probe = torch_mod.randn(1, 3, 8, 8, device="cuda")
+            _ = probe.sum().item()
+            _device_cache = torch_mod.device("cuda")
+            log.info("CUDA ok: %s", torch_mod.cuda.get_device_name(0))
+        except Exception as exc:
+            _device_cache = torch_mod.device("cpu")
+            log.warning("CUDA probe failed (%s); using CPU", exc)
         return _device_cache
-    try:
-        probe = torch_mod.randn(1, 3, 8, 8, device="cuda")
-        _ = probe.sum().item()
-        _device_cache = torch_mod.device("cuda")
-        print(f"[device] CUDA ok: {torch_mod.cuda.get_device_name(0)}", file=sys.stderr, flush=True)
-    except Exception as exc:
-        _device_cache = torch_mod.device("cpu")
-        print(f"[device] CUDA probe failed ({exc}); using CPU", file=sys.stderr, flush=True)
+    if _mps_available(torch_mod):
+        try:
+            probe = torch_mod.randn(1, 3, 8, 8, device="mps")
+            _ = probe.sum().item()  # .item() forces the device sync
+            _device_cache = torch_mod.device("mps")
+            log.info("MPS ok (Apple GPU)")
+        except Exception as exc:
+            _device_cache = torch_mod.device("cpu")
+            log.warning("MPS probe failed (%s); using CPU", exc)
+        return _device_cache
+    _device_cache = torch_mod.device("cpu")
+    log.info("no CUDA or MPS; using CPU")
     return _device_cache
 
 
 def _dump_environment(torch_mod: Any) -> None:
-    """Print a one-time summary of torch/CUDA configuration to stderr."""
-    import sys
-
+    """Log a one-time summary of the torch/CUDA configuration."""
     try:
         cuda_avail = torch_mod.cuda.is_available()
         cudnn_v = None
@@ -236,17 +275,17 @@ def _dump_environment(torch_mod: Any) -> None:
                 arch_list = list(torch_mod.cuda.get_arch_list())
             except Exception:
                 pass
-        print(
-            f"[env] torch={torch_mod.__version__} "
-            f"cuda_available={cuda_avail} "
-            f"cuda_version={torch_mod.version.cuda} "
-            f"cudnn={cudnn_v} "
-            f"threads={torch_mod.get_num_threads()}",
-            file=sys.stderr,
-            flush=True,
+        log.info(
+            "torch=%s cuda_available=%s mps_available=%s cuda_version=%s cudnn=%s threads=%s",
+            torch_mod.__version__,
+            cuda_avail,
+            _mps_available(torch_mod),
+            torch_mod.version.cuda,
+            cudnn_v,
+            torch_mod.get_num_threads(),
         )
         if cuda_avail:
-            print(f"[env] arch_list={arch_list}", file=sys.stderr, flush=True)
+            log.info("arch_list=%s", arch_list)
             for i in range(torch_mod.cuda.device_count()):
                 name = torch_mod.cuda.get_device_name(i)
                 cap = torch_mod.cuda.get_device_capability(i)
@@ -259,18 +298,21 @@ def _dump_environment(torch_mod: Any) -> None:
                 # the situation obvious.
                 supported = any(sm_tag in a or f"compute_{cap[0]}{cap[1]}" in a for a in arch_list)
                 marker = "" if supported else "  ⚠  NOT in arch_list — PTX JIT fallback"
-                print(
-                    f"[env] device[{i}]={name!r} {sm_tag} vram={mem_gb:.1f}GB mp={props.multi_processor_count}{marker}",
-                    file=sys.stderr,
-                    flush=True,
+                log.info(
+                    "device[%d]=%r %s vram=%.1fGB mp=%s%s",
+                    i,
+                    name,
+                    sm_tag,
+                    mem_gb,
+                    props.multi_processor_count,
+                    marker,
                 )
                 if not supported:
-                    print(
-                        f"[env] FIX: install a PyTorch build that bakes {sm_tag} "
-                        "in its arch list (a newer release, or a newer CUDA "
-                        "wheel index than the one it was installed from).",
-                        file=sys.stderr,
-                        flush=True,
+                    log.warning(
+                        "FIX: install a PyTorch build that bakes %s in its arch list "
+                        "(a newer release, or a newer CUDA wheel index than the one "
+                        "it was installed from).",
+                        sm_tag,
                     )
             # Synthetic benchmarks decouple raw GPU / cuDNN throughput
             # from anything in our classify pipeline.
@@ -286,9 +328,9 @@ def _dump_environment(torch_mod: Any) -> None:
                     _ = x @ x
                 torch_mod.cuda.synchronize()
                 ms_per = (time.perf_counter() - t) * 1000.0 / iters
-                print(f"[env] matmul_1024x1024_fp32: {ms_per:.2f} ms/iter", file=sys.stderr, flush=True)
+                log.info("matmul_1024x1024_fp32: %.2f ms/iter", ms_per)
             except Exception as exc:
-                print(f"[env] matmul benchmark failed: {exc}", file=sys.stderr, flush=True)
+                log.warning("matmul benchmark failed: %s", exc)
 
             # ConvNeXt-Tiny forward — same model class our classify uses, so
             # comparing it against the [classify] forward time separates "the
@@ -321,19 +363,18 @@ def _dump_environment(torch_mod: Any) -> None:
                         _ = bench_net(bench_x)
                 torch_mod.cuda.synchronize()
                 ms_per = (time.perf_counter() - t) * 1000.0 / iters
-                print(
-                    f"[env] convnext_tiny_fp32_synthetic: {ms_per:.1f} ms/iter "
-                    f"(~3 ms measured on sm_120 with torch 2.13 + cuDNN 9.20; "
-                    f"hundreds of ms means a PTX JIT fallback or a CPU device)",
-                    file=sys.stderr,
-                    flush=True,
+                log.info(
+                    "convnext_tiny_fp32_synthetic: %.1f ms/iter "
+                    "(~3 ms measured on sm_120 with torch 2.13 + cuDNN 9.20; "
+                    "hundreds of ms means a PTX JIT fallback or a CPU device)",
+                    ms_per,
                 )
                 del bench_net, bench_x
                 torch_mod.cuda.empty_cache()
             except Exception as exc:
-                print(f"[env] convnext benchmark failed: {exc}", file=sys.stderr, flush=True)
+                log.warning("convnext benchmark failed: %s", exc)
     except Exception as exc:
-        print(f"[env] dump failed: {exc}", file=sys.stderr, flush=True)
+        log.warning("environment dump failed: %s", exc)
 
 
 def _build_base(model_name: str) -> Any:
@@ -482,16 +523,16 @@ def _load(model_path: str) -> _LoadedModel:
         loaded = _LoadedModel(net=net, classes=classes, base=base, image_size=image_size)
         _cache[key] = loaded
         # Diagnostic: confirm where the model parameters live after load.
-        import sys
-
         try:
             param = next(net.parameters())
-            print(
-                f"[model] loaded {base!r} from {path.name} "
-                f"device={param.device} dtype={param.dtype} "
-                f"classifier_layout={layout} image_size={image_size}",
-                file=sys.stderr,
-                flush=True,
+            log.info(
+                "loaded %r from %s device=%s dtype=%s classifier_layout=%s image_size=%s",
+                base,
+                path.name,
+                param.device,
+                param.dtype,
+                layout,
+                image_size,
             )
         except Exception:
             pass
@@ -552,11 +593,10 @@ def _classify_impl(
     """Inner classify implementation. Always runs on the inference thread.
 
     Populates `local_inference.last_timings` with a per-step breakdown
-    (`load`, `preprocess`, `forward`, `postprocess`, in ms) and mirrors
-    that breakdown to stderr so the operator can read it from the console.
+    (`load`, `preprocess`, `forward`, `postprocess`, in ms) and logs that
+    breakdown at DEBUG — once per case, so it belongs in the log file
+    rather than on the console.
     """
-    import sys
-
     timings: dict[str, float] = {}
 
     # _torch() lazily imports torch + torchvision and runs the env-dump
@@ -596,8 +636,12 @@ def _classify_impl(
     t0 = time.perf_counter()
     with torch.inference_mode():
         logits = loaded.net(tensor)
+        # Sync so the "forward" timing row measures the forward pass itself;
+        # without it async dispatch defers the wait into "postprocess".
         if device.type == "cuda":
             torch.cuda.synchronize()
+        elif device.type == "mps":
+            torch.mps.synchronize()
     timings["forward"] = (time.perf_counter() - t0) * 1000.0
 
     t0 = time.perf_counter()
@@ -608,8 +652,11 @@ def _classify_impl(
 
     last_timings.clear()
     last_timings.update(timings)
-    parts = " ".join(f"{k}:{v:.0f}" for k, v in timings.items())
-    print(f"[classify] device={device.type} {parts}  total:{sum(timings.values()):.0f}ms", file=sys.stderr, flush=True)
+    # DEBUG, not INFO: this fires once per case sorted. The file handler keeps
+    # it, the console doesn't -- which is the split the two handlers exist for.
+    if log.isEnabledFor(logging.DEBUG):
+        parts = " ".join(f"{k}:{v:.0f}" for k, v in timings.items())
+        log.debug("device=%s %s  total:%.0fms", device.type, parts, sum(timings.values()))
 
     label = loaded.classes[top_idx] if 0 <= top_idx < len(loaded.classes) else ""
     return label, top_prob * 100.0
@@ -622,6 +669,53 @@ def current_device_label() -> str:
     except LocalInferenceError:
         return "n/a"
     return _device_cache.type if _device_cache is not None else "n/a"
+
+
+# Cached sysctl result for device_description(); the chip name can't change
+# while the process runs.
+_apple_chip: str | None = None
+
+
+def _apple_chip_name() -> str:
+    """The chip's marketing name ("Apple M4 Pro") — torch has no MPS name API."""
+    global _apple_chip
+    if _apple_chip is None:
+        import subprocess
+
+        try:
+            out = subprocess.run(
+                ["sysctl", "-n", "machdep.cpu.brand_string"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=True,
+            ).stdout.strip()
+        except Exception:
+            out = ""
+        _apple_chip = out or "Apple GPU"
+    return _apple_chip
+
+
+def device_description() -> str | None:
+    """Human-readable "where classify() runs", e.g. "CUDA · NVIDIA GeForce RTX 5060 Ti".
+
+    Reads only the already-picked module state — never imports torch and
+    never triggers the device probe or its benchmarks — so it is free and
+    safe to call on the UI thread (same constraint as `is_installed()`).
+    Returns None until the first classify() has picked a device.
+    """
+    device = _device_cache
+    if device is None:
+        return None
+    kind = getattr(device, "type", "cpu")
+    if kind == "cuda":
+        try:
+            return f"CUDA · {_torch_mod.cuda.get_device_name(0)}"
+        except Exception:
+            return "CUDA"
+    if kind == "mps":
+        return f"MPS · {_apple_chip_name()}"
+    return "CPU"
 
 
 def is_installed() -> bool:
