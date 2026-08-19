@@ -466,3 +466,15 @@ def test_the_monitor_records_why_the_link_dropped(window) -> None:
 
     assert drain_until(window, lambda: window.broker is None)
     assert any("device reports readiness" in line for _kind, _stamp, line in window.serial_monitor._lines)
+def test_macos_usb_adapters_sort_before_the_leftovers(window, monkeypatch) -> None:
+    """The USB tag match is case-insensitive: macOS names are lowercase."""
+    monkeypatch.setattr(
+        settings_serial.serial_broker,
+        "list_serial_ports",
+        lambda: ["/dev/cu.Bluetooth-Incoming-Port", "/dev/cu.usbmodem14201"],
+    )
+
+    section = build_serial_section(window)
+
+    ports = [section.port_combo.itemText(i) for i in range(section.port_combo.count())]
+    assert ports == [EMULATED_PORT, "/dev/cu.usbmodem14201", "/dev/cu.Bluetooth-Incoming-Port"]

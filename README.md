@@ -4,7 +4,7 @@
 [![Lint](https://github.com/sjseth/AI-Case-Sorter-Py/actions/workflows/lint.yml/badge.svg)](https://github.com/sjseth/AI-Case-Sorter-Py/actions/workflows/lint.yml)
 [![License: GPL v3+](https://img.shields.io/badge/License-GPLv3%2B-blue.svg)](LICENSE)
 
-A cross-platform (Windows + Linux) desktop app that drives a machine which
+A cross-platform (Windows + Linux + macOS) desktop app that drives a machine which
 **sorts spent brass cartridge casings by headstamp**. A camera photographs each
 case, an image classifier predicts the headstamp stamped on its base, and a
 serial-connected sorting machine drops the case into the correct bin.
@@ -20,7 +20,8 @@ signing in to the community is optional and only unlocks model sharing/downloads
 > hardware at your own risk and keep hands clear during operation. Provided
 > **as-is, with no warranty** (see [LICENSE](LICENSE)).
 
-<!-- TODO: add a screenshot or short GIF of the Sort dashboard here. -->
+![The Sort dashboard: the last captured headstamp on the left, a card per slot
+on the right, and the run controls along the foot](docs/images/ui-sort-dashboard.png)
 
 ---
 
@@ -287,8 +288,11 @@ and point `CASESORTER_API_CA_BUNDLE` at it.
 ## Using the app
 
 A first run, start to finish — every screen referenced here is described in
-[Features](#features) above, and the full operator guide is
-[`docs/guide/GUIDE.md`](docs/guide/GUIDE.md) (also `F1` inside the app).
+[Features](#features) above, and the full application guide is published at
+**<https://sjseth.github.io/AI-Case-Sorter-Py/>** ([Getting
+Started](https://sjseth.github.io/AI-Case-Sorter-Py/latest/getting-started/),
+the [User Guide](docs/guide/GUIDE.md) — also `F1` inside the app — and the
+whole thing as a PDF).
 
 1. **Launch it.** `./start.sh` / `start.bat` / the Windows installer's Start
    Menu entry — see [Install & run](#install--run). First launch takes a
