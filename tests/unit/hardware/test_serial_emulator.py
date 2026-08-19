@@ -50,3 +50,40 @@ def test_emulator_update_init_settings_pushes_each_key() -> None:
     time.sleep(0.1)
     assert "feedspeed:60" in seen
     assert "airdropenabled:1" in seen
+
+
+# ----- disconnect parity (issue #35) ------------------------------------------
+
+
+def test_simulate_disconnect_announces_once() -> None:
+    em = EmulatorBroker(response_delay_s=0.01)
+    em.try_open()
+    reasons: list[str] = []
+    em.on_disconnect.append(reasons.append)
+
+    em.simulate_disconnect("cable pulled")
+    em.simulate_disconnect("cable pulled again")
+
+    assert reasons == ["cable pulled"]
+    assert em.is_connected is False
+
+
+def test_stop_announces_nothing() -> None:
+    # Parity with SerialBroker: a stop we asked for is not a disconnect.
+    em = EmulatorBroker(response_delay_s=0.01)
+    em.try_open()
+    reasons: list[str] = []
+    em.on_disconnect.append(reasons.append)
+    em.stop()
+    assert reasons == []
+
+
+def test_a_pulled_cable_fails_the_next_sort_immediately() -> None:
+    em = EmulatorBroker(response_delay_s=0.01)
+    em.try_open()
+    em.simulate_disconnect()
+
+    started = time.monotonic()
+    assert em.sort_and_move(3) is False
+    # Would otherwise sit out the 20s sort timeout.
+    assert time.monotonic() - started < 1.0

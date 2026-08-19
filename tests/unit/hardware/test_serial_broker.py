@@ -705,6 +705,99 @@ def test_send_command_still_owns_its_newline(broker: SerialBroker, monkeypatch: 
     assert fake.written == [b"xf:0\n"]
 
 
+# ----- disconnect detection (issue #35) ---------------------------------------
+
+
+class _DyingSerial(_FakeSerial):
+    """A port that has gone away: every read and write raises."""
+
+    def __init__(self) -> None:
+        super().__init__(lines=[])
+
+    def readline(self) -> bytes:
+        raise serial_broker.serial.SerialException("device disconnected")
+
+    def write(self, data: bytes) -> int:
+        raise serial_broker.serial.SerialException("device disconnected")
+
+
+def test_a_failed_write_announces_the_disconnect(broker: SerialBroker, monkeypatch: pytest.MonkeyPatch) -> None:
+    broker.is_connected = True
+    monkeypatch.setattr(broker, "_sp", _DyingSerial())
+    reasons: list[str] = []
+    broker.on_disconnect.append(reasons.append)
+
+    broker.send_command("xf:0")
+
+    assert broker.is_connected is False
+    assert len(reasons) == 1
+    assert broker.port in reasons[0]
+
+
+def test_a_failed_read_announces_the_disconnect(broker: SerialBroker, monkeypatch: pytest.MonkeyPatch) -> None:
+    broker.is_connected = True
+    monkeypatch.setattr(broker, "_sp", _DyingSerial())
+    reasons: list[str] = []
+    broker.on_disconnect.append(reasons.append)
+    # One pass of the loop body: the failure sets is_connected False, which is
+    # what the second pass would see, so the announcement must not repeat.
+    thread = threading.Thread(target=broker._reader_loop, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 2.0
+    while not reasons and time.monotonic() < deadline:
+        time.sleep(0.01)
+    broker.stop()
+    thread.join(timeout=2.0)
+
+    assert reasons, "the reader thread never announced the dead port"
+    assert len(reasons) == 1
+
+
+def test_a_stop_we_asked_for_announces_nothing(broker: SerialBroker, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Closing the port makes the reader's next read fail too — that failure is
+    # the shutdown working, not a cable coming out.
+    broker.is_connected = True
+    monkeypatch.setattr(broker, "_sp", _DyingSerial())
+    reasons: list[str] = []
+    broker.on_disconnect.append(reasons.append)
+
+    broker.stop()
+    broker.send_command("xf:0")
+
+    assert broker.is_connected is False
+    assert reasons == []
+
+
+def test_a_pending_command_gives_up_the_moment_the_link_dies(broker: SerialBroker) -> None:
+    # The point of the hook: without it this waits out SORT_TIMEOUT_S and
+    # reports a timeout no different from a slow board's.
+    broker.is_connected = True
+    threading.Timer(0.05, lambda: broker._mark_disconnected("unplugged")).start()
+
+    started = time.monotonic()
+    assert broker._await_topic(broker.on_done, serial_broker.SORT_TIMEOUT_S) is False
+    assert time.monotonic() - started < 1.0
+
+
+def test_a_command_that_outlived_the_link_does_not_wait_it_out(broker: SerialBroker) -> None:
+    # The disconnect is announced once, on the transition. Land it between the
+    # write going out and the wait registering — the window a failed write
+    # can't cover, because that write succeeded — and there is nothing left to
+    # wake the wait, so the wait has to notice the dead link on its own.
+    broker.is_connected = True
+    broker._mark_disconnected("unplugged after the write went out")
+
+    started = time.monotonic()
+    assert broker._await_topic(broker.on_done, serial_broker.SORT_TIMEOUT_S) is False
+    assert time.monotonic() - started < 1.0
+
+
+def test_awaiting_leaves_no_handler_behind(broker: SerialBroker) -> None:
+    before = len(broker.on_disconnect)
+    broker._await_topic(broker.on_done, 0.01)
+    assert len(broker.on_disconnect) == before
+
+
 # ----- auto-connect probe candidates (#36 follow-up) ----------------------------
 #
 # macOS lists pseudo-ports (Bluetooth headsets, the debug console) that can

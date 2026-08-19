@@ -313,7 +313,17 @@ between them from the Sort page's template dropdown.
 - **`serial_broker.py`** — `SerialBroker`: ASCII command protocol over UART
   (default 9600 8N1). A **reader thread** parses responses and fans them out to
   callback lists (`on_done`/`on_ok`/`on_error`/`on_received`/…); a **ping thread**
-  keeps the link alive; a write lock serializes commands. Key commands: `xf:0`
+  keeps the link alive; a write lock serializes commands.
+  **A link that dies is announced, not inferred.** `_mark_disconnected` is the
+  one transition into `is_connected = False`: it fires `on_disconnect` exactly
+  once, and never for a `stop()` we asked for (which sets `_stop_event` first).
+  Both halves matter downstream — `_await_topic` gives up the moment it fires,
+  and won't start waiting at all once it has (`_link_lost`; the announcement
+  is a one-shot transition, so a wait registered *after* it has nothing left
+  to wake it, and a successful `try_open` is what clears the flag again),
+  and `send_command` returns False when the write never reached the wire, so a
+  dead port fails a feed immediately instead of waiting out `SORT_TIMEOUT_S`
+  and reporting a timeout no different from a slow board's (#35). Key commands: `xf:0`
   (feed one), `xf:<slot>` (force feed + sort), bare `<slot>` (sort imaged case),
   `sortto:<slot>` (move arm), `getconfig` (JSON board state), `version`, `stop`,
   `<key>:<value>` (set board param). `try_open()` does a version handshake.
@@ -342,7 +352,9 @@ between them from the Sort page's template dropdown.
   vocabulary derived from it, against a named upstream commit.
 - **`serial_emulator.py`** — `SerialEmulator`: drop-in fake mirroring the broker
   API (port name `"Emulated"`), responding after a timer delay. Enables running
-  and testing without hardware.
+  and testing without hardware — including a mid-run link loss, via
+  `simulate_disconnect()`, which is the only way to reach that path without
+  unplugging a real board.
 - **`camera.py`** — `Camera`: `cv2.VideoCapture` with a background **grab thread**
   keeping the latest frame; platform backends (CAP_DSHOW on Windows w/ optional
   pygrabber for friendly names + resolution probing, CAP_V4L2 on Linux,
@@ -364,6 +376,9 @@ between them from the Sort page's template dropdown.
   **auto-select trays**, **package/batch mode** (`_package_counts` under a lock),
   optional run-image storage, and feedback capture. Also `cycle_once()` (manual
   feed) and `test_once()` (feed+classify, no sort). Posts `run/*` and `test/*`.
+  A board command that doesn't complete is reported through `_board_error`,
+  which asks the broker whether the link is still up before blaming a timeout
+  — a dropped cable and a slow board otherwise read identically (#35).
 
 ### Classification (`sorter/ml/`)
 - **`classifier.py`** — `classify_active`: **the active model alone picks the
