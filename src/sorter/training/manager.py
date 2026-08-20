@@ -13,6 +13,13 @@ by line, and surfaces `[PROGRESS]` JSON markers as event-bus events:
 
 Cancellation: `cancel()` sends SIGTERM and after 5 s escalates to SIGKILL.
 On Windows, `terminate()` is used as the SIGTERM equivalent.
+
+Every line either pump sees is also written to `<data root>/logs/training-*.log`
+(issue #100). The progress window is the only other place this output exists,
+and it is gone the moment the window closes — which is a problem for the run
+that took four hours and now needs explaining to somebody else. Writing it is
+best-effort in the same sense `logging_setup` and `bootstrap` are: an
+unwritable data directory costs the file, never the run.
 """
 
 from __future__ import annotations
@@ -24,14 +31,42 @@ import subprocess
 import sys
 import threading
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .. import paths
 from ..control.events import EventBus
 from ..data.models import TrainingConfig
 
 _PROGRESS_PREFIX = "[PROGRESS] "
 _KILL_GRACE_S = 5.0
+# Training logs are per-run, so they accumulate. Keep the most recent few and
+# drop the rest — enough to cover "the one before the one that worked".
+LOG_PREFIX = "training-"
+LOG_SUFFIX = ".log"
+MAX_TRAINING_LOGS = 10
+
+
+def training_log_path(stamp: str) -> Path:
+    return paths.logs_dir() / f"{LOG_PREFIX}{stamp}{LOG_SUFFIX}"
+
+
+def training_logs(newest_first: bool = True) -> list[Path]:
+    """Every training log on disk. The stamp sorts lexicographically by time."""
+    directory = paths.logs_dir()
+    if not directory.exists():
+        return []
+    found = sorted(directory.glob(f"{LOG_PREFIX}*{LOG_SUFFIX}"))
+    return list(reversed(found)) if newest_first else found
+
+
+def _prune_training_logs() -> None:
+    for stale in training_logs()[MAX_TRAINING_LOGS:]:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
 
 
 @dataclass
@@ -109,6 +144,11 @@ class TrainingManager:
         self._lock = threading.Lock()
         self._completion_event = threading.Event()
         self._last_result: dict[str, Any] | None = None
+        # Where the current (or most recent) run's console went. None when the
+        # log could not be opened — see `_open_log`.
+        self.log_path: Path | None = None
+        self._log: Any = None
+        self._log_lock = threading.Lock()
 
     @property
     def is_running(self) -> bool:
@@ -122,6 +162,8 @@ class TrainingManager:
         cmd = build_command(job, python=python, script=script)
         env = dict(os.environ)
         env.update(job.extra_env)
+
+        self._open_log(cmd)
 
         proc = subprocess.Popen(
             cmd,
@@ -191,12 +233,55 @@ class TrainingManager:
     def last_result(self) -> dict[str, Any] | None:
         return self._last_result
 
+    # ----- the run's log file -------------------------------------------------
+
+    def _open_log(self, cmd: list[str]) -> None:
+        """Start a log for this run. Best-effort: a failure costs the file only."""
+        self.log_path = None
+        self._log = None
+        try:
+            paths.logs_dir().mkdir(parents=True, exist_ok=True)
+            _prune_training_logs()
+            path = training_log_path(datetime.now().strftime("%Y%m%d-%H%M%S"))
+            self._log = path.open("a", encoding="utf-8", errors="replace")
+            self.log_path = path
+        except OSError:
+            return
+        self._write_log(f"# training log — {datetime.now().isoformat(timespec='seconds')}")
+        self._write_log(f"# command: {' '.join(cmd)}")
+        # Announced on the bus as well, so the progress window shows the user
+        # where the file they are being told to send actually is.
+        self.bus.post("training/log", f"[SETUP] Log file: {path}")
+
+    def _write_log(self, line: str) -> None:
+        with self._log_lock:
+            handle = self._log
+            if handle is None:
+                return
+            try:
+                handle.write(line + "\n")
+                handle.flush()
+            except (OSError, ValueError):
+                # ValueError: written to after close, which a late pump line
+                # can do. Either way the run continues without a log.
+                self._log = None
+
+    def _close_log(self) -> None:
+        with self._log_lock:
+            handle, self._log = self._log, None
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError:
+                pass
+
     # ----- internal ----------------------------------------------------------
 
     def _pump_stdout(self, proc: subprocess.Popen) -> None:
         assert proc.stdout is not None
         for raw in proc.stdout:
             line = raw.rstrip("\r\n")
+            self._write_log(line)
             if line.startswith(_PROGRESS_PREFIX):
                 try:
                     payload = json.loads(line[len(_PROGRESS_PREFIX) :])
@@ -214,6 +299,7 @@ class TrainingManager:
         assert proc.stderr is not None
         for raw in proc.stderr:
             line = raw.rstrip("\r\n")
+            self._write_log(f"[stderr] {line}")
             self.bus.post("training/error", line)
 
     def _wait_for_exit(self, proc: subprocess.Popen) -> None:
@@ -223,6 +309,8 @@ class TrainingManager:
             if t is threading.current_thread():
                 continue
             t.join(timeout=2.0)
+        self._write_log(f"# exit code: {rc}{' (cancelled)' if self._cancel_requested else ''}")
+        self._close_log()
         if self._cancel_requested:
             self.bus.post("training/cancelled", {"return_code": rc})
         elif rc != 0:

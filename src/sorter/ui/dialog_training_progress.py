@@ -18,11 +18,13 @@ Two things it is careful about:
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (
     QDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -36,6 +38,10 @@ from PySide6.QtWidgets import (
 from ..control.events import EventBus
 
 CONSOLE_LINES = 2000
+DEFAULT_LOG_NAME = "training.log"
+# Parenthesised pattern for Qt, plain text for the GNOME portal that strips it
+# — same shape as `serial_monitor.TEXT_FILTER`, and for the same reason.
+LOG_FILTER = "Log files — *.log (*.log)"
 STARTING_TEXT = "Starting…"
 CLOSE_WHILE_RUNNING_TITLE = "Training is still running"
 CLOSE_WHILE_RUNNING_TEXT = (
@@ -97,6 +103,12 @@ class TrainingProgressDialog(QDialog):
         self.cancel_button.setObjectName("danger")
         self.cancel_button.clicked.connect(self.cancel)
         row.addWidget(self.cancel_button)
+        # "Send me the training log" is the usual next thing asked on Discord;
+        # the run's log is on disk either way (training.manager), this is the
+        # copy that ends up somewhere the user can find (issue #100).
+        self.save_button = QPushButton("Save log…", self)
+        self.save_button.clicked.connect(self.save_log)
+        row.addWidget(self.save_button)
         row.addStretch(1)
         self.close_button = QPushButton("Close", self)
         self.close_button.setEnabled(False)
@@ -124,6 +136,26 @@ class TrainingProgressDialog(QDialog):
 
     def console_text(self) -> str:
         return self.console.toPlainText()
+
+    def _choose_save_path(self) -> str:
+        """Broken out so a test can patch it instead of driving a real dialog —
+        the same seam ``serial_monitor.save_to_file`` uses."""
+        path, _filter = QFileDialog.getSaveFileName(
+            self, "Save training log", DEFAULT_LOG_NAME, f"{LOG_FILTER};;All files (*.*)"
+        )
+        return path
+
+    def save_log(self) -> None:
+        """Write the console, verbatim, wherever the user points."""
+        path = self._choose_save_path()
+        if not path:
+            return
+        try:
+            Path(path).write_text(self.console_text(), encoding="utf-8")
+        except OSError as exc:
+            self.append(f"[save failed] {exc}")
+            return
+        self.append(f"[saved] {path}")
 
     # ----- bus handlers -------------------------------------------------------
 

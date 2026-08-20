@@ -435,7 +435,11 @@ between them from the Sort page's template dropdown.
   **subprocess** (clean cancellation, no GIL fights), pumps stdout for
   `[PROGRESS] {json}` markers, and re-emits them as `training/*` events. SIGTERM
   → SIGKILL escalation on cancel. `build_command` builds the argv (list form, no
-  shell).
+  shell). Every line either pump sees is also written to
+  `<data root>/logs/training-<stamp>.log` (#100) — the progress window was the
+  only copy, and it dies with the window; `MAX_TRAINING_LOGS` keeps the last
+  few. Best-effort in the same sense as `launch.log`: an unwritable data
+  directory costs the file, never the run.
 - **`training/train_convnext.py`** — the worker script. Trains
   `convnext_{tiny,small,base,large}` via torchvision pretrained weights; AdamW +
   cosine LR, optional focal loss, label smoothing, stochastic depth, SWA, mixed
@@ -799,7 +803,11 @@ Themes panel in `app.py`. Dialogs are `dialog_*.py`.
   `config.json` beside it. Redaction happens at collection time, not at
   render: API key as set/not set, paths relative to the data root, the auth
   cache never read. Add a field to `collect_data` and the redaction rule goes
-  with it.
+  with it. The ZIP also carries the most recent `training-*.log` as
+  `training.log` (#100) — a raw file, so it gets its own rule: `_redact_text`
+  swaps the data root, the app root and the home directory for `<data>`,
+  `<app>` and `<home>` on the way in, because a log that kept absolute paths
+  would be the hole in the promise the report makes.
 - **Community model settings.** Entering Sort with a community model active
   fires one `fetch_model_settings` on `run_worker` (§4). What it can raise is
   deliberately quiet: a **status-bar "Model update: vN" button** in the
@@ -880,10 +888,11 @@ and must never be committed.
 │       ├── feedback_images/ # below-threshold feedback queue (folder == queue)
 │       ├── reports/         # evaluator HTML reports
 │       └── trainedmodel/    # <model_id>.pth checkpoint
-├── logs/                  # app + launcher + installer logs (§7, §8)
+├── logs/                  # app + launcher + installer + training logs (§7, §8)
 │   ├── casesorter.log       # the app's own; DEBUG, rotating 1 MB x 3
 │   ├── launch.log           # this launch; previous kept as launch.prev.log
-│   └── install-<stamp>.log  # one per install-windows.ps1 run
+│   ├── install-<stamp>.log  # one per install-windows.ps1 run
+│   └── training-<stamp>.log # one per training run; last few kept
 └── updates/               # staged app updates (§7)
     ├── pending/             # extracted tree awaiting the next launch
     ├── pending.json         # its metadata — a SIBLING, never inside pending/

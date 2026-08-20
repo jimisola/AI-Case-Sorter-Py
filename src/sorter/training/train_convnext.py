@@ -60,6 +60,77 @@ def _emit(event: str, **payload: Any) -> None:
     sys.stdout.flush()
 
 
+def _say(line: str = "") -> None:
+    """A console line for the training log.
+
+    Anything that isn't a `[PROGRESS]` marker is republished by
+    `training.manager` as `training/log`, which is what puts it in the progress
+    window and the run's log file. Plain `print` on purpose — this process is
+    the trainer, not the app, and its stdout *is* the log (CLAUDE.md §8).
+    """
+    print(line, flush=True)
+
+
+def _describe_device(device: Any) -> list[str]:
+    """The environment lines: what is doing the work, and with what.
+
+    Reported before a single batch runs, because the first thing anyone asks
+    about a training run that took four hours is which device it used
+    (issue #100) — and by then the answer has scrolled away or was never
+    printed at all.
+    """
+    import numpy
+    import torchvision  # ty: ignore[unresolved-import]
+
+    lines = [
+        f"[SETUP] PyTorch {torch.__version__} (torchvision {torchvision.__version__}, numpy {numpy.__version__})",
+        f"[SETUP] CUDA available: {torch.cuda.is_available()}",
+    ]
+    if device.type == "cuda":
+        index = device.index or 0
+        major, minor = torch.cuda.get_device_capability(index)
+        total_gb = torch.cuda.get_device_properties(index).total_memory / (1024**3)
+        lines += [
+            f"[SETUP] CUDA runtime: {torch.version.cuda}, cuDNN {torch.backends.cudnn.version()}",
+            "[INFO] Device: CUDA",
+            f"[INFO] Detected GPU: {torch.cuda.get_device_name(index)} ({total_gb:.1f} GB, compute sm_{major}{minor})",
+        ]
+    else:
+        lines += [
+            "[INFO] Device: CPU",
+            "[INFO] No CUDA device — training on the CPU is much slower.",
+        ]
+    return lines
+
+
+def _describe_config(args: argparse.Namespace) -> list[str]:
+    """The settings this run is actually using, as the Windows app reports them.
+
+    Read off the parsed args rather than the Train page's dialog: what reaches
+    the trainer is what ran, and a mismatch between the two is exactly the kind
+    of thing this block exists to make visible.
+    """
+    settings = [
+        ("Model", args.model_name),
+        ("Batch Size", args.batch_size),
+        ("Initial LR", args.lr),
+        ("Weight Decay", args.weight_decay),
+        ("Dropout", args.dropout),
+        ("Validation Split", args.val_split),
+        ("Full Dataset Training", bool(args.trainall)),
+        ("Image Size", f"{args.imgsize}x{args.imgsize}"),
+        ("Freeze Backbone", bool(args.freeze_backbone)),
+        ("Focal Loss", f"gamma {args.focal_gamma}" if args.use_focal_loss else False),
+        (
+            "Stochastic Depth",
+            args.stochastic_depth_prob if args.stochastic_depth_prob >= 0 else "torchvision default",
+        ),
+        ("SWA", f"from {args.swa_start:.0%} ({args.swa_mode})" if args.use_swa else False),
+        ("Target Epochs", args.epochs),
+    ]
+    return ["[INFO] Configuration:"] + [f"       {name}: {value}" for name, value in settings]
+
+
 def checkpoint_env() -> dict[str, str]:
     """The versions this checkpoint is being built with (issue #77).
 
@@ -250,7 +321,17 @@ def main() -> int:
     model_ctor, model_weights = _get_model_weights(args.model_name)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    # Header first: everything below can fail, and a log that opens with the
+    # failure tells nobody what it was running on (issue #100).
+    for line in _describe_device(device):
+        _say(line)
+    _say()
+    for line in _describe_config(args):
+        _say(line)
+    _say()
+
     dataset = FilenameLabelDataset(args.image_dir)
+    _say(f"[INFO] Loaded {len(dataset)} images. Classes: {len(dataset.classes)}")
     _emit(
         "start",
         epochs=args.epochs,
@@ -267,9 +348,14 @@ def main() -> int:
     n_train = len(dataset) - n_val
 
     if n_val == 0 or args.trainall:
+        if args.trainall:
+            _say("[INFO] --trainall specified -> using the full dataset for training")
+        else:
+            _say("[INFO] Validation split rounds to zero images -> training on everything")
         train_sub = dataset
         val_sub = None
     else:
+        _say(f"[INFO] Split: {n_train} training / {n_val} validation images")
         train_sub, val_sub = random_split(
             dataset,
             [n_train, n_val],
@@ -316,6 +402,8 @@ def main() -> int:
     if device.type == "cuda" and torch.cuda.get_device_capability(0)[0] >= 7:
         model = model.to(memory_format=torch.channels_last)
         use_channels_last = True
+    _say(f"[INFO] Data loader workers: {num_workers}")
+    _say(f"[INFO] channels_last memory format: {'enabled' if use_channels_last else 'disabled'}")
 
     if args.freeze_backbone:
         for name, param in model.named_parameters():
@@ -330,8 +418,10 @@ def main() -> int:
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
     if args.use_focal_loss:
         criterion = FocalLoss(gamma=args.focal_gamma, label_smoothing=0.1)
+        _say(f"[INFO] Using FocalLoss (gamma {args.focal_gamma}) with label smoothing 0.1")
     else:
         criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+        _say("[INFO] Using CrossEntropyLoss with label smoothing 0.1")
 
     scaler = torch.amp.GradScaler(enabled=(device.type == "cuda"))
 
