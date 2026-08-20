@@ -283,8 +283,18 @@ the wrong bin. Fix the cable, then reconnect from
 Without a board connected, Start and Manual feed are greyed out and say so.
 Otherwise starting is refused, with a message explaining why, if the AI
 Config API key or model name is unset, the active model's checkpoint is
-missing, PyTorch isn't installed yet for a local model, or a [moderator
+missing, PyTorch isn't installed yet for a local model, the model needs a
+newer PyTorch than this machine has (see below), or a [moderator
 note](#community-model-notices) is waiting to be read.
+
+**"This model needs a newer PyTorch."** A model can only be read by the
+version of PyTorch it was trained with, or a newer one — never an older one.
+So a model trained on someone else's up-to-date machine, or on yours before
+an older PyTorch was installed, may refuse to load here. The message names
+both versions: the one the model needs and the one you have. Update PyTorch
+when the app offers to, and it will load. Nothing about this is recoverable
+by retrying, and a model that says this has not been damaged — it is simply
+newer than the software trying to open it.
 
 ### Package mode
 

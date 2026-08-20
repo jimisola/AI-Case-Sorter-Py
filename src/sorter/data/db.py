@@ -40,7 +40,7 @@ from sqlite_utils.migrations import Migrations
 
 from .. import paths
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 # Split out of SCHEMA_DDL because the v3 -> v4 ladder step replays it verbatim;
 # one copy means the step cannot drift from the schema.
@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS models (
   feedback_loop_confidence_floor INTEGER NOT NULL DEFAULT 95,
   feedback_loop_upload_mode TEXT NOT NULL DEFAULT 'Manual',
   model_path TEXT,
+  checkpoint_env_json TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -192,6 +193,7 @@ _LATE_MODEL_COLUMNS: tuple[tuple[str, str], ...] = (
     ("feedback_loop_confidence_floor", "INTEGER NOT NULL DEFAULT 95"),
     ("feedback_loop_upload_mode", "TEXT NOT NULL DEFAULT 'Manual'"),
     ("model_path", "TEXT"),
+    ("checkpoint_env_json", "TEXT"),
     # SQLite rejects ADD COLUMN with a non-constant default on a populated
     # table, so the two timestamps cannot carry the DDL's
     # `NOT NULL DEFAULT (datetime('now'))`. They arrive nullable and are
@@ -276,6 +278,18 @@ def _models_columns(db: sqlite_utils.Database) -> None:
     Presence-guarded per column, so this single step repairs every historical
     shape — including a database stamped `user_version = SCHEMA_VERSION` by a
     pre-ladder build while still carrying the original four-column table.
+    """
+    _add_missing_model_columns(db.conn)
+
+
+@MIGRATIONS(name="0006_models_checkpoint_env")
+def _models_checkpoint_env(db: sqlite_utils.Database) -> None:
+    """`checkpoint_env_json`: the torch/torchvision/numpy a model needs (#77).
+
+    A separate step rather than an edit to `_LATE_MODEL_COLUMNS` alone: an
+    install that has already recorded `0005_models_columns` never reruns it,
+    so a new column there would reach a fresh database and nothing else. The
+    shared helper is idempotent, so replaying it here is free.
     """
     _add_missing_model_columns(db.conn)
 
