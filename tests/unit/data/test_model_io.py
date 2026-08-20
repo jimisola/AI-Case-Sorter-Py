@@ -17,7 +17,7 @@ from sorter.data.model_io import (
     model_from_export_dict,
     read_manifest,
 )
-from sorter.data.models import Model
+from sorter.data.models import CheckpointEnv, Model
 from sorter.data.repository import CartridgeRepo, HeadstampRepo, ModelRepo, SettingsRepo
 
 
@@ -644,3 +644,61 @@ def test_find_update_target(tmp_path: Path) -> None:
     )
     target = find_update_target(community, db=db)
     assert target is not None and target.id == model_id
+
+
+# ----- the checkpoint's PyTorch floor (issue #77) -----------------------------
+
+
+def test_the_floor_survives_the_zip_round_trip(tmp_path: Path) -> None:
+    db = _seed_db(tmp_path)
+    cart = CartridgeRepo(db).create("45ACP")
+    model = ModelRepo(db).create(Model(name="Mine", cartridge_id=cart.id, model_mode="convnext_small"))
+    model.checkpoint_env = CheckpointEnv(torch="2.13.0", torchvision="0.28.0", numpy="2.3.1")
+    ModelRepo(db).update(model)
+
+    zip_path = tmp_path / "export.zip"
+    export_model(zip_path, _get_model(db, model.id), cartridge_name="45ACP", headstamps=[])
+
+    manifest = read_manifest(zip_path)
+    assert manifest["ModelInfo"]["checkpoint_env"]["torch"] == "2.13.0"
+
+    _, imported_id = import_model(
+        zip_path,
+        db=db,
+        images_target_dir=tmp_path / "i",
+        models_target_dir=tmp_path / "m",
+        update_existing=False,
+    )
+    assert _get_model(db, imported_id).checkpoint_env.torch == "2.13.0"
+
+
+def test_an_archive_that_records_no_floor_imports_as_unknown(tmp_path: Path) -> None:
+    """Every pre-#77 export, and everything the legacy app writes."""
+    db = _seed_db(tmp_path)
+    zip_path = tmp_path / "old.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(_import_manifest()))
+
+    _, model_id = import_model(zip_path, db=db, images_target_dir=tmp_path / "i", models_target_dir=tmp_path / "m")
+
+    assert _get_model(db, model_id).checkpoint_env.is_empty()
+
+
+def test_an_update_that_records_no_floor_keeps_the_installed_one(tmp_path: Path) -> None:
+    """The floor describes a checkpoint, so it follows `model_path`'s rule: an
+    images-only or pre-#77 update must not erase what is already known."""
+    db = _seed_db(tmp_path)
+    community = _community_zip(tmp_path / "v1.zip")
+    _, model_id = import_model(
+        community,
+        db=db,
+        images_target_dir=tmp_path / "i",
+        models_target_dir=tmp_path / "m",
+    )
+    installed = _get_model(db, model_id)
+    installed.checkpoint_env = CheckpointEnv(torch="2.13.0")
+    ModelRepo(db).update(installed)
+
+    import_model(community, db=db, images_target_dir=tmp_path / "i", models_target_dir=tmp_path / "m")
+
+    assert _get_model(db, model_id).checkpoint_env.torch == "2.13.0"
