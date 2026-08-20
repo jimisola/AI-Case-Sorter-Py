@@ -14,6 +14,19 @@ so the parent is bound once and call sites read::
 Passing the caller itself as ``proceed`` is the point: the gate re-runs on the
 second pass, finds torch present, and falls through to the work.
 
+A second rule sits on top of presence, and it is a security floor rather than a
+capability one: **a model that came from somewhere else may not be loaded by a
+torch below** ``local_inference.MIN_TORCH_VERSION``. CVE-2026-24747 lets a
+crafted ``.pth`` defeat the ``weights_only=True`` unpickler that ``_load``
+relies on to make an untrusted checkpoint safe, so for a community download or
+a ZIP import the gate blocks until the user upgrades. For a model the user
+trained here the upgrade is *offered* and declining is remembered for the
+session — their own checkpoint is not an attack, and a multi-GB download should
+not stand between them and sorting their own brass.
+
+That asymmetry is why callers pass ``model``: the gate decides block-vs-offer
+from ``models.is_foreign_model``, so no call site has to encode the policy.
+
 Main thread only — it opens a modal. Never call it from a worker.
 """
 
@@ -22,6 +35,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from ..data.models import Model, is_foreign_model
 from ..ml import local_inference
 from .dialog_install_torch import TorchInstallDialog
 
@@ -63,6 +77,11 @@ class TorchGate:
         self.dialog_factory = dialog_factory or TorchInstallDialog
         self.dialog: Any = None
         self._offered: set[str] = set()
+        # Set when the user declines the *optional* upgrade offer, so their own
+        # models' workflow is interrupted once per session rather than on every
+        # Start. Never consulted for a foreign model — that path has no
+        # "not now".
+        self._upgrade_declined = False
 
     def __call__(
         self,
@@ -70,6 +89,7 @@ class TorchGate:
         *,
         reason: str | None = None,
         on_cancel: Callable[[], None] | None = None,
+        model: Model | None = None,
     ) -> bool:
         """True when torch is already there and the caller should carry on.
 
@@ -77,13 +97,18 @@ class TorchGate:
         runs if and only if the install succeeds. The caller must return
         immediately and do nothing else — the user may still cancel.
 
-        Uses ``is_installed()`` (a ``find_spec`` probe), not ``is_available()``,
-        so this never imports torch on the UI thread.
+        ``model`` is the model the action will load; it selects the policy for
+        an installed-but-outdated torch (see the module docstring). Omitting it
+        is the conservative choice — unknown provenance is treated as foreign.
+
+        Uses ``is_installed()`` (a ``find_spec`` probe) and distribution
+        metadata, not ``is_available()``, so this never imports torch on the UI
+        thread.
         """
-        if local_inference.is_installed():
-            return True
-        self._open(proceed, reason=reason, on_cancel=on_cancel)
-        return False
+        if not local_inference.is_installed():
+            self._open(proceed, reason=reason, on_cancel=on_cancel)
+            return False
+        return self._version_ok(proceed, on_cancel=on_cancel, model=model)
 
     def offer(
         self,
@@ -91,18 +116,65 @@ class TorchGate:
         *,
         reason: str | None = None,
         key: str = "default",
+        model: Model | None = None,
     ) -> bool:
         """Offer the install without making it a precondition.
 
-        Returns True when the caller should carry on now — torch is present, or
-        the user already answered this session. When it does open the dialog,
-        ``proceed`` is re-entered on *both* success and cancel, which is what
-        makes declining cost only what torch would have added.
+        Returns True when the caller should carry on now — torch is present and
+        new enough, or the user already answered this session. When it does open
+        the dialog, ``proceed`` is re-entered on *both* success and cancel, which
+        is what makes declining cost only what torch would have added.
         """
-        if key in self._offered or local_inference.is_installed():
+        if local_inference.is_installed():
+            return self._version_ok(proceed, on_cancel=proceed, model=model)
+        if key in self._offered:
             return True
         self._offered.add(key)
         self._open(proceed, reason=reason, on_cancel=proceed)
+        return False
+
+    def _version_ok(
+        self,
+        proceed: Callable[[], None],
+        *,
+        on_cancel: Callable[[], None] | None,
+        model: Model | None,
+    ) -> bool:
+        """Presence is settled; decide whether *this* torch may load ``model``.
+
+        Blocks for a checkpoint that is someone else's, offers for one the user
+        trained here. Both open the same install dialog — the difference is
+        only what a cancel does.
+        """
+        if local_inference.meets_min_version():
+            return True
+        have = local_inference.installed_version() or "an older version"
+        floor = local_inference.MIN_TORCH_VERSION
+        if model is None or is_foreign_model(model):
+            self._open(
+                proceed,
+                reason=(
+                    f"Update PyTorch to use this model — you have {have}, and loading a "
+                    f"downloaded or imported model needs {floor} or newer (security fix)"
+                ),
+                on_cancel=on_cancel,
+            )
+            return False
+        if self._upgrade_declined:
+            return True
+
+        def _decline() -> None:
+            self._upgrade_declined = True
+            (on_cancel or proceed)()
+
+        self._open(
+            proceed,
+            reason=(
+                f"A PyTorch update is available — you have {have}. {floor} or newer is "
+                "required before loading models from the community, and fixes a security issue"
+            ),
+            on_cancel=_decline,
+        )
         return False
 
     def _open(
@@ -112,9 +184,16 @@ class TorchGate:
         reason: str | None,
         on_cancel: Callable[[], None] | None,
     ) -> Any:
+        def _installed() -> None:
+            # Any completed install clears the decline: whatever the user was
+            # putting off, they have now done it, and leaving the flag set
+            # would outlive the condition it describes.
+            self._upgrade_declined = False
+            proceed()
+
         dialog = self.dialog_factory(
             self.parent,
-            on_success=proceed,
+            on_success=_installed,
             on_cancel=on_cancel,
             reason=reason,
         )
@@ -133,6 +212,11 @@ def ensure_torch(
     *,
     reason: str | None = None,
     on_cancel: Callable[[], None] | None = None,
+    model: Model | None = None,
 ) -> bool:
-    """One-shot form, for a call site that holds no gate."""
-    return TorchGate(parent)(proceed, reason=reason, on_cancel=on_cancel)
+    """One-shot form, for a call site that holds no gate.
+
+    A fresh gate has no memory, so a declined upgrade offer does not stick
+    here — hold a ``TorchGate`` if that matters.
+    """
+    return TorchGate(parent)(proceed, reason=reason, on_cancel=on_cancel, model=model)

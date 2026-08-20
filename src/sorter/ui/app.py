@@ -2189,7 +2189,11 @@ class QtMainWindow(QMainWindow):
             self.notify("Model not ready", problem)
             return None
         if classifier.uses_local_inference(self.db) and not self.ensure_torch(
-            self.start_run, reason="Sorting needs PyTorch"
+            self.start_run,
+            reason="Sorting needs PyTorch",
+            # The model decides block-vs-offer on an outdated torch, so the
+            # gate needs to know whose checkpoint is about to be loaded.
+            model=classifier.active_model(self.db),
         ):
             # The gate re-enters start_run after a successful install.
             return None

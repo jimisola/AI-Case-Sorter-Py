@@ -496,17 +496,27 @@ class ModelEvaluatorDialog(QDialog):
 
     def _ensure_torch(self) -> bool:
         if self.ensure_torch is not None:
-            return bool(self.ensure_torch(self, self.run_evaluation, reason=TORCH_REASON))
+            # The window's gate is bound to its own parent already, so it takes
+            # the continuation alone. `model` is what decides whether an
+            # outdated torch blocks here (a downloaded model) or merely offers.
+            return bool(self.ensure_torch(self.run_evaluation, reason=TORCH_REASON, model=self.model))
         from ..ml import local_inference
 
         # `is_installed` is the free find_spec probe — never `is_available`,
         # which imports torch and runs the device benchmark on this thread.
-        if local_inference.is_installed():
+        if local_inference.is_installed() and local_inference.meets_min_version():
             return True
-        self.notify(
-            "PyTorch required",
-            "Evaluating a local model needs PyTorch. Install it (pip install .[ml]) and try again.",
-        )
+        if local_inference.is_installed():
+            self.notify(
+                "PyTorch too old",
+                f"Evaluating a model needs PyTorch {local_inference.MIN_TORCH_VERSION} or newer "
+                f"(security fix); this environment has {local_inference.installed_version()}.",
+            )
+        else:
+            self.notify(
+                "PyTorch required",
+                "Evaluating a local model needs PyTorch. Install it (pip install .[ml]) and try again.",
+            )
         return False
 
     def cancel(self) -> None:
