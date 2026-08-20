@@ -259,6 +259,16 @@ NOTES_GATE_TEXT = (
 EMPTY_STATE_TITLE = "Nothing connected yet"
 EMPTY_STATE_HINT = "Connect a board and a camera to start sorting."
 
+# A run is stopped, not paused, when the link drops (issue #35): a reconnect
+# mid-cycle leaves the wheel's position and the drop pipeline unknown, and
+# resuming from there is how a case lands in the wrong bin.
+SERIAL_LOST_TITLE = "Serial disconnected"
+SERIAL_LOST_TEXT = (
+    "The board stopped responding, so the run was stopped.\n\n"
+    "Check the cable and the board's power, then reconnect from "
+    "Settings → Serial."
+)
+
 # Persisted window/session state (JL, increment 14): dock layout + the model
 # table's column widths, the same _load_setting/_save_setting pattern used
 # for the theme choice.
@@ -374,6 +384,7 @@ class QtMainWindow(QMainWindow):
         self.bus.subscribe("run/assignment_changed", lambda _p: self._refresh_sort_grid())
         self.bus.subscribe("run/package_full", self._on_package_full)
         self.bus.subscribe("run/package_halt", self._on_package_halt)
+        self.bus.subscribe("serial/disconnected", self._on_serial_disconnected)
         # Headstamps, templates and the Train activity are all scoped to the
         # active model, so a mode switch re-reads every one of them.
         self.bus.subscribe("mode/changed", lambda _p: self._on_mode_changed())
@@ -1994,6 +2005,11 @@ class QtMainWindow(QMainWindow):
             return
         broker.on_received.append(lambda line: self.bus.post("serial/rx", line))
         broker.on_sent.append(lambda line: self.bus.post("serial/tx", line))
+        # Fires on the reader thread (or a failed writer's), so it goes through
+        # the bus like everything else rather than touching a widget directly.
+        on_disconnect = getattr(broker, "on_disconnect", None)
+        if isinstance(on_disconnect, list):
+            on_disconnect.append(lambda reason: self.bus.post("serial/disconnected", reason))
         broker._bus_listeners_attached = True
 
     def _after_connect(self, broker: Any, port: str, *, source: str = "auto") -> None:
@@ -2077,6 +2093,41 @@ class QtMainWindow(QMainWindow):
             on_done=_done,
             on_error=lambda exc: self.set_status(f"Connect error: {exc}"),
         )
+
+    def _on_serial_disconnected(self, reason: Any = None) -> None:
+        """The link died on its own: say so, drop the board, stop the run.
+
+        Nothing here reconnects. The board's arm position and the wheel's
+        pipeline are only knowable while the link is up, so recovery is an
+        explicit reconnect (which re-handshakes through ``try_open``), not a
+        silent one — see ``SERIAL_LOST_TEXT``.
+        """
+        detail = str(reason or "link lost")
+        port = str(getattr(self.broker, "port", "") or self.config.serial.get("port") or "")
+        self.bus.post("serial/note", f"disconnected — {detail}")
+        was_running = self._is_running
+
+        controller, self.run_controller = self.run_controller, None
+        if controller is not None:
+            controller.stop()
+        broker, self.broker = self.broker, None
+        if broker is not None:
+            try:
+                broker.stop()
+            except Exception:
+                pass
+
+        self._set_serial_indicator(
+            f"Serial: disconnected ({port})" if port else "Serial: disconnected",
+            connected=False,
+        )
+        self._update_run_buttons()
+        self.set_status(f"Serial disconnected — {detail}")
+        if was_running:
+            self.beep()
+            # Same shape as the package halt: a modal, queued out of the drain
+            # so it can't re-enter it.
+            QTimer.singleShot(0, self, lambda: self.notify(SERIAL_LOST_TITLE, SERIAL_LOST_TEXT))
 
     # ----- run ----------------------------------------------------------------
 
