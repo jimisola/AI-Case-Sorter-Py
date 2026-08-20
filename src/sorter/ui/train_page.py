@@ -474,7 +474,9 @@ class TrainPage(QWidget):
         # the normal path here, not an error.
         if not classifier.has_local_checkpoint(model):
             return True
-        if local_inference.is_installed():
+        # An outdated torch is prompted for too — the checkpoint about to be
+        # loaded is the user's own, so the gate makes it an offer.
+        if local_inference.is_installed() and local_inference.meets_min_version():
             return True
         self._torch_prompt_shown = True
         ensure_torch = getattr(self._win, "ensure_torch", None)
@@ -486,6 +488,8 @@ class TrainPage(QWidget):
             self.feed(sort_label=sort_label)
 
         kwargs: dict[str, Any] = {"reason": "Predicting labels needs PyTorch"}
+        if _accepts_kwarg(ensure_torch, "model"):
+            kwargs["model"] = model
         # A cancel has to re-enter the feed, so pass `on_cancel` when the gate
         # takes one; without it the flag alone makes the next Feed proceed.
         if _accepts_kwarg(ensure_torch, "on_cancel"):
@@ -709,9 +713,13 @@ class TrainPage(QWidget):
         # Torch is ~2 GB and isn't in the base venv; training is the one thing
         # on this page that genuinely can't proceed without it.
         ensure_torch = getattr(self._win, "ensure_torch", None)
-        if ensure_torch is not None and not ensure_torch(self.start_training, reason="Training needs PyTorch"):
-            return
-        if ensure_torch is None and not local_inference.is_installed():
+        if ensure_torch is not None:
+            kwargs: dict[str, Any] = {"reason": "Training needs PyTorch"}
+            if _accepts_kwarg(ensure_torch, "model"):
+                kwargs["model"] = model
+            if not ensure_torch(self.start_training, **kwargs):
+                return
+        elif not local_inference.is_installed():
             self._win.notify("PyTorch required", "Training needs PyTorch, which isn't installed yet.")
             return
 

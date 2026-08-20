@@ -1,7 +1,9 @@
 """In-process fake broker so the rest of the stack runs without hardware.
 
 Mirrors the public surface of SerialBroker — every command logs and fires
-on_done after ~100ms.
+on_done after ~100ms. That includes `on_disconnect`, which `simulate_disconnect`
+is here to raise: a mid-run link loss is otherwise only reachable by unplugging
+real hardware.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ class EmulatorBroker:
         self.on_response: list[Callable[[str], None]] = []
         self.on_received: list[Callable[[str], None]] = []
         self.on_sent: list[Callable[[str], None]] = []
+        self.on_disconnect: list[Callable[[str], None]] = []
 
     # ----- lifecycle ----------------------------------------------------------
 
@@ -47,9 +50,30 @@ class EmulatorBroker:
     def close(self) -> None:
         self.stop()
 
+    def simulate_disconnect(self, reason: str = "emulated disconnect") -> None:
+        """Pull the emulated cable — the one thing `stop()` deliberately isn't.
+
+        A disconnect only means something when nobody asked for it, so the
+        broker announces it and a `stop()` doesn't. Mirroring that here is what
+        makes the mid-run path testable with no hardware (issue #35).
+        """
+        if not self.is_connected:
+            return
+        self.is_connected = False
+        for cb in list(self.on_disconnect):
+            try:
+                cb(reason)
+            except Exception:
+                pass
+
     # ----- protocol -----------------------------------------------------------
 
-    def send_command(self, command: str) -> None:
+    def send_command(self, command: str) -> bool:
+        # A closed port swallows writes in SerialBroker; so does a pulled one
+        # here, and the False is what stops a caller waiting for an answer that
+        # is never coming.
+        if not self.is_connected:
+            return False
         cmd = command.rstrip("\n")
         for cb in list(self.on_sent):
             try:
@@ -61,6 +85,7 @@ class EmulatorBroker:
         timer = threading.Timer(self._response_delay_s, self._fire_response_for, args=(cmd,))
         timer.daemon = True
         timer.start()
+        return True
 
     def send_raw(self, text: str) -> None:
         """Parity with SerialBroker.send_raw — the terminator is the caller's."""
@@ -124,19 +149,29 @@ class EmulatorBroker:
         that window.
         """
         done = threading.Event()
+        hit = False
 
         def _hit(_payload: str) -> None:
+            nonlocal hit
+            hit = True
+            done.set()
+
+        def _abandon(_reason: str) -> None:
             done.set()
 
         handlers.append(_hit)
+        self.on_disconnect.append(_abandon)
         try:
-            self.send_command(command)
-            return done.wait(timeout=timeout_s)
+            if not self.send_command(command):
+                return False
+            done.wait(timeout=timeout_s)
+            return hit
         finally:
-            try:
-                handlers.remove(_hit)
-            except ValueError:
-                pass
+            for target, handler in ((handlers, _hit), (self.on_disconnect, _abandon)):
+                try:
+                    target.remove(handler)
+                except ValueError:
+                    pass
 
     def feed_one(self) -> bool:
         return self._send_and_await("xf:0", self.on_done, 2.0)
