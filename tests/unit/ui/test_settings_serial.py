@@ -16,7 +16,7 @@ pytest.importorskip("PySide6")
 
 from sorter.data.config import Config
 from sorter.hardware.serial_emulator import EMULATED_PORT, EmulatorBroker
-from sorter.ui import settings_serial
+from sorter.ui import app, settings_serial
 from sorter.ui.settings_serial import (
     AIRDROP_FIELDS,
     INIT_FIELDS,
@@ -407,6 +407,65 @@ def test_a_settings_baud_change_reaches_the_monitor_picker(window, config) -> No
 
     assert config.serial["baud"] == 57600
     assert monitor.baud_combo.currentText() == "57600"
+
+
+# ----- a link that drops on its own (issue #35) -------------------------------
+
+
+def test_a_dropped_link_drops_the_board_and_says_so(window) -> None:
+    section = build_serial_section(window)
+    _connect_emulated(window, section)
+
+    window.broker.simulate_disconnect("cable pulled")
+
+    assert drain_until(window, lambda: window.broker is None)
+    assert window.run_controller is None
+    assert window._serial_state[1] is False
+    assert "disconnected" in window._serial_state[0].lower()
+    # Recovery is an explicit reconnect, so the page has to offer one.
+    assert not section.disconnect_button.isEnabled()
+    assert section.connect_button.isEnabled()
+
+
+def test_a_dropped_link_mid_run_stops_it_and_explains(qapp, window, monkeypatch) -> None:
+    monkeypatch.setattr(window, "beep", lambda: None)
+    notices: list[tuple[str, str]] = []
+    window.notify = lambda title, text: notices.append((title, text))
+    section = build_serial_section(window)
+    _connect_emulated(window, section)
+    window._set_running(True)
+
+    window.broker.simulate_disconnect("cable pulled")
+
+    assert drain_until(window, lambda: window.broker is None)
+    qapp.processEvents()  # the dialog is queued out of the drain
+    assert notices and notices[0][0] == app.SERIAL_LOST_TITLE
+    assert "Settings → Serial" in notices[0][1]
+
+
+def test_an_idle_disconnect_does_not_raise_a_dialog(qapp, window, monkeypatch) -> None:
+    # Nothing was in motion, and the indicator already carries the news.
+    monkeypatch.setattr(window, "beep", lambda: None)
+    notices: list[tuple[str, str]] = []
+    window.notify = lambda title, text: notices.append((title, text))
+    section = build_serial_section(window)
+    _connect_emulated(window, section)
+
+    window.broker.simulate_disconnect()
+
+    assert drain_until(window, lambda: window.broker is None)
+    qapp.processEvents()
+    assert notices == []
+
+
+def test_the_monitor_records_why_the_link_dropped(window) -> None:
+    section = build_serial_section(window)
+    _connect_emulated(window, section)
+
+    window.broker.simulate_disconnect("device reports readiness but returned no data")
+
+    assert drain_until(window, lambda: window.broker is None)
+    assert any("device reports readiness" in line for _kind, _stamp, line in window.serial_monitor._lines)
 
 
 def test_macos_usb_adapters_sort_before_the_leftovers(window, monkeypatch) -> None:

@@ -275,6 +275,16 @@ right:
 - **Manual feed** runs exactly one cycle without starting the loop, useful
   for testing a single case.
 
+If the board stops responding while a run is going — the USB cable knocked
+out, the board losing power, the adapter re-enumerating — the run **stops**
+and a message says so. The serial indicator in the status bar turns red at
+the same moment, and the [Serial Monitor](#serial-monitor) records what went
+wrong. The app does not reconnect by itself and does not offer to resume:
+once the link is gone, where the wheel is and which case is about to drop
+are no longer known, and carrying on from a guess is how a case ends up in
+the wrong bin. Fix the cable, then reconnect from
+[Settings → Serial](#serial) and press Start again.
+
 Without a board connected, Start and Manual feed are greyed out and say so.
 Otherwise starting is refused, with a message explaining why, if the AI
 Config API key or model name is unset, the active model's checkpoint is
