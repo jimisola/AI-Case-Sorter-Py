@@ -30,6 +30,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from sorter import paths
+from sorter.data.models import Model
 from sorter.ml import local_inference
 from sorter.ml.gpu_detect import GpuInfo
 from sorter.ui import torch_gate
@@ -93,6 +94,14 @@ def no_torch(monkeypatch):
 
 
 @pytest.fixture
+def outdated_torch(monkeypatch):
+    """Torch present, but below the CVE floor — the other half of the gate."""
+    monkeypatch.setattr(local_inference, "is_installed", lambda: True)
+    monkeypatch.setattr(local_inference, "installed_version", lambda: "2.9.1")
+    monkeypatch.setattr(local_inference, "meets_min_version", lambda *_a, **_k: False)
+
+
+@pytest.fixture
 def dialog_factory(qapp):
     """Build dialogs with a stubbed GPU probe; close them all at teardown."""
     dialogs: list[TorchInstallDialog] = []
@@ -125,15 +134,18 @@ def test_installed_torch_short_circuits_without_a_dialog(monkeypatch, fake_dialo
 
 
 def test_missing_torch_opens_the_dialog_and_returns_false(no_torch, fake_dialogs) -> None:
+    calls: list[int] = []
     gate = TorchGate("parent-window", dialog_factory=FakeDialog)
-    proceed = lambda: None  # noqa: E731
 
-    assert gate(proceed, reason="Sorting needs PyTorch") is False
+    assert gate(lambda: calls.append(1), reason="Sorting needs PyTorch") is False
     (dialog,) = fake_dialogs
     assert dialog.opened is True
     assert dialog.parent == "parent-window"
-    assert dialog.on_success is proceed
     assert dialog.reason == "Sorting needs PyTorch"
+    # The gate wraps `proceed` to clear a declined upgrade, so this is about
+    # what a successful install runs, not which object it is.
+    dialog.on_success()
+    assert calls == [1]
 
 
 def test_success_callback_is_the_gated_action(no_torch, fake_dialogs) -> None:
@@ -173,6 +185,100 @@ def test_hard_gate_asks_again_after_a_decline(no_torch, fake_dialogs) -> None:
     fake_dialogs[0].on_cancel = None
     gate(lambda: None)
     assert len(fake_dialogs) == 2
+
+
+# ----- the version floor (CVE-2026-24747) ------------------------------------
+#
+# Presence is not the whole gate: below MIN_TORCH_VERSION the weights_only=True
+# unpickler `_load` relies on is not the protection it claims to be, so a
+# checkpoint that came from somewhere else may not be loaded at all.
+
+
+def _foreign() -> Model:
+    return Model(name="Theirs", model_type="CommunityManaged")
+
+
+def _own() -> Model:
+    return Model(name="Mine")
+
+
+def test_a_current_torch_needs_no_model_to_pass(monkeypatch, fake_dialogs) -> None:
+    monkeypatch.setattr(local_inference, "is_installed", lambda: True)
+    monkeypatch.setattr(local_inference, "meets_min_version", lambda *_a, **_k: True)
+    gate = TorchGate(None, dialog_factory=FakeDialog)
+
+    assert gate(lambda: None) is True
+    assert fake_dialogs == []
+
+
+def test_an_outdated_torch_blocks_a_downloaded_model(outdated_torch, fake_dialogs) -> None:
+    gate = TorchGate(None, dialog_factory=FakeDialog)
+
+    assert gate(lambda: None, model=_foreign()) is False
+    (dialog,) = fake_dialogs
+    assert "2.9.1" in dialog.reason
+    assert local_inference.MIN_TORCH_VERSION in dialog.reason
+
+
+def test_an_unknown_provenance_is_treated_as_foreign(outdated_torch, fake_dialogs) -> None:
+    # Omitting the model is the conservative branch, deliberately.
+    assert TorchGate(None, dialog_factory=FakeDialog)(lambda: None) is False
+    assert len(fake_dialogs) == 1
+
+
+def test_a_blocked_model_keeps_asking_every_time(outdated_torch, fake_dialogs) -> None:
+    """There is no "not now" for someone else's checkpoint."""
+    gate = TorchGate(None, dialog_factory=FakeDialog)
+    assert gate(lambda: None, model=_foreign()) is False
+    fake_dialogs[0].on_cancel = None
+    assert gate(lambda: None, model=_foreign()) is False
+    assert len(fake_dialogs) == 2
+
+
+def test_an_outdated_torch_only_offers_for_the_users_own_model(outdated_torch, fake_dialogs) -> None:
+    proceeded: list[int] = []
+    gate = TorchGate(None, dialog_factory=FakeDialog)
+
+    assert gate(lambda: proceeded.append(1), model=_own()) is False
+    # Declining runs the action anyway: their own checkpoint is not an attack.
+    fake_dialogs[0].on_cancel()
+    assert proceeded == [1]
+
+    # And it is not asked again this session.
+    assert gate(lambda: proceeded.append(2), model=_own()) is True
+    assert len(fake_dialogs) == 1
+
+
+def test_declining_for_an_own_model_never_unblocks_a_foreign_one(outdated_torch, fake_dialogs) -> None:
+    gate = TorchGate(None, dialog_factory=FakeDialog)
+    gate(lambda: None, model=_own())
+    fake_dialogs[0].on_cancel()
+
+    assert gate(lambda: None, model=_foreign()) is False
+    assert len(fake_dialogs) == 2
+
+
+def test_installing_clears_a_declined_upgrade(outdated_torch, fake_dialogs) -> None:
+    """The flag describes "putting it off", and an install ends that."""
+    gate = TorchGate(None, dialog_factory=FakeDialog)
+    gate(lambda: None, model=_own())
+    fake_dialogs[0].on_cancel()
+    assert gate._upgrade_declined is True
+
+    gate2_proceeded: list[int] = []
+    gate._upgrade_declined = True
+    gate.offer(lambda: gate2_proceeded.append(1), key="feed", model=None)
+    # The offer took the blocking branch (model=None) and then installed.
+    fake_dialogs[-1].on_success()
+    assert gate._upgrade_declined is False
+    assert gate2_proceeded == [1]
+
+
+def test_offer_also_honours_the_floor(outdated_torch, fake_dialogs) -> None:
+    """Train's Feed is a soft gate, but "installed" is not the same as "safe"."""
+    gate = TorchGate(None, dialog_factory=FakeDialog)
+    assert gate.offer(lambda: None, key="predictions", model=_own()) is False
+    assert len(fake_dialogs) == 1
 
 
 def test_module_level_ensure_torch_is_the_documented_front_door(no_torch, monkeypatch, fake_dialogs) -> None:

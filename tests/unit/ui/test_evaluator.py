@@ -115,7 +115,7 @@ def dialog(qapp, config, model):
     built.open_url = lambda _path: True
     # Increment 7's gate isn't wired to a bare Config; pin it so the dev venv's
     # torch (or lack of it) can never decide whether these tests run.
-    built.ensure_torch = lambda _parent, _proceed, reason=None: True
+    built.ensure_torch = lambda _proceed, reason=None, model=None: True
     yield built
     built.close()
 
@@ -292,7 +292,9 @@ def test_the_windows_torch_gate_is_what_fronts_a_run(qapp, config, model, tmp_pa
     calls: list[dict[str, Any]] = []
     window = types.SimpleNamespace(
         db=config.db,
-        ensure_torch=lambda parent, proceed, reason=None: calls.append({"proceed": proceed, "reason": reason}) or False,
+        ensure_torch=lambda proceed, reason=None, model=None: (
+            calls.append({"proceed": proceed, "reason": reason, "model": model}) or False
+        ),
     )
     folder = tmp_path / "labelled"
     _seed_folder(folder, {"9mm FC": 1})
@@ -306,6 +308,8 @@ def test_the_windows_torch_gate_is_what_fronts_a_run(qapp, config, model, tmp_pa
         # Declined: nothing ran, and the gate got the callback that re-enters.
         assert [call["reason"] for call in calls] == ["Evaluating needs PyTorch"]
         assert calls[0]["proceed"] == built.run_evaluation
+        # The gate decides block-vs-offer from the model, so it has to get one.
+        assert calls[0]["model"] is model
         assert built.results == [] and not built.running
     finally:
         built.close()
