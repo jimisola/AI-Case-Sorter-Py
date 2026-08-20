@@ -1037,10 +1037,20 @@ class QtMainWindow(QMainWindow):
         self.serial_section = build_serial_section(self)
         return self.serial_section
 
-    def _build_dock(self, title: str, widget: QWidget, area: Any) -> Any:
-        """One QtAds panel: closable, movable, floatable, hinted on its tab."""
+    def _build_dock(self, title: str, widget: QWidget, area: Any, *, scroll_area: bool = True) -> Any:
+        """One QtAds panel: closable, movable, floatable, hinted on its tab.
+
+        ``scroll_area=False`` for content that lays itself out from the space
+        it is given. QtAds wraps a panel's widget in a ``QScrollArea`` by
+        default, which hands that widget its *preferred* size and scrolls the
+        difference — so the widget is never told the panel got smaller, and
+        answers a question nobody asked (issue #101).
+        """
         dock = ads.CDockWidget(self.dock_manager, title)
-        dock.setWidget(widget)
+        insert_mode = (
+            ads.CDockWidget.eInsertMode.AutoScrollArea if scroll_area else ads.CDockWidget.eInsertMode.ForceNoScrollArea
+        )
+        dock.setWidget(widget, insert_mode)
         # The tab *is* the drag handle in QtAds, so that is where the hint goes
         # (a QDockWidget put it on the whole panel, which was never the target).
         dock.setTabToolTip(DOCK_DRAG_HINT)
@@ -1056,7 +1066,15 @@ class QtMainWindow(QMainWindow):
 
     def _build_history_dock(self) -> None:
         self.history_view = build_history_view(self)
-        self.history_dock = self._build_dock("Classification History", self.history_view, ads.RightDockWidgetArea)
+        # No scroll area: the tile grid sizes itself to the panel and drops
+        # what doesn't fit, which only works if it is told the panel's real
+        # size (issue #101).
+        self.history_dock = self._build_dock(
+            "Classification History",
+            self.history_view,
+            ads.RightDockWidgetArea,
+            scroll_area=False,
+        )
         # Supplementary, so it starts out of the way; View re-opens it.
         self.history_dock.toggleView(False)
 
