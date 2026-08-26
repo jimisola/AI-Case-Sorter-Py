@@ -36,11 +36,12 @@ from PySide6.QtWidgets import (
 from ..data.db import Database
 from ..data.models import (
     FEEDBACK_UPLOAD_MODES,
-    SUPPORTED_MODEL_MODES,
+    MODEL_MODES,
     AIModelConfig,
     ImageProcessingConfig,
     Model,
     TrainingConfig,
+    model_mode_label,
 )
 from ..data.repository import CartridgeRepo, ModelRepo
 
@@ -103,10 +104,18 @@ class ModelEditorDialog(QDialog):
         form.addRow("Cartridge", self.cartridge_combo)
 
         self.mode_combo = QComboBox(self)
-        self.mode_combo.addItems(list(SUPPORTED_MODEL_MODES))
-        if existing is not None and existing.model_mode in SUPPORTED_MODEL_MODES:
-            self.mode_combo.setCurrentText(existing.model_mode)
-        form.addRow("Model type", self.mode_combo)
+        # MODEL_MODES, not SUPPORTED_MODEL_MODES: "openai" is a legal mode —
+        # a model that classifies over an HTTP server (its settings live on
+        # the AI Config page while it is active) — it just isn't trainable.
+        # Display label vs stored identifier: the user sees "ConvNeXt-Tiny" /
+        # "OpenAI" (the Windows app's spellings), the row stores snake_case.
+        for mode in MODEL_MODES:
+            self.mode_combo.addItem(model_mode_label(mode), mode)
+        if existing is not None and existing.model_mode in MODEL_MODES:
+            self.mode_combo.setCurrentIndex(self.mode_combo.findData(existing.model_mode))
+        # "Training mode", as the Windows app names it — "Model type" collided
+        # with the library table's Type column, which means ownership.
+        form.addRow("Training mode", self.mode_combo)
 
         self.primer_spin = QSpinBox(self)
         self.primer_spin.setRange(0, 512)
@@ -177,8 +186,8 @@ class ModelEditorDialog(QDialog):
         if cartridge_id is None:
             self.notify("Missing cartridge", "Pick a cartridge first.")
             return
-        mode = self.mode_combo.currentText()
-        if mode not in SUPPORTED_MODEL_MODES:
+        mode = self.mode_combo.currentData()
+        if mode not in MODEL_MODES:
             self.notify("Invalid model type", f"Unknown model: {mode}")
             return
 

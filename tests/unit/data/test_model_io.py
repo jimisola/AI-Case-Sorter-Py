@@ -10,14 +10,17 @@ import pytest
 
 from sorter.data.db import Database
 from sorter.data.model_io import (
+    _WINFORMS_MODELMODE_INT_TO_STR,
+    WINFORMS_MODELMODE_OPENAI,
     ExportMode,
+    _normalize_model_mode,
     export_model,
     find_update_target,
     import_model,
     model_from_export_dict,
     read_manifest,
 )
-from sorter.data.models import CheckpointEnv, Model
+from sorter.data.models import MODEL_MODES, OPENAI_MODEL_MODE, CheckpointEnv, Model
 from sorter.data.repository import CartridgeRepo, HeadstampRepo, ModelRepo, SettingsRepo
 
 
@@ -218,6 +221,22 @@ def test_unknown_model_mode_in_manifest_falls_back_to_tiny(tmp_path: Path) -> No
         models_target_dir=tmp_path / "m",
     )
     assert _get_model(db, mid).model_mode == "convnext_tiny"
+
+
+def test_every_legacy_model_mode_maps_to_one_this_app_accepts() -> None:
+    """`ModelRepo` rejects anything outside `MODEL_MODES`.
+
+    `winforms_import` feeds `_normalize_model_mode` straight to it with no
+    clamp of its own, so a mapping to a mode this app does not accept is not a
+    cosmetic slip — it aborts that model's import. The legacy OpenAI mode (2)
+    once mapped to "openai" while `ModelRepo` still rejected it, and did
+    exactly that; "openai" is a first-class mode now, so the same mapping is
+    the correct one.
+    """
+    for legacy_int, mode in _WINFORMS_MODELMODE_INT_TO_STR.items():
+        assert mode in MODEL_MODES, f"ModelMode {legacy_int} maps to {mode!r}"
+    assert _normalize_model_mode(WINFORMS_MODELMODE_OPENAI) == OPENAI_MODEL_MODE
+    assert _normalize_model_mode("openai") == OPENAI_MODEL_MODE
 
 
 def test_winforms_pascal_manifest_picks_up_training_config(tmp_path: Path) -> None:

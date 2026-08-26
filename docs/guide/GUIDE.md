@@ -19,7 +19,8 @@ day, in the order you meet them.
 - [Models](#models) — the model library: activate, edit, import, export.
 - [Community](#community) — browse and install published models.
 - [Settings](#settings) — [Camera](#camera), [Serial](#serial), [Image
-  Processing](#image-processing) and [Theme](#theme).
+  Processing](#image-processing), [Theme](#theme) and [Import from
+  Windows](#import-from-windows).
 - [Getting help](#getting-help) — this guide, the [support
   package](#support-package) and [updates](#updates).
 
@@ -428,14 +429,27 @@ here.
 The alternative to a local model: classification is sent to an
 OpenAI-compatible HTTP server, and this screen is where that server — and the
 headstamps it may answer with — is set up. It is Train's mirror in the
-sidebar: live whenever no local model is active, dimmed when one is.
+sidebar: live whenever classification runs over HTTP, dimmed when a local
+ConvNeXt model does the work.
+
+Two things can put classification on HTTP, and this page serves both:
+
+- **AI Config mode** — no active model at all. The screen edits the
+  app-level server settings.
+- **An active OpenAI model** — a model whose training mode is **OpenAI** on the
+  [Models](#models) page. Each OpenAI model carries its **own** server
+  settings and its own headstamp list, so several can coexist — different
+  cartridges, prompts, even different providers. While one is active this
+  screen edits *that model's* settings, and a caption above the form says
+  so by name. This mirrors the Windows app, where "OpenAI API" is a
+  Training Mode and its configuration lives on the model.
 
 ### When AI Config isn't the one classifying
 
-Activate a local model and this screen swaps its form for a panel naming the
-model that is classifying instead, with a button straight to the
-[Models](#models) page. Select **Use AI Config** there to come back — the
-server settings are still exactly as you left them.
+Activate a local ConvNeXt model and this screen swaps its form for a panel
+naming the model that is classifying instead, with a button straight to the
+[Models](#models) page. Select **Use AI Config** — or an OpenAI model —
+there to come back; the server settings are still exactly as you left them.
 
 ### Setting up the server
 
@@ -459,9 +473,12 @@ this table, plus one synthetic row for AI Config mode.
 ### The model list
 
 The table lists each model's name, whether it is active, its cartridge, type
-(yours or a community model), the ConvNeXt size it was built as, how many
-training images it has, whether it has been trained, and when. Click a
-column heading to sort by it.
+(yours or a community model), the mode it was built as — a ConvNeXt size, or
+**OpenAI** for a model that classifies over an HTTP server — how many training
+images it has, whether it has been trained, and when. Click a column heading
+to sort by it. An OpenAI model has nothing to train: activate it and the
+[AI Config](#ai-config) page becomes the place its server settings and
+headstamps live.
 
 The **Active** column marks the model the app currently classifies with:
 exactly one row reads **● ACTIVE** in the theme's action colour, and every
@@ -638,6 +655,84 @@ the editor open so you can keep adjusting — **Close** ends the session;
 **Create new…** saves under a name you pick, and a built-in is never
 overwritten either way. A theme can also be exported to a file and imported
 on another machine.
+
+### Import from Windows
+
+Copies your setup out of an installation of the Windows app (**AI Brass
+Sorter**) so you do not have to build it again here. **Nothing in the Windows
+app is changed, moved or deleted** — everything is copied, and that
+installation keeps working exactly as it did.
+
+If the Windows app is installed in the usual place, this page finds it on its
+own; otherwise choose the folder yourself — the one containing `Data` and
+`training`. The same offer appears once, automatically, the first time you
+start this app on a computer that has the Windows app on it.
+
+You tick what comes across, in a tree:
+
+- **Models** — with one branch per model in the Windows app. Under each model:
+    - **Training images** — usually the bulk of the data, and the slowest part
+      of the copy.
+    - **Headstamps and slot assignments** — that model's headstamp list, parent
+      classifications, and which bin each one drops into.
+    - **Trained model file** — its size is shown, because this is the big one.
+      Take it and the model classifies immediately; leave it and the model comes
+      across as a shell you retrain on the [Train](#train) page.
+- **Image-processing settings** — the crop tuning from the Windows app.
+- **Serial / board settings** — port, baud rate and the board's init values.
+- **AI Config** — endpoint, model and prompt, if you classify over HTTP.
+
+**Pick the models you actually want.** A Windows install that has been in use
+for a while usually holds models you have no interest in carrying forward, so
+every model is its own tick. **Select all** / **Select none** are there so
+choosing two out of fifteen is two clicks rather than thirteen, and the line
+under the tree totals what you have chosen — models, images and trained model
+files — before you start.
+
+Images, headstamps and the trained model file all belong to a model, so they sit
+*under* it: untick a model and its whole branch goes with it. There is no way to
+bring a model's images across without the model itself, because they land in its
+folder. A model showing a half-filled tick is one where you have kept some parts
+and not others.
+
+Anything this installation does not have is left out or greyed out rather than
+offered as a tick that would import nothing — a model with no images has no
+**Training images** row at all.
+
+Each model's row also says what importing it would **do to your library here**:
+either *new model here*, or *updates '…'* naming the model it would refresh
+instead of duplicating.
+
+A few things are worth knowing before you run it:
+
+- **Models trained with the Windows app's older ML.NET pipeline cannot
+  classify here.** They are still imported — with their headstamps and images
+  — but without a trained model file, so the [Train](#train) page is where
+  you pick them up. Their row says *ML.NET model, retrain needed* and has no
+  **Trained model file** to tick, so you can decide before you import; the
+  summary at the end names the ones you did import.
+- **A model that came from the [Community](#community) stays read-only**, the
+  same as one downloaded here: the trained model file belongs to whoever
+  published it, so it is not trainable. Your own models stay trainable.
+- **A Windows model set to classify over an OpenAI server imports as an
+  OpenAI model here too**, keeping its own endpoint, prompt and headstamps.
+  Activate it and the [AI Config](#ai-config) page edits its settings.
+- **One model that cannot be imported does not stop the rest.** It is
+  skipped, the reason is listed at the end, and everything else still lands.
+
+Running the import a second time is safe. A model already brought across is
+updated in place rather than duplicated, your slot assignments and sorting
+templates survive, and images already copied are skipped. The import never
+takes over an active model you have already chosen here.
+
+That also means you can import in passes — bring two models over, sort with
+them, then come back for more. And a model whose trained model file you declined
+the first time gets it on a later run if you tick it then.
+
+If a Windows model happens to share its name with a model you already have here,
+the imported one is named `… (2)` rather than leaving you with two rows you
+cannot tell apart. Your existing model is not touched.
+
 
 ## Getting help
 

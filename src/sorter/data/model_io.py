@@ -38,7 +38,8 @@ from typing import Any
 
 from .. import paths
 from .models import (
-    SUPPORTED_MODEL_MODES,
+    MODEL_MODES,
+    OPENAI_MODEL_MODE,
     AIModelConfig,
     CheckpointEnv,
     Headstamp,
@@ -105,10 +106,14 @@ def model_to_export_dict(m: Model) -> dict[str, Any]:
 # The legacy app serialises its ModelMode enum as its integer value. Map back
 # to our snake_case backbone identifiers; non-ConvNeXt modes fall through to a
 # ConvNeXt this app can actually run.
+WINFORMS_MODELMODE_OPENAI = 2
+
 _WINFORMS_MODELMODE_INT_TO_STR = {
     0: "convnext_tiny",  # DeepLearning (ResNet50) — can't run, fall back
     1: "convnext_tiny",  # Inception           — fall back
-    2: "openai",  # OpenAI
+    # "OpenAI API" is a first-class mode here too (PR #125 review): the row
+    # keeps its own AIModelConfig and classifies over HTTP when active.
+    WINFORMS_MODELMODE_OPENAI: OPENAI_MODEL_MODE,
     3: "convnext_large",
     4: "convnext_tiny",  # DeeperLearning (ResNet101) — fall back
     5: "convnext_tiny",  # Custom              — fall back
@@ -119,19 +124,23 @@ _WINFORMS_MODELMODE_INT_TO_STR = {
 
 
 def _normalize_model_mode(raw: Any) -> str:
-    """Accept the snake_case string or the legacy enum int."""
+    """Accept the mode string or the legacy enum int.
+
+    Every branch lands in `MODEL_MODES`: `ModelRepo` rejects anything else,
+    and `winforms_import` hands the result straight to it.
+    """
     if isinstance(raw, str):
         rl = raw.strip().lower()
         # Tolerate hyphenated/CamelCase variants
         # (`ConvNeXt-Tiny`, `convnext_tiny`, `ConvNeXtTiny`).
         rl = rl.replace("-", "_").replace(" ", "_")
-        if rl in SUPPORTED_MODEL_MODES:
+        if rl in MODEL_MODES:
             return rl
         # ConvNeXtTiny → convnext_tiny
         if rl.startswith("convnext") and not rl.startswith("convnext_"):
             tail = rl[len("convnext") :]
             candidate = f"convnext_{tail}"
-            if candidate in SUPPORTED_MODEL_MODES:
+            if candidate in MODEL_MODES:
                 return candidate
         return "convnext_tiny"
     if isinstance(raw, int):
@@ -361,8 +370,13 @@ def export_for_share(
     return zip_path, manifest_path
 
 
-def _unique_model_name(base: str, repo: ModelRepo) -> str:
-    """Append (n) until the name is unique across all models."""
+def unique_model_name(base: str, repo: ModelRepo) -> str:
+    """Append (n) until the name is unique across all models.
+
+    Public because `winforms_import` needs the same answer: importing a Windows
+    install onto a library that already holds a "9mm" must not leave the user
+    with two rows they cannot tell apart.
+    """
     existing = {m.name.lower() for m in repo.list()}
     if base.lower() not in existing:
         return base
@@ -504,7 +518,7 @@ def import_model(
         manifest = json.loads(zf.read(manifest_entry).decode("utf-8"))
 
         model = model_from_export_dict(manifest.get("ModelInfo") or {})
-        if model.model_mode not in SUPPORTED_MODEL_MODES:
+        if model.model_mode not in MODEL_MODES:
             model.model_mode = "convnext_tiny"
 
         # Ownership is decided by how the archive reached this machine, not by
@@ -548,7 +562,7 @@ def import_model(
             model_repo.update(saved)
         else:
             desired_name = model_name_override or model.name or "Imported"
-            model.name = _unique_model_name(desired_name, model_repo)
+            model.name = unique_model_name(desired_name, model_repo)
             saved = model_repo.create(model)
 
         # Decide target directories (per-model `<id>/images` and
