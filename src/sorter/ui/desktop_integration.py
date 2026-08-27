@@ -182,9 +182,14 @@ def xdg_data_home() -> Path:
 
     A relative value is *invalid* per the Base Directory spec, not merely
     unusual — it is ignored rather than resolved against the cwd.
+
+    ``is_absolute()`` rather than a leading-slash test, which is the same
+    question on the only platform this runs on and a different one under the
+    Windows leg of the test matrix — where every temp path the suite hands it
+    would be "relative", and the tests would quietly write to the real home.
     """
     raw = os.environ.get("XDG_DATA_HOME", "").strip()
-    if raw.startswith("/"):
+    if raw and Path(raw).is_absolute():
         return Path(raw)
     return Path.home() / ".local" / "share"
 

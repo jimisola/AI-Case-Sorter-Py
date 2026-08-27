@@ -23,9 +23,17 @@ from sorter.ui import icons
 
 @pytest.fixture
 def linux_session(qapp, tmp_path, monkeypatch):
-    """A writable XDG data home, on a machine that looks like a Linux desktop."""
+    """A writable XDG data home, on a machine that looks like a Linux desktop.
+
+    ``Path.home`` is redirected as well as ``XDG_DATA_HOME``, and not for
+    belt-and-braces: it is the fallback these tests must never reach. A bug in
+    the env handling otherwise sends every one of them into the *real* home
+    directory, where they pass — that is exactly how the first Windows run of
+    this file failed, having written a live menu entry onto the runner.
+    """
     data_home = tmp_path / "share"
     monkeypatch.setattr(di.sys, "platform", "linux")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
     monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
@@ -197,6 +205,15 @@ def test_the_default_data_home_is_the_specs(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
 
     assert di.xdg_data_home() == tmp_path / ".local" / "share"
+
+
+def test_an_absolute_data_home_is_honoured(monkeypatch, tmp_path) -> None:
+    """Absolute by *this platform's* rules, not by a leading slash — under the
+    Windows leg of the matrix every temp path would read as relative, and the
+    whole file would silently exercise the real home instead."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+
+    assert di.xdg_data_home() == tmp_path
 
 
 def test_a_relative_data_home_is_invalid_not_resolved(monkeypatch, tmp_path) -> None:
