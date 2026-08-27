@@ -1,0 +1,290 @@
+"""The desktop entry, the icon set, and the identity that ties them to a window.
+
+Nothing here asserts a desktop's *behavior* — that belongs to GNOME and KDE and
+can't be pinned from a test. What is pinned is the contract those desktops read:
+the freedesktop paths, the three keys that decide "which app is this window",
+that every icon rung is a real image at exactly the size its path claims, and
+that a second launch is a no-op. ``tests/integration/test_desktop_entry.py``
+takes the same file to the real ``desktop-file-validate``.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+import pytest
+
+pytest.importorskip("PySide6")
+
+from sorter.ui import desktop_integration as di
+from sorter.ui import icons
+
+
+@pytest.fixture
+def linux_session(qapp, tmp_path, monkeypatch):
+    """A writable XDG data home, on a machine that looks like a Linux desktop."""
+    data_home = tmp_path / "share"
+    monkeypatch.setattr(di.sys, "platform", "linux")
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.delenv(di.DISABLE_ENV, raising=False)
+    return data_home
+
+
+def _entry(data_home: Path) -> Path:
+    return data_home / "applications" / f"{di.APP_ID}.desktop"
+
+
+def _keys(text: str) -> dict[str, str]:
+    return dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
+
+
+# ---------------------------------------------------------------------------
+# The Linux install
+# ---------------------------------------------------------------------------
+
+
+def test_it_installs_the_entry_and_every_icon_rung(linux_session) -> None:
+    written = di.ensure()
+
+    assert written == _entry(linux_session)
+    assert written is not None and written.is_file()
+    for target in di.icon_targets(linux_session / "icons" / "hicolor"):
+        assert target.is_file(), f"{target} missing"
+
+
+def test_the_icon_rungs_hold_the_pixels_their_paths_promise(linux_session) -> None:
+    """A 48x48 directory holding a 512 px image is a spec violation a desktop
+    silently mis-scales."""
+    from PySide6.QtGui import QImage
+
+    di.ensure()
+
+    for size in icons.LAUNCHER_SIZES:
+        path = linux_session / "icons" / "hicolor" / f"{size}x{size}" / "apps" / f"{di.APP_ID}.png"
+        image = QImage(str(path))
+        assert (image.width(), image.height()) == (size, size)
+        assert not image.isNull()
+
+
+def test_the_scalable_rung_is_the_source_svg(linux_session) -> None:
+    di.ensure()
+
+    scalable = linux_session / "icons" / "hicolor" / "scalable" / "apps" / f"{di.APP_ID}.svg"
+
+    assert scalable.read_text(encoding="utf-8").lstrip().startswith("<svg")
+
+
+def test_the_entry_names_the_launcher_the_icon_and_the_window(linux_session) -> None:
+    di.ensure()
+
+    keys = _keys(_entry(linux_session).read_text(encoding="utf-8"))
+
+    assert keys["Type"] == "Application"
+    assert keys["Exec"].strip('"').endswith("start.sh")
+    # By theme name, never a path: that is what lets each surface pick its rung.
+    assert keys["Icon"] == di.APP_ID
+    # The key the docks that don't read _GTK_APPLICATION_ID match on.
+    assert keys["StartupWMClass"] == di.APP_ID
+    assert keys["Terminal"] == "false"
+
+
+def test_a_second_launch_rewrites_nothing(linux_session) -> None:
+    di.ensure()
+    entry = _entry(linux_session)
+    before = entry.stat().st_mtime_ns
+    icon = linux_session / "icons" / "hicolor" / "128x128" / "apps" / f"{di.APP_ID}.png"
+    icon_before = icon.stat().st_mtime_ns
+
+    di.ensure()
+
+    assert entry.stat().st_mtime_ns == before
+    assert icon.stat().st_mtime_ns == icon_before
+
+
+def test_a_moved_install_is_rewritten(linux_session, monkeypatch, tmp_path) -> None:
+    """The Exec path is the install's, so an app folder that moved must not
+    leave a menu entry pointing at where it used to be."""
+    di.ensure()
+    moved = tmp_path / "elsewhere"
+    moved.mkdir()
+    (moved / "start.sh").write_text("#!/bin/sh\n")
+    (moved / "start.sh").chmod(0o755)
+    monkeypatch.setattr(di.paths, "app_root", lambda: moved)
+
+    di.ensure()
+
+    assert str(moved) in _keys(_entry(linux_session).read_text(encoding="utf-8"))["Exec"]
+
+
+def test_a_deleted_icon_is_restored(linux_session) -> None:
+    di.ensure()
+    icon = linux_session / "icons" / "hicolor" / "48x48" / "apps" / f"{di.APP_ID}.png"
+    icon.unlink()
+
+    di.ensure()
+
+    assert icon.is_file()
+
+
+# ---------------------------------------------------------------------------
+# When it must do nothing
+# ---------------------------------------------------------------------------
+
+
+def test_the_opt_out_is_honoured(linux_session, monkeypatch) -> None:
+    monkeypatch.setenv(di.DISABLE_ENV, "1")
+
+    assert di.ensure() is None
+    assert not _entry(linux_session).exists()
+
+
+@pytest.mark.parametrize("value", ["", "0", "false", "no"])
+def test_a_falsey_opt_out_is_not_an_opt_out(linux_session, monkeypatch, value: str) -> None:
+    monkeypatch.setenv(di.DISABLE_ENV, value)
+
+    assert di.ensure() is not None
+
+
+def test_a_headless_session_gets_no_menu_entry(linux_session, monkeypatch) -> None:
+    """Over SSH with no display there is no menu to appear in."""
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+
+    assert di.ensure() is None
+
+
+def test_wayland_alone_is_a_session(linux_session, monkeypatch) -> None:
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+
+    assert di.ensure() is not None
+
+
+def test_an_install_with_no_launcher_script_is_skipped(linux_session, monkeypatch, tmp_path) -> None:
+    """A wheel install has no start.sh, so there is nothing honest for Exec."""
+    monkeypatch.setattr(di.paths, "app_root", lambda: tmp_path / "no-such-tree")
+
+    assert di.ensure() is None
+
+
+def test_an_unwritable_home_costs_the_entry_and_nothing_else(linux_session, monkeypatch) -> None:
+    def explode(*args, **kwargs):
+        raise PermissionError("read-only file system")
+
+    monkeypatch.setattr(di, "_write_icons", explode)
+
+    assert di.ensure() is None
+
+
+def test_windows_and_macos_never_take_the_linux_path(qapp, monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(di.sys, "platform", "win32")
+
+    assert di.ensure() is None
+    assert not (tmp_path / "applications").exists()
+
+
+# ---------------------------------------------------------------------------
+# XDG resolution and Exec quoting
+# ---------------------------------------------------------------------------
+
+
+def test_the_default_data_home_is_the_specs(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+    assert di.xdg_data_home() == tmp_path / ".local" / "share"
+
+
+def test_a_relative_data_home_is_invalid_not_resolved(monkeypatch, tmp_path) -> None:
+    """The Base Directory spec says to ignore a relative value, not to make one
+    absolute against the cwd — which is wherever the launcher happened to be."""
+    monkeypatch.setenv("XDG_DATA_HOME", "share")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+    assert di.xdg_data_home() == tmp_path / ".local" / "share"
+
+
+def test_a_path_with_spaces_survives_exec_quoting(tmp_path) -> None:
+    script = tmp_path / "My Apps" / "start.sh"
+
+    value = di.exec_value(script)
+
+    assert value.startswith('"') and value.endswith('"')
+    assert "My Apps" in value
+
+
+@pytest.mark.parametrize("char", ['"', "`", "$", "\\"])
+def test_exec_escapes_every_character_the_spec_names(tmp_path, char: str) -> None:
+    value = di.exec_value(Path(f"/tmp/od{char}d/start.sh"))
+
+    assert "\\" + char in value
+
+
+# ---------------------------------------------------------------------------
+# Window identity — the half that makes the entry light up
+# ---------------------------------------------------------------------------
+
+
+def test_the_resource_name_is_set_before_the_application_exists(monkeypatch) -> None:
+    """Qt reads it once, when the first window's WM_CLASS is built; a default of
+    ``__main__`` (argv[0] under ``python -m sorter``) matches nothing."""
+    monkeypatch.setattr(di.sys, "platform", "linux")
+    monkeypatch.delenv("RESOURCE_NAME", raising=False)
+
+    di.prepare_process()
+
+    assert os.environ["RESOURCE_NAME"] == di.APP_ID
+
+
+def test_an_explicit_resource_name_wins(monkeypatch) -> None:
+    monkeypatch.setattr(di.sys, "platform", "linux")
+    monkeypatch.setenv("RESOURCE_NAME", "chosen-by-the-user")
+
+    di.prepare_process()
+
+    assert os.environ["RESOURCE_NAME"] == "chosen-by-the-user"
+
+
+def test_the_application_carries_the_desktop_file_name(qapp) -> None:
+    """GNOME and KDE match on this, not on WM_CLASS."""
+    from PySide6.QtGui import QGuiApplication
+
+    try:
+        di.apply_identity()
+
+        assert QGuiApplication.desktopFileName() == di.APP_ID
+        assert QGuiApplication.applicationName() == di.APP_NAME
+    finally:
+        QGuiApplication.setDesktopFileName("")
+
+
+def test_the_id_is_one_value_everywhere_it_appears(linux_session) -> None:
+    """Entry basename, icon name, StartupWMClass and RESOURCE_NAME are the same
+    string by construction — a mismatch is exactly what leaves a generic icon."""
+    di.prepare_process()
+    di.ensure()
+
+    keys = _keys(_entry(linux_session).read_text(encoding="utf-8"))
+
+    assert _entry(linux_session).stem == di.APP_ID
+    assert keys["Icon"] == keys["StartupWMClass"] == os.environ["RESOURCE_NAME"] == di.APP_ID
+
+
+# ---------------------------------------------------------------------------
+# macOS bundle metadata (the bundle itself can only be written on a Mac)
+# ---------------------------------------------------------------------------
+
+
+def test_the_bundle_plist_names_the_icon_and_the_executable() -> None:
+    plist = di.bundle_plist("1.2.3")
+
+    # CFBundleIconFile is the only thing that gives a Dock tile its icon, and
+    # it names Resources/AppIcon.icns without the extension.
+    assert plist["CFBundleIconFile"] == "AppIcon"
+    assert plist["CFBundleExecutable"] == "launch"
+    assert plist["CFBundleIdentifier"] == di.APP_ID
+    assert plist["CFBundleShortVersionString"] == "1.2.3"
