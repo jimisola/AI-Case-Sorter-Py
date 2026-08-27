@@ -6,11 +6,17 @@ the freedesktop paths, the three keys that decide "which app is this window",
 that every icon rung is a real image at exactly the size its path claims, and
 that a second launch is a no-op. ``tests/integration/test_desktop_entry.py``
 takes the same file to the real ``desktop-file-validate``.
+
+The macOS block at the foot runs only on the matrix's darwin legs, where it
+writes a real bundle into a temp home. The line it stops at is the same one:
+a runner has no GUI session, so whether the *Dock* shows this icon and this
+name is the one claim here that still needs a human.
 """
 
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -308,3 +314,91 @@ def test_the_bundle_plist_names_the_icon_and_the_executable() -> None:
     assert plist["CFBundleExecutable"] == "launch"
     assert plist["CFBundleIdentifier"] == di.APP_ID
     assert plist["CFBundleShortVersionString"] == "1.2.3"
+
+
+def test_the_icns_fallback_writes_a_real_icns(qapp, tmp_path) -> None:
+    """The path taken where ``iconutil`` is absent — which is everywhere that
+    isn't a Mac, including ``tools/make_app_icons.py``. Runs on every leg of the
+    matrix precisely because it is the half that doesn't need one."""
+    Image = pytest.importorskip("PIL.Image")
+    target = tmp_path / "AppIcon.icns"
+
+    di.write_icns_with_pillow(target)
+
+    with Image.open(target) as icon:
+        assert icon.format == "ICNS"
+        # Big enough to be the real artwork rather than an empty container.
+        assert max(icon.size) >= 512
+
+
+# ---------------------------------------------------------------------------
+# The macOS bundle, on a Mac
+# ---------------------------------------------------------------------------
+#
+# The matrix has three macOS legs, so the bundle does not have to ship
+# unexercised. What they cannot judge is the only thing that matters to a user
+# — whether the Dock shows this icon and this name — because a runner has no
+# GUI session. Everything up to that point is checked here.
+
+macos_only = pytest.mark.skipif(sys.platform != "darwin", reason="writes a real .app bundle")
+
+
+@pytest.fixture
+def mac_home(qapp, tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.delenv(di.DISABLE_ENV, raising=False)
+    return tmp_path
+
+
+@macos_only
+def test_the_bundle_is_laid_out_the_way_launchservices_reads_it(mac_home) -> None:
+    import plistlib
+
+    bundle = di._install_macos()
+
+    assert bundle == mac_home / "Applications" / f"{di.APP_NAME}.app"
+    assert bundle is not None
+    contents = bundle / "Contents"
+    plist = plistlib.loads((contents / "Info.plist").read_bytes())
+    executable = contents / "MacOS" / plist["CFBundleExecutable"]
+    icns = contents / "Resources" / f"{plist['CFBundleIconFile']}.icns"
+
+    # Each of the three is named by the plist and has to actually be there:
+    # a bundle missing any one of them launches as an unnamed, iconless tile.
+    assert executable.is_file()
+    assert icns.is_file() and icns.stat().st_size > 0
+    assert plist["CFBundleIdentifier"] == di.APP_ID
+
+
+@macos_only
+def test_the_bundle_stub_is_executable_and_starts_this_checkout(mac_home) -> None:
+    from sorter import paths
+
+    bundle = di._install_macos()
+    assert bundle is not None
+    stub = bundle / "Contents" / "MacOS" / "launch"
+
+    assert os.access(stub, os.X_OK), "LaunchServices runs this directly; without +x the app does nothing"
+    body = stub.read_text(encoding="utf-8")
+    assert body.startswith("#!/bin/sh")
+    assert str(paths.app_root() / "start.sh") in body
+
+
+@macos_only
+def test_a_second_launch_rewrites_no_bundle(mac_home) -> None:
+    bundle = di._install_macos()
+    assert bundle is not None
+    icns = bundle / "Contents" / "Resources" / "AppIcon.icns"
+    before = icns.stat().st_mtime_ns
+
+    di._install_macos()
+
+    assert icns.stat().st_mtime_ns == before
+
+
+@macos_only
+def test_ensure_takes_the_bundle_path_on_a_mac(mac_home) -> None:
+    """`ensure` dispatches by platform; on darwin that is the bundle, and the
+    Linux entry must not appear."""
+    assert di.ensure() == di.bundle_path()
+    assert not (mac_home / ".local" / "share" / "applications").exists()
