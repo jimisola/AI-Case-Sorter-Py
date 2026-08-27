@@ -124,7 +124,10 @@ def test_a_moved_install_is_rewritten(linux_session, monkeypatch, tmp_path) -> N
 
     di.ensure()
 
-    assert str(moved) in _keys(_entry(linux_session).read_text(encoding="utf-8"))["Exec"]
+    # Against the escaped form, not a substring of the raw path: Exec escapes a
+    # backslash, so on the Windows leg of the matrix every separator in the path
+    # is doubled and the raw string appears nowhere in the value.
+    assert _keys(_entry(linux_session).read_text(encoding="utf-8"))["Exec"] == di.exec_value(moved / "start.sh")
 
 
 def test_a_deleted_icon_is_restored(linux_session) -> None:
