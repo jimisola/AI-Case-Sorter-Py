@@ -330,9 +330,13 @@ jobs:
       # Synthetic, like the PowerShell tests above: the rejection paths and
       # offline install cases a real release never exercises.
       - name: Installer tests (sh)
-        run: TEST_SHELL=sh sh installer/tests/test-install-unix.sh
+        env:
+          TEST_SHELL: sh
+        run: sh installer/tests/test-install-unix.sh
       - name: Installer tests (bash)
-        run: TEST_SHELL=bash bash installer/tests/test-install-unix.sh
+        env:
+          TEST_SHELL: bash
+        run: bash installer/tests/test-install-unix.sh
 
       # Without --no-bootstrap, so the first-run dependency setup runs too
       # when the release supports it. It must finish without starting the
